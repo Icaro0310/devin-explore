@@ -29,7 +29,7 @@ CHECK_ID = "updates"
 
 MANIFEST_URL = (
     "https://raw.githubusercontent.com/Icaro0310/devin-devkit/main/"
-    "src/devin_devkit/manifest.json"
+    "packages/devkit/src/devin_devkit/manifest.json"
 )
 _TIMEOUT = 10
 
