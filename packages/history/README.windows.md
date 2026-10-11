@@ -40,7 +40,7 @@ Use `--sessions-db`/`--vscdb` for non-default locations.
 _Weekly archive of sessions to notes (`--out` is required); run before janitor cleanup._
 
 ```powershell
-schtasks /create /tn "devin-history" /tr "devin-history export --out \"%USERPROFILE%\devin-history-export\"" /sc weekly /d SUN /st 05:00 /f
+schtasks /create /tn "devin-history" /tr 'devin-history export --out "%USERPROFILE%\devin-history-export"' /sc weekly /d SUN /st 05:00 /f
 ```
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
