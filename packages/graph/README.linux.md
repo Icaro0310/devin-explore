@@ -19,7 +19,7 @@ uv tool install 'devin-graph'
 ## Devin paths
 
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--sessions-db`/`--vscdb`/`--graph` for non-default locations.
 
 ## Environment notes
 

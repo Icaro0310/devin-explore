@@ -19,7 +19,7 @@ uv tool install "devin-history"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--sessions-db`/`--vscdb` for non-default locations.
 
 ## Environment notes
 
@@ -40,7 +40,7 @@ Use the tool's documented `--data-dir` or `--config-dir` flags for non-default l
 _Weekly archive of sessions to notes; run before janitor cleanup._
 
 ```powershell
-schtasks /create /tn "devin-history" /tr "devin-history export" /sc daily /st 04:00 /f
+schtasks /create /tn "devin-history" /tr "devin-history export" /sc weekly /d SUN /st 05:00 /f
 ```
 
 Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.

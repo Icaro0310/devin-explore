@@ -19,7 +19,7 @@ uv tool install "devin-pm"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--sessions-db`/`--vscdb` (or `DEVIN_PM_SESSIONS_DB`/`DEVIN_PM_STATE_VSCDB`) for non-default locations.
 
 ## Environment notes
 

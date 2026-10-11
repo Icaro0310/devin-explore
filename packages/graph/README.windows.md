@@ -19,7 +19,7 @@ uv tool install "devin-graph"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--sessions-db`/`--vscdb`/`--graph` for non-default locations.
 
 ## Environment notes
 
@@ -40,7 +40,7 @@ Use the tool's documented `--data-dir` or `--config-dir` flags for non-default l
 _Weekly rebuild of graph.db so downstream tools see fresh linkage._
 
 ```powershell
-schtasks /create /tn "devin-graph" /tr "devin-graph build" /sc daily /st 04:00 /f
+schtasks /create /tn "devin-graph" /tr "devin-graph build" /sc weekly /d SUN /st 06:00 /f
 ```
 
 Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.

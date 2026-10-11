@@ -19,7 +19,7 @@ uv tool install "devin-doctor"
 ## Devin paths
 
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
-Use the tool's documented `--data-dir` or `--config-dir` flags for non-default locations.
+Use `--data-dir`/`--config-dir` for non-default locations.
 
 ## Environment notes
 
@@ -40,7 +40,7 @@ Use the tool's documented `--data-dir` or `--config-dir` flags for non-default l
 _Weekly health sweep — read-only, safe to leave on._
 
 ```powershell
-schtasks /create /tn "devin-explore" /tr "devin-doctor check" /sc daily /st 04:00 /f
+schtasks /create /tn "devin-explore" /tr "devin-doctor check" /sc weekly /d MON /st 09:00 /f
 ```
 
 Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
