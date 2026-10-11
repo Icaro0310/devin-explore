@@ -1,0 +1,19 @@
+- id: devin-doctor-gate
+  name: devin-doctor environment check
+  description: >-
+    Health-gate the local Devin installation before committing:
+    `devin-doctor check --offline` runs every registered check —
+    stores, schema versions, data health, config sanity (the repo's
+    own `.devin/` is read via the project cwd), disk usage and update
+    state — and exits 1 when any check FAILs, blocking the commit.
+    WARN findings print but do not block; the hook is `verbose` so
+    they stay visible on successful runs. Read-only by design and
+    fully offline: `--offline` pins `DEVIN_DOCTOR_OFFLINE=1`, so the
+    updates check skips its manifest fetch and nothing touches the
+    network. Note: on a large data dir the disk-usage walk can take
+    a while — that latency is the check itself, not a hang.
+  entry: devin-doctor check --offline
+  language: system
+  pass_filenames: false
+  always_run: true
+  verbose: true
