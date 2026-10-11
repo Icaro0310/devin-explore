@@ -1,0 +1,71 @@
+{
+  "name": "devin-doctor",
+  "displayName": "devin-doctor",
+  "description": "Ecosystem health checks from devin-doctor, inside the editor. Thin adapter: the extension shells out to the devin-doctor CLI and renders the result \u2014 no check logic is reimplemented here.",
+  "version": "0.1.0",
+  "publisher": "icaro0310",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Icaro0310/devin-explore.git",
+    "directory": "packages/doctor/adapters/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "devin",
+    "health",
+    "diagnostics"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devin-doctor.check",
+        "title": "devin-doctor: Run health check"
+      },
+      {
+        "command": "devin-doctor.report",
+        "title": "devin-doctor: Open full report"
+      },
+      {
+        "command": "devin-doctor.plan",
+        "title": "devin-doctor: Show remediation plan"
+      }
+    ],
+    "configuration": {
+      "title": "devin-doctor",
+      "properties": {
+        "devinDoctor.executable": {
+          "type": "string",
+          "default": "devin-doctor",
+          "description": "devin-doctor executable (name or absolute path)"
+        },
+        "devinDoctor.checkOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run a health check when VS Code starts"
+        },
+        "devinDoctor.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra CLI args appended to every devin-doctor call"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {}
+}
