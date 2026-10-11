@@ -1,6 +1,7 @@
 """CLI contract: `check`/`report`, --json schema, --md, exit codes."""
 
 import json
+import re
 
 from devin_doctor import doctor
 from devin_doctor.cli import main
@@ -71,6 +72,12 @@ def test_check_json_schema(ctx, capsys):
         "disk",
         "updates",
     }
+    # Extension contract: the VS Code adapter gates on a parseable version
+    # and renders all three summary counters.
+    assert isinstance(payload["version"], str)
+    assert re.match(r"\d+\.\d+\.\d+", payload["version"])
+    assert set(payload["summary"]) == {"pass", "warn", "fail"}
+    assert all(isinstance(v, int) for v in payload["summary"].values())
     assert payload["summary"]["fail"] == 0
 
 
