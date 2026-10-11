@@ -60,8 +60,14 @@ Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy g
 
 _Weekly archive of sessions to notes (`--out` is required); run before janitor cleanup._
 
+Save this as `%USERPROFILE%\devin-tasks\devin-history.cmd` (quoting works normally inside a `.cmd` file):
+
+```batch
+devin-history export --out "%USERPROFILE%\devin-history-export"
+```
+
 ```powershell
-schtasks /create /tn "devin-history" /tr 'devin-history export --out "%USERPROFILE%\devin-history-export"' /sc weekly /d SUN /st 05:00 /f
+schtasks /create /tn "devin-history" /tr "%USERPROFILE%\devin-tasks\devin-history.cmd" /sc weekly /d SUN /st 05:00 /f
 ```
 
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation, "Run whether user is logged on or not", highest privileges, are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`) is the realistic fallback.

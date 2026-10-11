@@ -61,7 +61,7 @@ Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy g
 _Weekly health sweep, read-only, safe to leave on._
 
 ```powershell
-schtasks /create /tn "devin-explore" /tr 'devin-doctor check' /sc weekly /d MON /st 09:00 /f
+schtasks /create /tn "devin-explore" /tr "devin-doctor check" /sc weekly /d MON /st 09:00 /f
 ```
 
 User-scope `schtasks` needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation, "Run whether user is logged on or not", highest privileges, are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`) is the realistic fallback.
