@@ -1,4 +1,4 @@
-# devin-graph — Personal Windows guide
+# devin-graph, Personal Windows guide
 
 This guide covers unrestricted Windows setup. For restricted machines, see [README.corporate-windows.md](README.corporate-windows.md); for features, shared commands, limitations, and the safety model, see [README.md](README.md).
 
@@ -30,9 +30,9 @@ Use `--sessions-db`/`--vscdb`/`--graph` for non-default locations.
 ## Personal Windows specifics
 
 - **Python:** `uv` manages its own Python, which also avoids the Microsoft Store `python.exe` alias stub (it opens the Store instead of running). If you install Python from python.org anyway, tick "Add python.exe to PATH".
-- **Shell:** PowerShell 7 + Windows Terminal is the recommended setup; every command also works in `cmd.exe` and Windows PowerShell 5.1 — none require admin.
+- **Shell:** PowerShell 7 + Windows Terminal is the recommended setup; every command also works in `cmd.exe` and Windows PowerShell 5.1, none require admin.
 - **Install location:** executables live under `%USERPROFILE%\.local\bin`; data under `%APPDATA%\devin`. Nothing touches `Program Files` or the registry.
-- **WSL:** treat it as a Linux machine — follow [README.linux.md](README.linux.md) inside it.
+- **WSL:** treat it as a Linux machine, follow [README.linux.md](README.linux.md) inside it.
 - **Uninstall:** `uv tool uninstall <package>` (or `npm uninstall -g` for a Node.js tool) removes the CLI; delete `%APPDATA%\devin` to remove local data. No services or scheduled tasks are left behind.
 
 ## Recurring runs (optional)
@@ -43,7 +43,7 @@ _Weekly rebuild of graph.db so downstream tools see fresh linkage._
 schtasks /create /tn "devin-graph" /tr "devin-graph build" /sc weekly /d SUN /st 06:00 /f
 ```
 
-Runs under your account — no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
+Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
 
 
 ## Troubleshooting
