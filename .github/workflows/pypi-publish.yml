@@ -24,7 +24,25 @@ permissions:
   contents: read
 
 jobs:
+  # Wheel __version__ gate lives in one place — verified before publish runs.
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {dir: packages/doctor, mod: devin_doctor}
+          - {dir: packages/graph, mod: devin_graph}
+          - {dir: packages/history, mod: devin_history}
+          - {dir: packages/pm, mod: devin_pm}
+          - {dir: packages/search, mod: devin_search}
+    uses: Icaro0310/devin-powerups/.github/workflows/verify-wheel-version.yml@v1
+    with:
+      package-dir: ${{ matrix.dir }}
+      module: ${{ matrix.mod }}
+      python-version: "3.12"
+
   publish:
+    needs: verify
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -47,7 +65,6 @@ jobs:
               search) echo "dir=packages/search" >> "$GITHUB_OUTPUT" ;;
             *) echo "unknown package: $base" >&2; exit 1 ;;
           esac
-          echo "mod=devin_${base//-/_}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -57,15 +74,18 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
-      - name: Verify wheel self-reports pyproject version
-        working-directory: ${{ steps.pkg.outputs.dir }}
+      # Supply-chain guard: wheels once reached PyPI via dispatch from
+      # unmerged branches elsewhere in the ecosystem. Refuse to upload
+      # when the publish origin is not merged.
+      - name: Require publish origin merged into main
         env:
-          PKG: ${{ steps.pkg.outputs.mod }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
-          test -n "$ver"
-          pip install --no-cache-dir --no-deps --target /tmp/verchk dist/*.whl
-          VER="$ver" python -c "import importlib, os, sys; sys.path.insert(0, '/tmp/verchk'); m = importlib.import_module('$PKG'); assert getattr(m, '__version__', None) == os.environ['VER'], f'wheel __version__ {getattr(m, \"__version__\", None)} != pyproject {os.environ[\"VER\"]}'"
+          status=$(gh api "repos/${{ github.repository }}/compare/main...${GITHUB_SHA}" --jq .status)
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::error::publish origin is '$status' vs main — refusing to publish an unmerged commit"; exit 1 ;;
+          esac
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
