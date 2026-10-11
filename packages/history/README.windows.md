@@ -39,14 +39,20 @@ Use `--sessions-db`/`--vscdb` for non-default locations.
 
 _Weekly archive of sessions to notes (`--out` is required); run before janitor cleanup._
 
-Save this as `%USERPROFILE%\devin-tasks\devin-history.cmd` (quoting works normally inside a `.cmd` file):
+Quoted path arguments inside `/tr` fail differently in cmd.exe and PowerShell 5.1, so this job goes through a wrapper `.cmd` file (quoting inside the file works normally). `%PUBLIC%` is used because it never contains spaces, keeping the stored action space-free:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:PUBLIC\devin-tasks"
+```
+
+Save this as `%PUBLIC%\devin-tasks\devin-history.cmd`:
 
 ```batch
 devin-history export --out "%USERPROFILE%\devin-history-export"
 ```
 
 ```powershell
-schtasks /create /tn "devin-history" /tr "%USERPROFILE%\devin-tasks\devin-history.cmd" /sc weekly /d SUN /st 05:00 /f
+schtasks /create /tn "devin-history" /tr "%PUBLIC%\devin-tasks\devin-history.cmd" /sc weekly /d SUN /st 05:00 /f
 ```
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
