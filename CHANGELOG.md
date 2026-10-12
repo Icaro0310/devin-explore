@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Docs** — corporate-Windows guides: new `devin-doctor` VS Code
+  extension section (thin shell running `check --json`/`report --md`/
+  `plan`; the editor container stays outside the local-only contract)
+  and the Zscaler root export now covers both certificate stores
+  (`certmgr.msc`/`certlm.msc`, `Cert:\CurrentUser\Root` +
+  `Cert:\LocalMachine\Root`) and yields PEM (Base-64 wizard export, or
+  `certutil -encode` after `Export-Certificate`, which writes DER).
 - **Pre-commit** — `.pre-commit-hooks.yaml` adds the `devin-doctor-gate`
   hook: `devin-doctor check --offline` runs every registered check on
   each commit, blocking only on FAIL (`verbose` keeps WARN findings
