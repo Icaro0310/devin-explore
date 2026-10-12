@@ -123,3 +123,27 @@ def test_findings_never_restat_walked_files(ctx, monkeypatch):
     findings = disk.run(ctx)
     assert len(findings) == 3
     assert [p for p in seen if p in known_files and p not in acp_dbs] == []
+
+
+def test_acp_stats_are_fresh_not_scan_records(ctx, monkeypatch):
+    """An acp DB growing after the bounded walk must still be counted:
+    ``_acp_finding`` re-stats each store instead of reusing the shared
+    scan records, so live growth cannot hide a threshold breach."""
+    from devin_doctor.paths import human_size, locate_stores
+
+    ctx.acp_warn_bytes = 1
+    acp_db = locate_stores(ctx.data_dir).acp_dbs[0]
+    expected = sum(
+        p.stat().st_size for p in locate_stores(ctx.data_dir).acp_dbs
+    ) + 8192
+    real_walk = disk._walk_files
+
+    def grow_after_walk(root):
+        files, capped = real_walk(root)
+        acp_db.write_bytes(acp_db.read_bytes() + b"x" * 8192)
+        return files, capped
+
+    monkeypatch.setattr(disk, "_walk_files", grow_after_walk)
+    f = _finding(disk.run(ctx), "acp-messages")
+    assert f.status is Status.WARN
+    assert human_size(expected) in f.message
