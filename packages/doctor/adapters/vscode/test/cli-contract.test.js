@@ -67,6 +67,10 @@ test("cliCompatStatus classifies versions against the pinned range", () => {
   assert.strictEqual(cliCompatStatus(""), "unknown");
   assert.strictEqual(cliCompatStatus("not-a-version"), "unknown");
   assert.strictEqual(cliCompatStatus(undefined), "unknown");
+  // Valid semver suffixes parse; trailing garbage does not.
+  assert.strictEqual(cliCompatStatus("0.1.0-rc.1"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.1.0+build.5"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.1.0broken"), "unknown");
 });
 
 const VALID_PAYLOAD = {
@@ -102,6 +106,14 @@ test("validateDoctorPayload flags drifted payloads", () => {
     [null, ["<root>"]],
     [{}, ["overall", "version", "summary", "findings"]],
     [{ ...VALID_PAYLOAD, overall: 1 }, ["overall"]],
+    [{ ...VALID_PAYLOAD, overall: "ERROR" }, ["overall"]],
+    [
+      {
+        ...VALID_PAYLOAD,
+        findings: [{ check: "x", status: "BOGUS", message: "m" }],
+      },
+      ["findings[0].status"],
+    ],
     [{ ...VALID_PAYLOAD, summary: { pass: 0 } }, ["summary.warn", "summary.fail"]],
     [{ ...VALID_PAYLOAD, findings: {} }, ["findings"]],
     [
@@ -134,12 +146,15 @@ test(
   { skip: !process.env.DOCTOR_VSCODE_LIVE },
   () => {
     const exe = process.env.DOCTOR_VSCODE_LIVE === "1" ? "devin-doctor" : process.env.DOCTOR_VSCODE_LIVE;
-    const out = cp.execFileSync(exe, ["check", "--json"], {
+    // doctor signals findings through exit codes (1 warn, 2 fail), so a
+    // non-zero exit carries a valid payload — only spawn failures are errors.
+    const res = cp.spawnSync(exe, ["check", "--json"], {
       timeout: 120000,
       maxBuffer: 8 * 1024 * 1024,
       encoding: "utf8",
     });
-    const payload = JSON.parse(out);
+    assert.ifError(res.error);
+    const payload = JSON.parse(res.stdout);
     const r = __internals__.validateDoctorPayload(payload);
     assert.deepStrictEqual(r, { ok: true, missing: [] });
     assert.strictEqual(__internals__.cliCompatStatus(payload.version), "compatible");

@@ -16,7 +16,9 @@ let checkSeq = 0;
 const COMPATIBLE_CLI = { min: [0, 1], maxExclusive: [0, 2] };
 
 function parseVersion(version) {
-  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || "").trim());
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]*)?$/.exec(
+    String(version || "").trim(),
+  );
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
@@ -38,7 +40,8 @@ function cliCompatStatus(version) {
 function validateDoctorPayload(payload) {
   const missing = [];
   if (!payload || typeof payload !== "object") return { ok: false, missing: ["<root>"] };
-  if (typeof payload.overall !== "string") missing.push("overall");
+  const VERDICTS = ["PASS", "WARN", "FAIL"];
+  if (!VERDICTS.includes(payload.overall)) missing.push("overall");
   if (typeof payload.version !== "string") missing.push("version");
   const s = payload.summary;
   if (!s || typeof s !== "object") {
@@ -54,6 +57,9 @@ function validateDoctorPayload(payload) {
     payload.findings.forEach((f, i) => {
       for (const k of ["check", "status", "message"]) {
         if (!f || typeof f[k] !== "string") missing.push(`findings[${i}].${k}`);
+      }
+      if (typeof f?.status === "string" && !VERDICTS.includes(f.status)) {
+        missing.push(`findings[${i}].status`);
       }
       if (f && f.fix !== undefined && f.fix !== null && typeof f.fix !== "string") {
         missing.push(`findings[${i}].fix`);
@@ -228,6 +234,7 @@ function deactivate() {}
 module.exports = { activate, deactivate };
 // Test-only surface — pure internals reachable without the editor.
 module.exports.__internals__ = {
+  runDoctor,
   severityBadge,
   cliCompatStatus,
   validateDoctorPayload,
