@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **CI** — `release.yml` gains a `fanout` job calling the reusable
+  `devin-powerups` release workflow (wheel gate, `.vsix` artifact for
+  the doctor/search adapters). Dispatch runs prove the pipeline without
+  minting a GitHub release; `packages/search` bumped to 0.1.1 to match
+  the already-published `devin-search` extension version.
+
 - **Docs** — corporate-Windows guides: new `devin-doctor` VS Code
   extension section (thin shell running `check --json`/`report --md`/
   `plan`; the editor container stays outside the local-only contract)
