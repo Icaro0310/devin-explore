@@ -74,8 +74,11 @@ def test_file_count_cap_marks_lower_bounds(ctx, monkeypatch):
     monkeypatch.setattr(disk, "_MAX_FILES", 2)
     findings = disk.run(ctx)
     total = _finding(findings, "data dir")
-    assert total.status is Status.PASS
+    # a capped walk can prove WARN but never PASS — the unread remainder
+    # may hold the bulk, so under-threshold capped results are WARN too
+    assert total.status is Status.WARN
     assert "≥" in total.message
+    assert "remainder unread" in total.message
     # the marker lands on all three findings, not just the total
     assert all("(scan capped)" in f.message for f in findings)
 
@@ -93,7 +96,7 @@ def test_file_count_cap_still_warns_over_threshold(ctx, monkeypatch):
 def test_time_cap_marks_lower_bounds(ctx, monkeypatch):
     monkeypatch.setattr(disk, "_MAX_SECONDS", 0.0)
     total = _finding(disk.run(ctx), "data dir")
-    assert total.status is Status.PASS
+    assert total.status is Status.WARN
     assert "≥" in total.message
     assert "(scan capped)" in total.message
 
@@ -101,9 +104,14 @@ def test_time_cap_marks_lower_bounds(ctx, monkeypatch):
 def test_findings_never_restat_walked_files(ctx, monkeypatch):
     """The walk stats each file once via DirEntry; the findings must consume
     those records and never call ``Path.stat`` on a file under the data dir
-    again (the old code stat'ed every file up to 5 times)."""
+    again (the old code stat'ed every file up to 5 times). The one allowed
+    exception is acp-messages DBs, which get a single fresh stat so live
+    growth during the walk cannot hide a threshold breach."""
+    from devin_doctor.paths import locate_stores
+
     known_files = {p for p in ctx.data_dir.rglob("*") if p.is_file()}
     assert known_files
+    acp_dbs = set(locate_stores(ctx.data_dir).acp_dbs)
     seen = []
     orig = Path.stat
 
@@ -114,4 +122,4 @@ def test_findings_never_restat_walked_files(ctx, monkeypatch):
     monkeypatch.setattr(Path, "stat", spy)
     findings = disk.run(ctx)
     assert len(findings) == 3
-    assert [p for p in seen if p in known_files] == []
+    assert [p for p in seen if p in known_files and p not in acp_dbs] == []

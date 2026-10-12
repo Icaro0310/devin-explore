@@ -52,6 +52,9 @@ def _walk_files(root: Path) -> tuple[list[_ScannedFile], bool]:
     deadline = time.monotonic() + _MAX_SECONDS
     pending = [str(root)]
     while pending and not capped:
+        if time.monotonic() >= deadline:
+            capped = True  # queued dirs (incl. empty ones) also stop
+            break
         current = pending.pop()
         try:
             scan = os.scandir(current)
@@ -95,6 +98,16 @@ def _total_finding(ctx: Context, total: int, n_files: int, capped: bool) -> Find
             fix="Largest offenders are usually acp-messages DBs and Cache/"
             "blob_storage — archive or prune old session data.",
         )
+    if capped:
+        # A capped walk can prove WARN (observed bytes over threshold) but
+        # never PASS — the unread remainder may hold the bulk.
+        return Finding(
+            CHECK_ID,
+            Status.WARN,
+            f"{message} — remainder unread, total unknown",
+            fix="Scan stopped at the file/time bound — inspect the data dir "
+            "directly (Cache/blob_storage are the usual bulk).",
+        )
     return Finding(CHECK_ID, Status.PASS, message)
 
 
@@ -103,6 +116,15 @@ def _largest_finding(ctx: Context, files: list[_ScannedFile], capped: bool) -> F
     dbs = [f for f in files if f.suffix in _DB_SUFFIXES]
     top = sorted(dbs, key=lambda f: f.size, reverse=True)[:_TOP_N]
     if not top:
+        if capped:
+            return Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"no .db/.vscdb stores in scanned portion{marker} — "
+                "remainder unread",
+                fix="Scan stopped at the file/time bound — inspect the data "
+                "dir directly for oversized stores.",
+            )
         return Finding(
             CHECK_ID,
             Status.PASS,
@@ -119,44 +141,53 @@ def _largest_finding(ctx: Context, files: list[_ScannedFile], capped: bool) -> F
             fix="Consider exporting old sessions (devin-history) and vacuuming "
             "— an offline VACUUM is planned for --fix (M2).",
         )
+    if capped:
+        return Finding(
+            CHECK_ID,
+            Status.WARN,
+            f"largest stores in scanned portion: {listing}{marker} — "
+            "remainder unread",
+            fix="Scan stopped at the file/time bound — inspect the data dir "
+            "directly for oversized stores.",
+        )
     return Finding(CHECK_ID, Status.PASS, f"largest stores: {listing}{marker}")
 
 
-def _acp_finding(ctx: Context, files: list[_ScannedFile], capped: bool) -> Finding:
+def _acp_finding(ctx: Context, capped: bool) -> Finding:
+    # locate_stores is a targeted glob outside the bounded walk and every db
+    # is stat'ed fresh here — acp numbers stay exact (never lower bounds),
+    # and live growth during the walk cannot hide a threshold breach. The
+    # capped marker still rides every message for scan transparency.
+    marker = " (scan capped)" if capped else ""
     stores = locate_stores(ctx.data_dir)
     if not stores.acp_dbs:
         return Finding(
-            CHECK_ID, Status.PASS, "acp-messages: no accumulation (0 db files)"
+            CHECK_ID,
+            Status.PASS,
+            f"acp-messages: no accumulation (0 db files){marker}",
         )
-    scanned = {f.path: f for f in files}
     total = 0
     mtimes: list[float] = []
     for path in stores.acp_dbs:
-        seen = scanned.get(path)
-        if seen is not None:
-            size, mtime = seen.size, seen.mtime
-        else:
-            # Located outside the walked tree (e.g. a separate config dir),
-            # created after the walk passed, or skipped by the cap — fall
-            # back to one targeted stat so the numbers stay exact.
-            try:
-                st = path.stat()
-            except OSError:
-                continue  # vanished between glob and stat
-            size, mtime = st.st_size, st.st_mtime
-        total += size
-        mtimes.append(mtime)
+        try:
+            st = path.stat()
+        except OSError:
+            continue  # vanished between glob and stat
+        total += st.st_size
+        mtimes.append(st.st_mtime)
     if not mtimes:
         return Finding(
-            CHECK_ID, Status.PASS, "acp-messages: no accumulation (0 db files)"
+            CHECK_ID,
+            Status.PASS,
+            f"acp-messages: no accumulation (0 db files){marker}",
         )
     mtimes.sort()
     span = f"{_day(mtimes[0])} .. {_day(mtimes[-1])}"
-    marker = " (scan capped)" if capped else ""
     message = (
         f"acp-messages accumulation: {len(stores.acp_dbs)} db(s), "
         f"{human_size(total)}, span {span}{marker}"
     )
+
     if total > ctx.acp_warn_bytes:
         return Finding(
             CHECK_ID,
@@ -183,5 +214,5 @@ def run(ctx: Context) -> list[Finding]:
     return [
         _total_finding(ctx, total, len(files), capped),
         _largest_finding(ctx, files, capped),
-        _acp_finding(ctx, files, capped),
+        _acp_finding(ctx, capped),
     ]

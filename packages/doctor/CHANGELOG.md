@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-
+- `disk` check: the data-dir walk is now bounded (250k files / 45s) and
+  single-stat per file via `os.scandir` — multi-million-file data dirs
+  (Cache/blob_storage) no longer stall `check` for minutes. Capped scans
+  report honest lower bounds (`≥`, `(scan capped)`): they can prove WARN
+  but never PASS, so under-threshold capped results are WARN.
 - Docs: guias de plataforma regenerados (Zscaler com CA por ferramenta, exceções de rede nomeadas).
 - README gains the generated `Part of the DEVIN ecosystem` block
   (track/nature/audience/interface rendered from the registry).
