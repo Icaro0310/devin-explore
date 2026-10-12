@@ -1,5 +1,7 @@
 """disk check: total data-dir size, largest DBs, acp-messages accumulation."""
 
+from pathlib import Path
+
 from devin_doctor.checks import disk
 from devin_doctor.model import Status
 
@@ -57,3 +59,59 @@ def test_missing_data_dir_fails(tmp_path):
     ctx = Context(data_dir=tmp_path / "nope", cwd=tmp_path)
     findings = disk.run(ctx)
     assert findings[0].status is Status.FAIL
+
+
+def test_uncapped_run_has_no_cap_markers(ctx):
+    findings = disk.run(ctx)
+    assert len(findings) == 3
+    assert all("(scan capped)" not in f.message for f in findings)
+    assert all("≥" not in f.message for f in findings)
+    total = _finding(findings, "data dir")
+    assert total.message.startswith("data dir total:")
+
+
+def test_file_count_cap_marks_lower_bounds(ctx, monkeypatch):
+    monkeypatch.setattr(disk, "_MAX_FILES", 2)
+    findings = disk.run(ctx)
+    total = _finding(findings, "data dir")
+    assert total.status is Status.PASS
+    assert "≥" in total.message
+    # the marker lands on all three findings, not just the total
+    assert all("(scan capped)" in f.message for f in findings)
+
+
+def test_file_count_cap_still_warns_over_threshold(ctx, monkeypatch):
+    monkeypatch.setattr(disk, "_MAX_FILES", 2)
+    ctx.total_warn_bytes = 1
+    f = _finding(disk.run(ctx), "data dir")
+    assert f.status is Status.WARN
+    assert "≥" in f.message
+    assert "(scan capped)" in f.message
+    assert f.fix
+
+
+def test_time_cap_marks_lower_bounds(ctx, monkeypatch):
+    monkeypatch.setattr(disk, "_MAX_SECONDS", 0.0)
+    total = _finding(disk.run(ctx), "data dir")
+    assert total.status is Status.PASS
+    assert "≥" in total.message
+    assert "(scan capped)" in total.message
+
+
+def test_findings_never_restat_walked_files(ctx, monkeypatch):
+    """The walk stats each file once via DirEntry; the findings must consume
+    those records and never call ``Path.stat`` on a file under the data dir
+    again (the old code stat'ed every file up to 5 times)."""
+    known_files = {p for p in ctx.data_dir.rglob("*") if p.is_file()}
+    assert known_files
+    seen = []
+    orig = Path.stat
+
+    def spy(self, *args, **kwargs):
+        seen.append(self)
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", spy)
+    findings = disk.run(ctx)
+    assert len(findings) == 3
+    assert [p for p in seen if p in known_files] == []
