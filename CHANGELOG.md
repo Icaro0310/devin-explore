@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Docs** — corporate-Windows guides: new `devin-doctor` VS Code
+  extension section (thin shell running `check --json`/`report --md`/
+  `plan`; the editor container stays outside the local-only contract)
+  and the Zscaler root export now covers both certificate stores
+  (`certmgr.msc`/`certlm.msc`, `Cert:\CurrentUser\Root` +
+  `Cert:\LocalMachine\Root`) and yields PEM (Base-64 wizard export, or
+  `certutil -encode` after `Export-Certificate`, which writes DER).
 - **CI** — `auto-approve` now re-runs the shared gate on
   `pull_request_review[submitted]` and on the `Devin Review` commit
   `status` success, so clean analyses and late reviews no longer strand
