@@ -146,8 +146,9 @@ test(
   { skip: !process.env.DOCTOR_VSCODE_LIVE },
   () => {
     const exe = process.env.DOCTOR_VSCODE_LIVE === "1" ? "devin-doctor" : process.env.DOCTOR_VSCODE_LIVE;
-    // doctor signals findings through exit codes (1 warn, 2 fail), so a
-    // non-zero exit carries a valid payload — only spawn failures are errors.
+    // doctor exits 1 only when overall is FAIL (0 on PASS and WARN), so a
+    // non-zero exit still carries a valid payload — only spawn failures
+    // are errors.
     const res = cp.spawnSync(exe, ["check", "--json"], {
       timeout: 120000,
       maxBuffer: 8 * 1024 * 1024,

@@ -78,8 +78,8 @@ function config() {
 }
 
 // Runs the CLI once and resolves {code, stdout, stderr}. Never throws on a
-// non-zero exit — doctor signals findings through exit codes (0 ok, 1 warn,
-// 2 fail), which are results, not errors.
+// non-zero exit — doctor exits 1 only when overall is FAIL (0 on PASS and
+// WARN), which is a result, not an error.
 function runDoctor(args) {
   const { executable, extraArgs } = config();
   return new Promise((resolve, reject) => {
