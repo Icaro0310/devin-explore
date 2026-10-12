@@ -4,6 +4,8 @@
 // the pure rendering paths and the seq-guard to run outside the editor.
 const statusBarStub = { text: "", tooltip: "", command: "", show() {}, hide() {} };
 const outputStub = { lines: [], appendLine(l) { this.lines.push(l); }, clear() { this.lines = []; }, show() {} };
+const errorMessages = [];
+let docsOpened = 0;
 
 const vscodeStub = {
   ThemeColor: class {
@@ -17,8 +19,8 @@ const vscodeStub = {
     createOutputChannel: () => outputStub,
     showInformationMessage: () => Promise.resolve(),
     showWarningMessage: () => Promise.resolve(),
-    showErrorMessage: () => Promise.resolve(),
-    showTextDocument: () => Promise.resolve({ edit: async () => true }),
+    showErrorMessage: (m) => { errorMessages.push(m); return Promise.resolve(); },
+    showTextDocument: () => { docsOpened++; return Promise.resolve({ edit: async () => true }); },
     showQuickPick: () => Promise.resolve(undefined),
     showInputBox: () => Promise.resolve("test-term"),
   },
@@ -129,6 +131,130 @@ test("overlapping searches: a stale result never overwrites a newer one", async 
     assert.strictEqual(statusBarStub.text, "$(search) search: 2");
     // The payload is still returned to the caller; only the render is dropped.
     assert.strictEqual(r1.hits.length, 5);
+  } finally {
+    __internals__.deps.runCli = real;
+  }
+});
+
+test("a hit picked after a newer search started does not open (stale pick dropped)", async () => {
+  ext.activate({ subscriptions: [] });
+  const real = __internals__.deps.runCli;
+  const origPick = vscodeStub.window.showQuickPick;
+  const deferreds = [];
+  const picks = [];
+  __internals__.deps.runCli = (args) =>
+    new Promise((resolve) => deferreds.push(resolve));
+  vscodeStub.window.showQuickPick = (items, opts) =>
+    new Promise((resolve) => picks.push({ items, opts, resolve }));
+  const docsBefore = docsOpened;
+  try {
+    const p1 = __internals__.search(); // seq=1
+    await new Promise((r) => setImmediate(r)); // p1 reaches runCli
+    deferreds[0]({
+      code: 0,
+      stdout: JSON.stringify({ term: "a", hits: [HIT] }),
+      stderr: "",
+    });
+    await new Promise((r) => setImmediate(r)); // p1 renders → picks[0] pending
+    assert.strictEqual(picks.length, 1);
+    const p2 = __internals__.search(); // seq=2 starts while p1's pick is open
+    await new Promise((r) => setImmediate(r)); // p2 reaches runCli
+    // The user selects from the STALE picker — must not open its hit.
+    picks[0].resolve(picks[0].items[0]);
+    await p1;
+    deferreds[1]({
+      code: 0,
+      stdout: JSON.stringify({ term: "b", hits: [] }),
+      stderr: "",
+    });
+    await p2;
+    assert.strictEqual(docsOpened, docsBefore);
+    // Sanity: a pick resolved while still current does open the hit sheet.
+    const p3 = __internals__.search();
+    await new Promise((r) => setImmediate(r));
+    deferreds[2]({
+      code: 0,
+      stdout: JSON.stringify({ term: "c", hits: [HIT] }),
+      stderr: "",
+    });
+    await new Promise((r) => setImmediate(r));
+    picks[1].resolve(picks[1].items[0]);
+    await p3;
+    assert.strictEqual(docsOpened, docsBefore + 1);
+  } finally {
+    __internals__.deps.runCli = real;
+    vscodeStub.window.showQuickPick = origPick;
+  }
+});
+
+test("clampLimit bounds the query limit to 1..500", () => {
+  const c = __internals__.clampLimit;
+  assert.strictEqual(c(20), 20);
+  // -1 would mean "unlimited" to SQLite and blow the output buffer.
+  assert.strictEqual(c(-1), 1);
+  assert.strictEqual(c(0), 1);
+  assert.strictEqual(c(9999), 500);
+  assert.strictEqual(c(2.9), 2);
+  assert.strictEqual(c("nope"), 20);
+  assert.strictEqual(c(undefined), 20);
+});
+
+test("showMisses renders stats incl per_month, and empty stats", async () => {
+  ext.activate({ subscriptions: [] });
+  const real = __internals__.deps.runCli;
+  try {
+    __internals__.deps.runCli = () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({
+          log: "/i.queries.jsonl",
+          total_queries: 7,
+          zero_hit: 2,
+          zero_hit_rate: 0.286,
+          per_month: {
+            "2026-09": { queries: 3, zero_hit: 1 },
+            "2026-10": { queries: 4, zero_hit: 1 },
+          },
+          top_missed_terms: [["frob", 2]],
+        }),
+        stderr: "",
+      });
+    await __internals__.showMisses();
+    let text = outputStub.lines.join("\n");
+    assert.match(text, /7 queries · 2 zero-hit \(29%\)/);
+    assert.match(text, /2026-09: 3 queries, 1 zero-hit/);
+    assert.match(text, /2026-10: 4 queries, 1 zero-hit/);
+    assert.match(text, /2× frob/);
+    // Empty stats payload still renders a summary line.
+    __internals__.deps.runCli = () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({
+          log: "/i.queries.jsonl", total_queries: 0, zero_hit: 0,
+          zero_hit_rate: 0, per_month: {}, top_missed_terms: [],
+        }),
+        stderr: "",
+      });
+    await __internals__.showMisses();
+    text = outputStub.lines.join("\n");
+    assert.match(text, /0 queries · 0 zero-hit \(0%\)/);
+  } finally {
+    __internals__.deps.runCli = real;
+  }
+});
+
+test("showMisses surfaces install guidance when the CLI is missing", async () => {
+  ext.activate({ subscriptions: [] });
+  const real = __internals__.deps.runCli;
+  const before = errorMessages.length;
+  try {
+    __internals__.deps.runCli = () =>
+      Promise.reject(new Error(
+        "devin-search not found on PATH. Install it " +
+          "(uv tool install devin-search) or set devinSearch.executable."));
+    await __internals__.showMisses();
+    assert.strictEqual(errorMessages.length, before + 1);
+    assert.match(errorMessages[errorMessages.length - 1], /not found on PATH/);
   } finally {
     __internals__.deps.runCli = real;
   }

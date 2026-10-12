@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1]
+
+### Fixed
+
+- `devinSearch.limit` clamped to 1–500 (`-1` meant "unlimited" to SQLite
+  and could overflow the 8 MiB output buffer).
+- `misses` surfaces the install/config guidance on spawn failure instead
+  of dying silently.
+- A quick-pick selection resolving after a newer search started no longer
+  opens a superseded hit (seq re-checked post-await).
+- `misses` renders the CLI's `per_month` breakdown, matching the README.
+
 ## [0.1.0]
 
 ### Added

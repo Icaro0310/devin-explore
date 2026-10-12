@@ -67,7 +67,7 @@ or set `devinSearch.executable` to an absolute path.
 | Setting | Default | Description |
 |---|---|---|
 | `devinSearch.executable` | `devin-search` | CLI executable (name or absolute path) |
-| `devinSearch.limit` | `20` | Max hits per query |
+| `devinSearch.limit` | `20` | Max hits per query (clamped to 1–500; `-1` would mean unlimited in SQLite and could overflow the output buffer) |
 | `devinSearch.extraArgs` | `[]` | Extra args appended to every CLI call (e.g. `["--index", "…"]`) |
 
 ## Privacy

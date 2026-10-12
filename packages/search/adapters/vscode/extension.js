@@ -10,17 +10,21 @@ let output;
 let searchSeq = 0;
 let lastTerm = null;
 
-function config() {
-  const c = vscode.workspace.getConfiguration("devinSearch");
-  return {
-    executable: c.get("executable", "devin-search"),
-    extraArgs: c.get("extraArgs", []),
-    limit: c.get("limit", 20),
-  };
+// devin-search LIMIT maps to SQLite's: -1 means "unlimited" and can blow
+// the 8 MiB output buffer, so the setting is clamped to a sane range.
+function clampLimit(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.min(500, Math.max(1, Math.trunc(v))) : 20;
 }
 
-// Injectable so tests can fake the CLI. Non-zero exits are results, not
-// errors: query exits 1 on zero hits, 2 on usage/store problems.
+function config() {
+  const c = vscode.workspace.getConfiguration("devinSearch");
+  return { executable: c.get("executable", "devin-search"),
+    extraArgs: c.get("extraArgs", []), limit: clampLimit(c.get("limit", 20)) };
+}
+
+// Injectable for tests. Non-zero exits are results, not errors:
+// query exits 1 on zero hits, 2 on usage/store problems.
 const deps = {
   runCli: (args) =>
     new Promise((resolve, reject) => {
@@ -41,15 +45,12 @@ const deps = {
     }),
 };
 
-// Contract: `devin-search query --json` → {term: string, hits: [hit,...]}
-// where hit = {session_id, role, ts(ms), project, session_title, source,
-// ref, snippet, rank, history_note}. A payload failing validation means the
-// CLI and extension drifted apart — surfaced loudly, never rendered blank.
+// Contract: `devin-search query --json` → {term, hits:[{session_id, role,
+// ts(ms), project, session_title, source, ref, snippet, rank,
+// history_note}]}. Drift surfaces loudly, never renders blank.
 function validateQueryPayload(payload) {
   const missing = [];
-  if (!payload || typeof payload !== "object") {
-    return { ok: false, missing: ["<root>"] };
-  }
+  if (!payload || typeof payload !== "object") return { ok: false, missing: ["<root>"] };
   if (typeof payload.term !== "string") missing.push("term");
   if (!Array.isArray(payload.hits)) {
     missing.push("hits");
@@ -64,14 +65,13 @@ function validateQueryPayload(payload) {
   return { ok: missing.length === 0, missing };
 }
 
-// One-line formatter shared by the pick list and the hit sheet.
 function fmtHit(hit) {
   const when = hit.ts
     ? new Date(hit.ts).toISOString().slice(0, 16).replace("T", " ")
     : "-";
   const tail = String(hit.project || "").replace(/[\\/]+$/, "").split(/[\\/]/);
-  const proj = tail[tail.length - 1] || "-";
-  return { when, proj, sid: hit.session_id.slice(0, 8) };
+  return { when, proj: tail[tail.length - 1] || "-",
+    sid: hit.session_id.slice(0, 8) };
 }
 
 function quickPickItem(h) {
@@ -88,8 +88,7 @@ async function openHit(hit) {
   const f = fmtHit(hit);
   const rows = [
     ["when", `${f.when} UTC`], ["role", hit.role], ["session", hit.session_title],
-    ["project", hit.project], ["source", hit.source], ["ref", hit.ref],
-    ["history note", hit.history_note],
+    ["project", hit.project], ["source", hit.source], ["ref", hit.ref], ["history note", hit.history_note],
   ];
   const md =
     `# devin-search hit — ${hit.session_id}\n\n` +
@@ -107,8 +106,7 @@ async function search() {
   });
   if (term === undefined || term.trim() === "") return null;
   const seq = ++searchSeq;
-  statusBar.text = "$(sync~spin) search: running";
-  statusBar.show();
+  statusBar.text = "$(sync~spin) search: running"; statusBar.show();
   try {
     // --no-log keeps the extension strictly read-only: the CLI otherwise
     // appends every query to <index>.queries.jsonl.
@@ -133,7 +131,6 @@ async function search() {
       lastTerm = term.trim();
       statusBar.text = `$(search) search: ${payload.hits.length}`;
       statusBar.tooltip = `devin-search — "${lastTerm}": ${payload.hits.length} hit(s)`;
-      statusBar.show();
       if (payload.hits.length === 0) {
         vscode.window.showInformationMessage(`devin-search: no hits for "${lastTerm}"`);
       } else {
@@ -141,7 +138,8 @@ async function search() {
           payload.hits.map(quickPickItem),
           { placeHolder: `${payload.hits.length} hit(s) for "${lastTerm}"` },
         );
-        if (pick) await openHit(pick.hit);
+        // Re-check after the await: a newer search may have superseded this pick.
+        if (pick && seq === searchSeq) await openHit(pick.hit);
       }
     }
     return payload;
@@ -149,7 +147,6 @@ async function search() {
     if (seq === searchSeq) {
       statusBar.text = "$(error) search: unavailable";
       statusBar.tooltip = e.message;
-      statusBar.show();
       vscode.window.showErrorMessage(e.message);
     }
     return null;
@@ -157,21 +154,26 @@ async function search() {
 }
 
 async function showMisses() {
-  const { code, stdout, stderr } = await deps.runCli(["misses", "--json"]);
-  output.clear();
   try {
-    const s = JSON.parse(stdout);
-    output.appendLine(`query log: ${s.log}`);
-    output.appendLine(`${s.total_queries} queries · ${s.zero_hit} zero-hit ` +
-      `(${Math.round((s.zero_hit_rate || 0) * 100)}%)`);
-    (s.top_missed_terms || []).forEach(([t, n]) =>
-      output.appendLine(`  ${n}× ${t}`));
-  } catch {
-    output.appendLine(stdout || stderr);
-  }
-  output.show();
-  if (code !== 0 && !stdout) {
-    vscode.window.showErrorMessage(`devin-search misses exited ${code}: ${stderr}`);
+    const { code, stdout, stderr } = await deps.runCli(["misses", "--json"]);
+    output.clear();
+    try {
+      const s = JSON.parse(stdout);
+      output.appendLine(`query log: ${s.log}`);
+      output.appendLine(`${s.total_queries} queries · ${s.zero_hit} zero-hit ` +
+        `(${Math.round((s.zero_hit_rate || 0) * 100)}%)`);
+      Object.entries(s.per_month || {}).sort().forEach(([m, b]) =>
+        output.appendLine(`  ${m}: ${b.queries} queries, ${b.zero_hit} zero-hit`));
+      (s.top_missed_terms || []).forEach(([t, n]) =>
+        output.appendLine(`  ${n}× ${t}`));
+    } catch {
+      output.appendLine(stdout || stderr);
+    }
+    output.show();
+    if (code !== 0 && !stdout) vscode.window.showErrorMessage(`devin-search misses exited ${code}: ${stderr}`);
+  } catch (e) {
+    // Spawn failure (e.g. ENOENT) — the message itself carries guidance.
+    vscode.window.showErrorMessage(e.message);
   }
 }
 
@@ -179,10 +181,8 @@ function activate(context) {
   output = vscode.window.createOutputChannel("devin-search");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   statusBar.command = "devin-search.search";
-  statusBar.text = "$(search) search";
+  statusBar.text = "$(search) search"; statusBar.show();
   statusBar.tooltip = "Click to search past Devin sessions";
-  statusBar.show();
-
   context.subscriptions.push(
     output,
     statusBar,
@@ -195,4 +195,6 @@ function deactivate() {}
 
 module.exports = { activate, deactivate };
 // Test-only surface — internals reachable without the editor.
-module.exports.__internals__ = { deps, validateQueryPayload, fmtHit, search };
+module.exports.__internals__ = {
+  deps, clampLimit, validateQueryPayload, fmtHit, search, showMisses,
+};
