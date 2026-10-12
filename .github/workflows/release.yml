@@ -117,6 +117,9 @@ jobs:
       id-token: write
       packages: write
     uses: Icaro0310/devin-powerups/.github/workflows/release.yml@v1
+    # inherit forwards OVSX_PAT (and any future publish secrets) — the
+    # reusable workflow only sees secrets the caller passes.
+    secrets: inherit
     with:
       package-dir: ${{ needs.resolve.outputs.dir }}
       pypi-environment: pypi
