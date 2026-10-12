@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `check`/`report`/`plan` gain `--offline`, equivalent to
+  `DEVIN_DOCTOR_OFFLINE=1`: the `updates` check skips its manifest fetch
+  and the run stays fully local. Backs the repo's new `devin-doctor-gate`
+  pre-commit hook (`devin-doctor check --offline`).
+
 ### Changed
 
 

@@ -9,6 +9,11 @@
   (`certmgr.msc`/`certlm.msc`, `Cert:\CurrentUser\Root` +
   `Cert:\LocalMachine\Root`) and yields PEM (Base-64 wizard export, or
   `certutil -encode` after `Export-Certificate`, which writes DER).
+- **Pre-commit** — `.pre-commit-hooks.yaml` adds the `devin-doctor-gate`
+  hook: `devin-doctor check --offline` runs every registered check on
+  each commit, blocking only on FAIL (`verbose` keeps WARN findings
+  visible on green runs). `devin-doctor check`/`report`/`plan` gain a
+  matching `--offline` flag, equivalent to `DEVIN_DOCTOR_OFFLINE=1`.
 - **CI** — `auto-approve` now re-runs the shared gate on
   `pull_request_review[submitted]` and on the `Devin Review` commit
   `status` success, so clean analyses and late reviews no longer strand
