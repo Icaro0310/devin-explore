@@ -17,7 +17,12 @@ const vscodeStub = {
     showTextDocument: () => Promise.resolve({ edit: async () => true }),
   },
   workspace: {
-    getConfiguration: () => ({ get: (k, d) => (k === "executable" ? "devin-doctor" : d) }),
+    getConfiguration: () => ({
+      get: (k, d) =>
+        k === "executable"
+          ? process.env.DOCTOR_VSCODE_TEST_EXE || "devin-doctor"
+          : d,
+    }),
     openTextDocument: () => Promise.resolve({}),
   },
   commands: { registerCommand: () => ({ dispose() {} }) },
@@ -43,4 +48,16 @@ test("severityBadge maps CLI overall values case-insensitively", () => {
   assert.strictEqual(badge("warn").bg.id, "statusBarItem.warningBackground");
   assert.strictEqual(badge("bogus").text, "$(question) doctor: ?");
   assert.strictEqual(badge(undefined).text, "$(question) doctor: ?");
+});
+
+test("runDoctor rejects with an actionable error when the CLI is absent", async () => {
+  process.env.DOCTOR_VSCODE_TEST_EXE = "devin-doctor-definitely-missing-9f3b";
+  try {
+    await assert.rejects(
+      __internals__.runDoctor(["check", "--json"]),
+      /not found on PATH/,
+    );
+  } finally {
+    delete process.env.DOCTOR_VSCODE_TEST_EXE;
+  }
 });

@@ -2,8 +2,9 @@
   "name": "devin-doctor",
   "displayName": "devin-doctor",
   "description": "Ecosystem health checks from devin-doctor, inside the editor. Thin adapter: the extension shells out to the devin-doctor CLI and renders the result \u2014 no check logic is reimplemented here.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "icaro0310",
+  "devin-doctor-cli": ">=0.1,<0.2",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -65,7 +66,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "devDependencies": {}
 }

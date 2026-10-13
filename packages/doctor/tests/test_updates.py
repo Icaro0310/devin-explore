@@ -133,6 +133,13 @@ def test_offline_env_var_skips(ctx, monkeypatch):
     assert findings[0].status is Status.PASS
 
 
+def test_manifest_url_uses_devkit_monorepo_path():
+    # devin-devkit is a monorepo: the published manifest lives inside
+    # packages/devkit/. A bare src/... path 404s and the whole check
+    # silently degrades to "registry unreachable".
+    assert "packages/devkit/src/devin_devkit/manifest.json" in updates.MANIFEST_URL
+
+
 def test_version_key_handles_suffixes():
     assert updates._version_key("0.2.0") > updates._version_key("0.1.9")
     assert updates._version_key("0.1.0") == updates._version_key("v0.1.0".lstrip("v"))
