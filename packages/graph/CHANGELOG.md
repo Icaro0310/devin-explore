@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touched by two or more distinct projects, with the project and
   session lists; text and `--json` output like the other queries.
 
+- Read-only adapters: `devin_graph.mcp_server` MCP server
+  (`graph_query`, `devin-graph-mcp` entry point, `mcp` extra), Devin
+  skill and `adapters/` plugin root.
+
+### Fixed
+
+- `GraphStore` gains a `readonly` open (`mode=ro` URI + `query_only`,
+  no schema DDL, no mkdir); `query`, `export`, `view` and the
+  `graph_query` MCP tool use it, so reads can no longer create or
+  silently repair an existing `graph.db`.
+
 ### Changed
 
 - `labeler.yml` is now a thin caller of the shared reusable workflow in `devin-powerups` (`@v1`); PR labeling behavior is unchanged.

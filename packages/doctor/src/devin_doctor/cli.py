@@ -1,8 +1,12 @@
 """Thin CLI wrapper — all logic lives in the library modules.
 
-- ``devin-doctor check [--data-dir P] [--cwd P] [--stale-days N] [--json]``
-- ``devin-doctor report [--data-dir P] [--cwd P] [--stale-days N] [--md|--json]``
+- ``devin-doctor check [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--json]``
+- ``devin-doctor report [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--md|--json]``
 - ``devin-doctor capabilities [--config-dir P] [--probe-network]``
+
+``--offline`` (check/report/plan) pins ``DEVIN_DOCTOR_OFFLINE=1`` for the
+run, so the updates check skips its manifest fetch and nothing touches
+the network — the mode the repo's pre-commit gate runs in.
 
 Exit code: 0 when no FAIL findings, 1 when any check FAILs.
 ``capabilities`` always exits 0 — its output is a JSON profile, not a
@@ -13,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,6 +53,13 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         default=30,
         metavar="N",
         help="flag sessions inactive for more than N days (default: 30)",
+    )
+    p.add_argument(
+        "--offline",
+        action="store_true",
+        help="skip every check that needs the network — equivalent to "
+        "DEVIN_DOCTOR_OFFLINE=1 (the updates check self-skips when the "
+        "registry is unreachable either way)",
     )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
@@ -105,6 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
+    if getattr(args, "offline", False):
+        os.environ["DEVIN_DOCTOR_OFFLINE"] = "1"
     if args.command == "capabilities":
         if args.probe_network:
             print(

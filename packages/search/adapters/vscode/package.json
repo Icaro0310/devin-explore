@@ -1,0 +1,71 @@
+{
+  "name": "devin-search",
+  "displayName": "devin-search",
+  "description": "Full-text search across past Devin sessions, inside the editor. Thin adapter: the extension shells out to the devin-search CLI and renders the result — no search logic is reimplemented here.",
+  "version": "0.1.1",
+  "publisher": "icaro0310",
+  "license": "MIT",
+  "devin-search-cli": ">=0.1,<0.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Icaro0310/devin-explore.git",
+    "directory": "packages/search/adapters/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "devin",
+    "search",
+    "sessions",
+    "history"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devin-search.search",
+        "title": "devin-search: Search past sessions"
+      },
+      {
+        "command": "devin-search.misses",
+        "title": "devin-search: Show zero-hit query stats"
+      }
+    ],
+    "configuration": {
+      "title": "devin-search",
+      "properties": {
+        "devinSearch.executable": {
+          "type": "string",
+          "default": "devin-search",
+          "description": "devin-search executable (name or absolute path)"
+        },
+        "devinSearch.limit": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Max hits per query (devin-search query --limit; clamped to 1–500)"
+        },
+        "devinSearch.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra CLI args appended to every devin-search call (e.g. [\"--index\", \"…\"])"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {}
+}

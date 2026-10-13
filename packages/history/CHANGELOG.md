@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+
+- Docs: guias de plataforma regenerados; job semanal inclui `--out` obrigatório e usa wrapper `.cmd`.
 - README gains the generated `Part of the DEVIN ecosystem` block
   (track/nature/audience/interface rendered from the registry).
 
@@ -21,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `index.<fmt>` stats block: total sessions, date span, per-project and
   per-format session counts, and user/assistant/tool message totals
   (Markdown table in `index.md`, `stats` object in `index.json`).
+
+- Read-only adapters: `devin_history.mcp_server` MCP server
+  (`history_list` + `history_export`, `devin-history-mcp` entry point,
+  `mcp` extra), Devin skill and `adapters/` plugin root.
+
+### Fixed
+
+- `history_list` / `do_list` default `limit` now matches the CLI:
+  unset means every session (was an implicit cap of 20).
 
 ### Changed
 

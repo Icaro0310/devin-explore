@@ -110,6 +110,8 @@ def export_sessions(
     force: bool = False,
     dry_run: bool = False,
     only_session: str | None = None,
+    since: int | None = None,
+    cursor=None,
 ) -> ExportResult:
     """Export every useful session in ``store`` to ``out_dir``.
 
@@ -118,6 +120,15 @@ def export_sessions(
     ``only_session`` restricts the export to one session id (or unique prefix)
     — the SessionEnd-hook incremental mode (HI-2); the index is still rebuilt
     from all sessions so it stays complete.
+
+    ``since`` (epoch milliseconds) pre-filters to sessions whose
+    ``last_activity_at`` is newer — the watermark leg of the incrementality
+    spec. ``cursor`` is a
+    ``devin_internals.cursor.Cursor``; when given without an explicit
+    ``since``, its ``last_activity_at`` value is the baseline and, unless
+    ``dry_run``, it commits the max activity seen after the run — a second
+    ``--incremental`` invocation therefore exports only what changed. The
+    per-file marker skip above stays as the idempotent safety net.
     """
     if fmt not in FORMATS:
         raise ValueError(f"unknown format {fmt!r} (expected one of {FORMATS})")
@@ -138,6 +149,12 @@ def export_sessions(
                 f"{only_session!r} matches {len(matches)} sessions — "
                 "pass a longer prefix")
         sessions = matches
+    effective_since = since
+    if effective_since is None and cursor is not None:
+        effective_since = cursor.get("last_activity_at", 0) or 0
+    if effective_since:
+        sessions = [s for s in sessions
+                    if int(s.last_activity_at or 0) > effective_since]
     for s in sessions:
         nodes = store.message_nodes(s.id)
         messages = parse_nodes(nodes)
@@ -189,6 +206,14 @@ def export_sessions(
                 else render_index_json(result.index_entries, prov)
             )
             _write_if_changed(out_dir / f"index.{fmt}", index)
+
+    if cursor is not None and not dry_run:
+        watermark = max(
+            (int(s.last_activity_at or 0) for s in store.sessions()),
+            default=int(effective_since or 0),
+        )
+        cursor.set("last_activity_at", watermark)
+        cursor.commit()
 
     return result
 
