@@ -94,25 +94,7 @@ A extensão `icaro0310.devin-doctor` (Open VSX) é thin shell: corre `devin-doct
 
 ### MCP host configs
 
-Same stdio server in other hosts — server name `devin-doctor`:
-
-**Zed** — `context_servers` in `~/.config/zed/settings.json`:
-
-```jsonc
-{ "context_servers": { "devin-doctor": { "command": { "path": "devin-doctor-mcp", "args": [] } } } }
-```
-
-**JetBrains AI Assistant** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
-
-```json
-{ "mcpServers": { "devin-doctor": { "command": "devin-doctor-mcp" } } }
-```
-
-**Antigravity** — `~/.gemini/config/mcp_config.json`:
-
-```json
-{ "mcpServers": { "devin-doctor": { "command": "devin-doctor-mcp" } } }
-```
+Same stdio config in every host — see [README.md § MCP host configs](README.md#mcp-host-configs).
 
 ## Troubleshooting
 
