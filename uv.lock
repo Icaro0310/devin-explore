@@ -338,7 +338,7 @@ mcp = [
 
 [package.metadata]
 requires-dist = [
-    { name = "devin-internals-spec", specifier = ">=0.3.0,<0.4.0" },
+    { name = "devin-internals-spec", specifier = ">=0.3.1,<0.4.0" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -347,11 +347,11 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-internals-spec"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e1/4b/1c62babfacfa2e0467a1afd4648fd5dc04089a14c568f5bb01bfa7c9b996/devin_internals_spec-0.3.0.tar.gz", hash = "sha256:192dfbb2ea0907ede43299557d266b749fdce58ff78c8bc60d54772f7c9899c9", size = 34353, upload-time = "2026-10-04T17:55:49.245Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/1d/ccc8f048c6e1733e65fd29b2397983f53002aa5ac85e04ef139d9652d255/devin_internals_spec-0.3.1.tar.gz", hash = "sha256:c290dfa9153942a598e79d69f8bce3ce1b695a7fb915186e6381370ccfd44bcf", size = 52655, upload-time = "2026-10-13T07:40:20.44Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/96/ad8d979466f8fc2e85852c4e075dff14f8c36082324f0ccf76980fd9b110/devin_internals_spec-0.3.0-py3-none-any.whl", hash = "sha256:97f0835278274d8dd107746ba3ff8bb712ea145eb388f9d2b10dded38441494c", size = 30041, upload-time = "2026-10-04T17:55:47.974Z" },
+    { url = "https://files.pythonhosted.org/packages/88/6b/09e2e1ffabbcefad275786d629f5bc6e94764f4a1020f0c1c0ca4ef7932c/devin_internals_spec-0.3.1-py3-none-any.whl", hash = "sha256:c230ed871f88c27ee34d12cd3b5cc80b9a0d3d079c03cffa0217b69d94747420", size = 41426, upload-time = "2026-10-13T07:40:19.081Z" },
 ]
 
 [[package]]
@@ -382,7 +382,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-search"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/search" }
 dependencies = [
     { name = "devin-internals-spec" },
