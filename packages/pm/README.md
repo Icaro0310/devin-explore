@@ -265,6 +265,46 @@ pytest
 Fixtures-first TDD — see [docs/SPEC.md](docs/SPEC.md) for the data
 contracts and [CONTRIBUTING.md](CONTRIBUTING.md) for ground rules.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_pm.mcp_server` exposes one read-only tool via the
+`devin-pm-mcp` entry point (`pip install 'devin-pm[mcp]'`):
+`pm_rollup` (same JSON as `devin-pm registry` — per-project session
+counts, status totals, milestones, last activity and cost).
+
+`adapters/` is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` +
+`adapters/skills/devin-pm/SKILL.md`), installed with
+`devin plugins install
+Icaro0310/devin-explore#packages/pm/adapters` — it ships in the
+repo, not inside the wheel. The manifest launches the server through
+`uvx --from 'devin-pm[mcp]' devin-pm-mcp`, which resolves once
+the matching PyPI release ships; until then run the source-installed
+`devin-pm-mcp` directly or point a local manifest copy at the
+checkout (`uvx --from './packages/pm[mcp]' devin-pm-mcp`).
+
+### MCP host configs
+
+Same stdio server in other hosts — server name `devin-pm`:
+
+**Zed** — `context_servers` in `~/.config/zed/settings.json`:
+
+```jsonc
+{ "context_servers": { "devin-pm": { "command": { "path": "devin-pm-mcp", "args": [] } } } }
+```
+
+**JetBrains AI Assistant** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-pm": { "command": "devin-pm-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-pm": { "command": "devin-pm-mcp" } } }
+```
+
 ## When to use this
 
 - You have weeks of Devin sessions and want a per-repo rollup — which

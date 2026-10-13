@@ -153,6 +153,45 @@ pytest
 Fixtures are generated at test time by `devin_internals.fixtures` (real
 v17 DDL, synthetic rows) — no binary fixtures are committed.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_search.mcp_server` exposes one read-only tool via the
+`devin-search-mcp` entry point (`pip install 'devin-search[mcp]'`):
+`search_query` (same JSON as `devin-search query --json`).
+
+`adapters/` is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` +
+`adapters/skills/devin-search/SKILL.md`), installed with
+`devin plugins install
+Icaro0310/devin-explore#packages/search/adapters` — it ships in the
+repo, not inside the wheel. The manifest launches the server through
+`uvx --from 'devin-search[mcp]' devin-search-mcp`, which resolves once
+the matching PyPI release ships; until then run the source-installed
+`devin-search-mcp` directly or point a local manifest copy at the
+checkout (`uvx --from './packages/search[mcp]' devin-search-mcp`).
+
+### MCP host configs
+
+Same stdio server in other hosts — server name `devin-search`:
+
+**Zed** — `context_servers` in `~/.config/zed/settings.json`:
+
+```jsonc
+{ "context_servers": { "devin-search": { "command": { "path": "devin-search-mcp", "args": [] } } } }
+```
+
+**JetBrains AI Assistant** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-search": { "command": "devin-search-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-search": { "command": "devin-search-mcp" } } }
+```
+
 ## When to use this
 
 - You remember Devin ran a command, hit an error, touched a file, or made a
