@@ -1,0 +1,6 @@
+# Known-legitimate hits for scripts/check-adapters-hygiene.py —
+# one `path sha256=<hex>` line each; editing a pinned file re-triggers
+# the scan (same mechanism as .secrets-scan-allow).
+
+# Synthetic fixture path in the VS Code ext test, not a real home dir.
+packages/search/adapters/vscode/test/extension.test.js sha256=5f6c966468f0f5048344536df053d2f2f86151b27d54de07b1e6081cc46f9fb2
