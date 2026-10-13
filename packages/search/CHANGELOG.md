@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Read-only adapters: `devin_search.mcp_server` MCP server
+  (`search_query`, `devin-search-mcp` entry point, `mcp` extra), Devin
+  skill and `adapters/` plugin root.
+
 ### Changed
 
 - README gains the generated `Part of the DEVIN ecosystem` block

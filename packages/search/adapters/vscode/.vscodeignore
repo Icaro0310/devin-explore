@@ -1,0 +1,5 @@
+**/*.vsix
+**/.git*
+**/node_modules/**
+*.vsix
+**/test/**

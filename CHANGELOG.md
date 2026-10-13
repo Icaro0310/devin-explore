@@ -5,6 +5,33 @@
 - **CI** — `open-pr-bot` fails closed without `PR_BOT_TOKEN` and its
   existing-PR lookup is base-, owner- and case-aware; fork PRs sharing
   the head name no longer block creating the repository's own PR.
+- **CI** — `release.yml` gains a `fanout` job calling the reusable
+  `devin-powerups` release workflow (wheel gate, `.vsix` artifact for
+  the doctor/search adapters). Dispatch runs prove the pipeline without
+  minting a GitHub release; `packages/search` bumped to 0.1.1 to match
+  the already-published `devin-search` extension version. The fanout
+  job forwards `OVSX_PAT` explicitly (never `inherit`) so the Open VSX
+  publish leg activates without exposing unrelated secrets to the
+  reusable workflow.
+
+- **Docs** — corporate-Windows guides: new `devin-doctor` VS Code
+  extension section (thin shell running `check --json`/`report --md`/
+  `plan`; the editor container stays outside the local-only contract)
+  and the Zscaler root export now covers both certificate stores
+  (`certmgr.msc`/`certlm.msc`, `Cert:\CurrentUser\Root` +
+  `Cert:\LocalMachine\Root`) and yields PEM (Base-64 wizard export, or
+  `certutil -encode` after `Export-Certificate`, which writes DER).
+- **Pre-commit** — `.pre-commit-hooks.yaml` adds the `devin-doctor-gate`
+  hook: `devin-doctor check --offline` runs every registered check on
+  each commit, blocking only on FAIL (`verbose` keeps WARN findings
+  visible on green runs). `devin-doctor check`/`report`/`plan` gain a
+  matching `--offline` flag, equivalent to `DEVIN_DOCTOR_OFFLINE=1`.
+- **CI** — `auto-approve` now re-runs the shared gate on
+  `pull_request_review[submitted]` and on the `Devin Review` commit
+  `status` success, so clean analyses and late reviews no longer strand
+  PRs in REVIEW_REQUIRED.
+- **Docs** — refreshed the generated `Part of the DEVIN ecosystem` block: journey recuration v2 (six paths, zero repeats, `Local-first ops` label, `devin-bridge` in DevOps).
+- **Docs** — ecosystem journey recuration applied (six curated audiences); stale `Path:` lines removed from the devin-doctor eco-block, which is not a registry entry.
 - **CI** — Ruff lint job added (`astral-sh/ruff-action`, pinned); `legacy/`
   migration scripts excluded from the shipped lint scope.
 - **Publish** — consolidated `pypi-publish.yml` builds and uploads

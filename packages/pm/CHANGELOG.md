@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   POSIX path, separator/duplicate/trailing-slash normalization. Grouping
   key only — display keeps original paths; POSIX case preserved.
 
+- Read-only adapters: `devin_pm.mcp_server` MCP server
+  (`pm_rollup`, `devin-pm-mcp` entry point, `mcp` extra), Devin skill
+  and `adapters/` plugin root.
+
 ### Changed
 
 - `llms.txt` no longer states a hard-coded ecosystem size; the registry owns the count.

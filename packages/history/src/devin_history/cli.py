@@ -103,6 +103,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--from-hook", action="store_true",
         help="read the session id from the hook payload on stdin "
         "({\"session_id\": ...}) — implies the incremental mode")
+    e.add_argument(
+        "--since", type=int, metavar="EPOCH_MS",
+        help="export only sessions with activity after this timestamp "
+        "(milliseconds, watermark filter)")
+    e.add_argument(
+        "--incremental", action="store_true",
+        help="watermark mode via the shared cursor "
+        "(.devin/devin-history-export-state.json): export only sessions "
+        "active after the last committed run, then advance the watermark")
     e.set_defaults(func=_cmd_export)
 
     a = sub.add_parser(
@@ -157,10 +166,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
             print("devin-history export --from-hook: no session_id in "
                   "stdin payload — nothing exported", file=sys.stderr)
             return 0  # fail-soft in a hook
+    cursor = None
+    if args.incremental:
+        from devin_internals.cursor import Cursor
+        cursor = Cursor("devin-history-export")
     with _open_store(args.sessions_db) as store:
         res = export_sessions(
             store, args.out, fmt=args.format, force=args.all,
-            dry_run=args.dry_run, only_session=only)
+            dry_run=args.dry_run, only_session=only, since=args.since,
+            cursor=cursor)
     if args.json:
         print(json.dumps({
             "out_dir": str(res.out_dir),

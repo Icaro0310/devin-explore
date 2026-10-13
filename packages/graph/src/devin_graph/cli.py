@@ -53,7 +53,7 @@ def _open_graph(graph_arg: str | None) -> GraphStore:
             file=sys.stderr,
         )
         raise SystemExit(2)
-    return GraphStore(path)
+    return GraphStore(path, readonly=True)
 
 
 def _add_graph(sub: argparse.ArgumentParser) -> None:

@@ -5,21 +5,21 @@
 <a href="https://github.com/Icaro0310/devin-explore/actions/workflows/test-pm.yml"><img src="https://github.com/Icaro0310/devin-explore/actions/workflows/test-pm.yml/badge.svg" alt="ci"/></a>
 
 
-<a href="https://scorecard.dev/viewer/?uri=github.com/Icaro0310/devin-pm"><img src="https://api.scorecard.dev/projects/github.com/Icaro0310/devin-pm/badge" alt="OpenSSF Scorecard"/></a>
+<a href="https://scorecard.dev/viewer/?uri=github.com/Icaro0310/devin-explore"><img src="https://api.scorecard.dev/projects/github.com/Icaro0310/devin-explore/badge" alt="OpenSSF Scorecard"/></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"/></a>
 <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"/></a>
-<a href="https://github.com/Icaro0310/devin-explore"><img src="https://img.shields.io/github/stars/Icaro0310/devin-pm" alt="GitHub stars"/></a>
-<a href="https://github.com/Icaro0310/devin-explore/commits/main"><img src="https://img.shields.io/github/last-commit/Icaro0310/devin-pm" alt="Last commit"/></a>
+<a href="https://github.com/Icaro0310/devin-explore"><img src="https://img.shields.io/github/stars/Icaro0310/devin-explore" alt="GitHub stars"/></a>
+<a href="https://github.com/Icaro0310/devin-explore/commits/main"><img src="https://img.shields.io/github/last-commit/Icaro0310/devin-explore" alt="Last commit"/></a>
 <a href="https://github.com/Icaro0310/awesome-devin"><img src="https://img.shields.io/badge/part%20of-devin--*-ecosystem-7c3aed" alt="devin-* ecosystem"/></a>
 <a href="https://github.com/Icaro0310/devin-explore/issues"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"/></a>
 </div>
 
 <!-- DEVIN-ECO:BEGIN -->
 > **Part of the [DEVIN ecosystem](https://github.com/Icaro0310/awesome-devin)**  
-> Track: Related · Nature: product  
-> For: Operations, Maintainers  
+> Track: Understand · Nature: product  
+> For: Local-first ops, Maintainers  
 > Interface: CLI / Registry  
-> Path: Maintainers · step 2/3 — after `devin-powerups`, before `devin-internals-spec`
+> Path: Local-first ops · step 2/5 — after `devin-explore`, before `devin-office`
 <!-- DEVIN-ECO:END -->
 
 
