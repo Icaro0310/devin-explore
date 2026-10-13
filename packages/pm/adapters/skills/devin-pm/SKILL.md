@@ -14,7 +14,7 @@ doing, how many sessions it had, status counts, cost — roll the session
 store up into projects instead of guessing:
 
 ```bash
-devin-pm registry --json        # every project, machine-readable
+devin-pm registry               # JSON registry on stdout — every project
 ```
 
 Or, when this plugin's MCP server is connected, call `pm_rollup` —
