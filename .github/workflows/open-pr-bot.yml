@@ -28,20 +28,43 @@ jobs:
   open-pr:
     runs-on: ubuntu-latest
     steps:
-      - name: Open PR as github-actions[bot]
+      - name: Open PR via PR bot token
         env:
-          GH_TOKEN: ${{ secrets.PR_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PR_BOT_TOKEN }}
           HEAD_BRANCH: ${{ inputs.head }}
           BASE_BRANCH: ${{ inputs.base }}
           PR_TITLE: ${{ inputs.title }}
           PR_BODY: ${{ inputs.body }}
         run: |
           set -e
-          if url=$(gh pr view "$HEAD_BRANCH" -R "$GITHUB_REPOSITORY" \
-              --json url -q .url 2>/dev/null); then
-            echo "PR already exists: $url"
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PR_BOT_TOKEN secret is required: PRs created with GITHUB_TOKEN never trigger CI, review or auto-approve workflows (GitHub anti-recursion). The PR would sit unmergeable, so refusing to open it." >&2
+            exit 1
+          fi
+          # Expected head owner: the `user:` prefix for fork-qualified heads,
+          # otherwise the repository owner (unqualified same-repo branch).
+          if [[ "$HEAD_BRANCH" == *:* ]]; then
+            expected_lc="${HEAD_BRANCH%%:*}"; expected_lc="${expected_lc,,}"
           else
-            gh pr create -R "$GITHUB_REPOSITORY" \
+            expected_lc="${GITHUB_REPOSITORY%%/*}"; expected_lc="${expected_lc,,}"
+          fi
+          own_pr() {
+            gh pr list -R "$GITHUB_REPOSITORY" \
+              --head "$HEAD_BRANCH" --base "$BASE_BRANCH" --state open --limit 100 \
+              --json url,headRepositoryOwner \
+              --jq "map(select((.headRepositoryOwner.login // \"\") | ascii_downcase == \"$expected_lc\")) | .[0].url // empty"
+          }
+          existing=$(own_pr)
+          if [ -n "$existing" ]; then
+            echo "PR already exists for $HEAD_BRANCH -> $BASE_BRANCH: $existing"
+          elif ! gh pr create -R "$GITHUB_REPOSITORY" \
               --head "$HEAD_BRANCH" --base "$BASE_BRANCH" \
-              --title "$PR_TITLE" --body "$PR_BODY"
+              --title "$PR_TITLE" --body "$PR_BODY"; then
+            raced=$(own_pr)
+            if [ -n "$raced" ]; then
+              echo "PR appeared concurrently for $HEAD_BRANCH -> $BASE_BRANCH: $raced"
+            else
+              echo "::error::gh pr create failed and no matching PR exists" >&2
+              exit 1
+            fi
           fi
