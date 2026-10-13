@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `digest` subcommand — weekly-ish markdown digest
+  (`pm-digest-YYYY-Www.md`, or `--stdout`) of project/milestone activity
+  newer than a watermark: `--since <epoch s/ms|ISO-8601>`, or
+  `--incremental` backed by the shared `pm-digest` cursor
+  (`devin_internals.cursor`; missing/corrupt state fails open to a full
+  digest, watermark commits after the report, atomic write). Bare
+  `devin-pm digest` covers the last 7 days; a run with nothing new
+  writes no file. Incrementality-spec surface, mirrors
+  `devin-history export --since/--incremental`.
 - `vscdb` — GUI sessions from the Desktop `state.vscdb` `ItemTable`
   (PM-1): `windsurfSpace.sessionWorkspace/<backend>/<slug>` bindings →
   `GuiSession` records, grouped by `workspaceId`/`folders`/`label` into

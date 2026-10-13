@@ -8,6 +8,10 @@ Subcommands (all read-only against ``sessions.db``):
 - ``registry``    emit machine-readable ``registry.json``
 - ``verify``      cross-check tracked projects against the ecosystem
   hub registry (``devin-powerups/registry.json``)
+- ``digest``      weekly-ish markdown digest of activity since a
+  watermark (``--since`` epoch/ISO, ``--incremental`` via the shared
+  ``pm-digest`` cursor, ``--stdout`` or a ``pm-digest-YYYY-Www.md``
+  file)
 
 Every subcommand takes ``--vscdb [PATH]`` (PM-1): GUI session→workspace
 bindings from ``state.vscdb`` are merged into the grouping, marked as
@@ -29,6 +33,7 @@ from pathlib import Path
 from devin_internals.parsers import Session, SessionsStore
 from devin_internals.schema import SchemaError
 
+from devin_pm.digest import CURSOR_NAME, parse_since, run_digest
 from devin_pm.milestones import (
     MilestonesError,
     collect_milestones,
@@ -282,6 +287,39 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if report["drift"] else 0
 
 
+def cmd_digest(args: argparse.Namespace) -> int:
+    projects, _ = _projects(_resolve_db(args), _resolve_vscdb(args))
+    since_ms = None
+    if args.since is not None:
+        try:
+            since_ms = parse_since(args.since)
+        except ValueError as exc:
+            raise _CliError(str(exc), exit_code=2) from exc
+    cursor = None
+    if args.incremental:
+        from devin_internals.cursor import Cursor
+
+        cursor = Cursor(CURSOR_NAME)
+    result = run_digest(
+        projects,
+        since_ms=since_ms,
+        cursor=cursor,
+        out_dir=args.out_dir,
+        stdout=args.stdout,
+    )
+    if result.report is None:
+        print(
+            f"no new project activity since "
+            f"{ms_to_iso(result.since_ms)} — nothing to digest"
+        )
+        return 0
+    if args.stdout:
+        print(result.report, end="")
+    else:
+        print(f"wrote {result.out_path}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
@@ -370,6 +408,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="JSON output")
     p.set_defaults(func=cmd_verify)
+
+    p = with_db(
+        sub.add_parser(
+            "digest",
+            help="weekly-ish markdown digest of project/milestone "
+            "activity since a watermark",
+        )
+    )
+    p.add_argument(
+        "--since",
+        metavar="EPOCH|ISO",
+        help="include sessions with activity after this timestamp — "
+        "epoch seconds/ms or ISO-8601 (e.g. 2026-10-13); default: the "
+        "last 7 days, or the committed cursor watermark with "
+        "--incremental",
+    )
+    p.add_argument(
+        "--incremental",
+        action="store_true",
+        help="watermark mode via the shared cursor "
+        "(.devin/pm-digest-state.json): digest only sessions active "
+        "after the last committed run, then advance the watermark — "
+        "missing/corrupt state fails open to a full digest",
+    )
+    p.add_argument(
+        "--stdout",
+        action="store_true",
+        help="print the digest instead of writing "
+        "pm-digest-YYYY-Www.md (still advances the cursor under "
+        "--incremental)",
+    )
+    p.add_argument(
+        "--out-dir",
+        metavar="DIR",
+        help="directory for pm-digest-YYYY-Www.md (default: cwd)",
+    )
+    p.set_defaults(func=cmd_digest)
 
     return parser
 
