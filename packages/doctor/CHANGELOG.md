@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Read-only adapters: `devin_doctor.mcp_server` MCP server
+  (`doctor_check` + `doctor_capabilities`, `devin-doctor-mcp` entry
+  point, `mcp` extra), Devin skill and `adapters/` plugin root. The
+  `offline` flag is scoped per call through `Context.offline` — the MCP
+  server never mutates `DEVIN_DOCTOR_OFFLINE`, so concurrent calls
+  cannot interfere with each other's update check.
+
 - `devin-doctor check` — five read-only checks over a Devin data dir:
   `stores` (presence/size/row counts), `schema` (version + layout detection
   via `devin-internals-spec`), `health-of-data` (empty sessions, orphan

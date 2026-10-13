@@ -135,6 +135,8 @@ def run(
     npm: Callable[[], dict[str, str]] = _npm_tools,
     probe: Callable[[str], str | None] = _probe_version,
 ) -> list[Finding]:
+    if ctx.offline:
+        return _skipped("offline requested")
     if os.environ.get("DEVIN_DOCTOR_OFFLINE") == "1":
         return _skipped("DEVIN_DOCTOR_OFFLINE=1")
     try:

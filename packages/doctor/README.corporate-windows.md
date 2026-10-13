@@ -78,6 +78,20 @@ A extensão `icaro0310.devin-doctor` (Open VSX) é thin shell: corre `devin-doct
 - **Extension host:** cada extensão instalada corre num processo com o perfil de rede do editor — a auditoria de "quem faz chamadas externas" cobre o VS Code e o marketplace configurado (Open VSX, Marketplace ou nenhum), não só este `.vsix`.
 
 
+
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-doctor[mcp]'` then run
+  `devin-doctor-mcp` (stdio). Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-explore#packages/doctor/adapters`. The manifest
+  launches the server through `uvx --from 'devin-doctor[mcp]'
+  devin-doctor-mcp`, which resolves once the matching PyPI release
+  ships. Until then, an editable install does not change what
+  `uvx --from` resolves — either run the source-installed
+  `devin-doctor-mcp` directly, or point a local manifest copy at the
+  checkout: `uvx --from './packages/doctor[mcp]' devin-doctor-mcp`.
+
 ## Troubleshooting
 
 - If a command is not found, reopen PowerShell and run `uv tool update-shell`.
