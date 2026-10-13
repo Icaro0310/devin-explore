@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Fix** — `devin-doctor` updates check fetches the DevKit manifest from its
+  monorepo path (`packages/devkit/src/devin_devkit/manifest.json`); the
+  pre-monorepo URL always 404d, silently degrading the check to "registry
+  unreachable".
 - **CI** — `release.yml` gains a `fanout` job calling the reusable
   `devin-powerups` release workflow (wheel gate, `.vsix` artifact for
   the doctor/search adapters). Dispatch runs prove the pipeline without
