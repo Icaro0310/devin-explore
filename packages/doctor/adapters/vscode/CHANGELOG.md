@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1]
+
+### Fixed
+
+- Case-insensitive verdict rendering in the status bar.
+- `checkSeq` guard drops stale results from overlapping check runs.
+- `node --test` wiring for the adapter test suite.
+
 ## [0.1.0]
 
 ### Added
