@@ -106,6 +106,9 @@ devin-pm milestones --project my-repo    # milestone list + done %
 devin-pm registry --out registry.json    # machine-readable registry
 devin-pm verify                          # diff tracked projects vs hub registry
 devin-pm verify --json                   # same, machine-readable
+devin-pm digest                          # weekly digest → pm-digest-YYYY-Www.md
+devin-pm digest --incremental            # only what changed since last run
+devin-pm digest --since 2026-10-13       # custom watermark (epoch or ISO)
 ```
 
 `--sessions-db PATH` overrides the database location on every subcommand;
@@ -185,6 +188,26 @@ it done. Or list them manually in `milestones.json` at the project root:
 ```
 
 File entries win over session-detected ones on name collision.
+
+### Weekly digest (`digest`)
+
+`devin-pm digest` writes `pm-digest-YYYY-Www.md` — a markdown digest of
+project/milestone activity newer than a watermark (`--stdout` prints
+instead of writing):
+
+```bash
+devin-pm digest                       # last 7 days
+devin-pm digest --since 2026-10-13    # explicit watermark (epoch s/ms or ISO)
+devin-pm digest --incremental         # cursor mode: only what moved
+```
+
+`--incremental` keeps the watermark in the shared
+`.devin/pm-digest-state.json` cursor (`DEVIN_CURSOR_DIR` overrides the
+anchor): each run digests sessions active after the last committed run
+and then advances the watermark, so a second run with nothing new
+writes no file. Missing/corrupt state fails open to a full digest; the
+report file is written atomically and the cursor commits only after the
+report. Same envelope as `devin-history export --since/--incremental`.
 
 ### Exit codes
 
