@@ -8,8 +8,8 @@ with bare PATH presence as a fallback for tools installed another way.
 
 The check never blocks: offline hosts, missing managers and unreachable
 registries produce a single skipped-style finding instead of a failure. Set
-``DEVIN_DOCTOR_OFFLINE=1`` to skip the network call explicitly (corporate
-Windows and other local-only environments).
+``DEVIN_DOCTOR_OFFLINE=1`` — or pass ``--offline`` — to skip the network
+call explicitly (corporate Windows and other local-only environments).
 """
 
 from __future__ import annotations
@@ -135,6 +135,8 @@ def run(
     npm: Callable[[], dict[str, str]] = _npm_tools,
     probe: Callable[[str], str | None] = _probe_version,
 ) -> list[Finding]:
+    if ctx.offline:
+        return _skipped("offline requested")
     if os.environ.get("DEVIN_DOCTOR_OFFLINE") == "1":
         return _skipped("DEVIN_DOCTOR_OFFLINE=1")
     try:

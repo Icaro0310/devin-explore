@@ -135,3 +135,65 @@ def test_export_does_not_modify_source_db(db_path, tmp_path):
         export_sessions(store, tmp_path / "json", fmt="json")
     assert _sha256(db_path) == before
     assert not list(db_path.parent.glob("sessions.db-*"))
+
+
+def test_export_since_filters_by_last_activity(store, tmp_path):
+    from conftest import BASE_MS
+
+    res_all = export_sessions(store, tmp_path / "out2", since=0)
+    res_none = export_sessions(store, tmp_path / "out3")
+    assert (len(res_all.written), len(res_all.skipped_empty)) == (
+        len(res_none.written), len(res_none.skipped_empty))
+
+    res_far = export_sessions(
+        store, tmp_path / "out4", since=2_000_000_000_000)
+    assert res_far.written == [] and res_far.index_entries == []
+
+    # fixture last_activity_at: +2min, +62min, +122min — a 30-min
+    # watermark drops only the first session
+    res_mid = export_sessions(
+        store, tmp_path / "out5", since=BASE_MS + 1_800_000)
+    assert len(res_mid.written) == 2
+    res_mid2 = export_sessions(
+        store, tmp_path / "out6", since=BASE_MS + 4_200_000)
+    assert len(res_mid2.written) == 1
+
+
+def test_export_incremental_cursor_watermark(db_path, store, tmp_path):
+    from conftest import BASE_MS
+    from devin_internals.cursor import Cursor
+
+    cur_dir = tmp_path / "cursors"
+    c = Cursor("devin-history-export", dir=cur_dir)
+    out = tmp_path / "out"
+    r1 = export_sessions(store, out, cursor=c)
+    assert len(r1.written) == 3
+    # watermark committed at max last_activity_at across the store
+    committed = json.loads(
+        (cur_dir / "devin-history-export-state.json").read_text())
+    assert committed["last_activity_at"] >= BASE_MS
+
+    # second incremental run: nothing newer → nothing written
+    c2 = Cursor("devin-history-export", dir=cur_dir)
+    r2 = export_sessions(store, out, cursor=c2)
+    assert r2.written == [] and r2.index_entries == []
+
+    # a new session with later activity is picked up
+    add_session(
+        db_path, "sess-later",
+        messages=[msg("user", "hi"), msg("assistant", "yo"),
+                  msg("user", "more"), msg("assistant", "ok")],
+        last_ms=BASE_MS + 86_400_000 * 2)
+    c3 = Cursor("devin-history-export", dir=cur_dir)
+    r3 = export_sessions(store, out, cursor=c3)
+    assert len(r3.written) == 1
+    assert "sess-later" in r3.written[0]
+
+
+def test_export_incremental_dry_run_does_not_commit(store, tmp_path):
+    from devin_internals.cursor import Cursor
+
+    cur_dir = tmp_path / "cursors"
+    c = Cursor("devin-history-export", dir=cur_dir)
+    export_sessions(store, tmp_path / "out", cursor=c, dry_run=True)
+    assert not (cur_dir / "devin-history-export-state.json").exists()

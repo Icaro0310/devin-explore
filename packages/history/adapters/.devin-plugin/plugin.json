@@ -1,0 +1,15 @@
+{
+  "name": "devin-history",
+  "version": "0.1.0",
+  "description": "Export and search Devin Desktop session history — Obsidian-ready markdown, JSON and SQLite-aware. Read-only against sessions.db.",
+  "author": { "name": "Icaro0310" },
+  "repository": "https://github.com/Icaro0310/devin-explore",
+  "license": "MIT",
+  "keywords": ["devin", "history", "sessions.db"],
+  "mcpServers": {
+    "devin-history": {
+      "command": "uvx",
+      "args": ["--from", "devin-history[mcp]", "devin-history-mcp"]
+    }
+  }
+}

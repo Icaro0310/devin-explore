@@ -1,0 +1,25 @@
+name: Determine Marketplace Identity (one-off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Azure login (federated app credential)
+        uses: azure/login@v3
+        with:
+          client-id: 23c05761-4bd4-470e-b2a7-b65bdbf53bb1
+          tenant-id: de9a0864-dc8b-4539-a411-0b76ae6f3bf2
+          allow-no-subscriptions: true
+          enable-AzPSSession: true
+
+      - name: Marketplace profile identity
+        run: |
+          az rest -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me --resource 499b84ac-1321-427f-aa17-267ca6975798

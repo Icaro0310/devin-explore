@@ -83,14 +83,26 @@ def _node_id(kind: str, key: str) -> str:
 
 
 class GraphStore:
-    """Read/write handle on a ``graph.db`` file (created on demand)."""
+    """Read/write handle on a ``graph.db`` file (created on demand).
 
-    def __init__(self, path: str | Path) -> None:
+    ``readonly=True`` opens the file through SQLite's ``mode=ro`` URI and
+    skips both the mkdir and the schema DDL — a query must never create,
+    repair or otherwise mutate the store it reads; an existing db with an
+    incomplete schema surfaces SQL errors instead of being silently
+    upgraded.
+    """
+
+    def __init__(self, path: str | Path, *, readonly: bool = False) -> None:
         self.path = Path(path).expanduser()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._con = sqlite3.connect(self.path)
+        if readonly:
+            self._con = sqlite3.connect(
+                f"file:{self.path}?mode=ro", uri=True)
+            self._con.execute("PRAGMA query_only = ON")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._con = sqlite3.connect(self.path)
+            self._con.executescript(_SCHEMA)
         self._con.row_factory = sqlite3.Row
-        self._con.executescript(_SCHEMA)
 
     # -- lifecycle ---------------------------------------------------------
 

@@ -47,6 +47,20 @@ _Weekly health sweep, read-only, safe to leave on._
 Equivalent `systemd --user` timer works too; enable lingering if it must run without a login session.
 
 
+
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-doctor[mcp]'` then run
+  `devin-doctor-mcp` (stdio). Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-explore#packages/doctor/adapters`. The manifest
+  launches the server through `uvx --from 'devin-doctor[mcp]'
+  devin-doctor-mcp`, which resolves once the matching PyPI release
+  ships. Until then, an editable install does not change what
+  `uvx --from` resolves — either run the source-installed
+  `devin-doctor-mcp` directly, or point a local manifest copy at the
+  checkout: `uvx --from './packages/doctor[mcp]' devin-doctor-mcp`.
+
 ## Troubleshooting
 
 - If a command is not found, ensure the `uv` tools directory is on `PATH` and run `uv tool update-shell`.

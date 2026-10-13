@@ -50,6 +50,10 @@ class Context:
     store_warn_bytes: int = 256 * 1024**2
     total_warn_bytes: int = 4 * 1024**3
     config_dir: Path | None = None
+    # Per-call offline switch for the updates check; complements the
+    # process-wide DEVIN_DOCTOR_OFFLINE env so the MCP server can scope
+    # it to one request instead of mutating os.environ.
+    offline: bool = False
 
     def now(self) -> int:
         if self.now_ms is not None:

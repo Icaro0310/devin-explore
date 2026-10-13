@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `check`/`report`/`plan` gain `--offline`, equivalent to
+  `DEVIN_DOCTOR_OFFLINE=1`: the `updates` check skips its manifest fetch
+  and the run stays fully local. Backs the repo's new `devin-doctor-gate`
+  pre-commit hook (`devin-doctor check --offline`).
+
 ### Changed
 
-
+- `disk` check: the data-dir walk is now bounded (250k files / 45s) and
+  single-stat per file via `os.scandir` — multi-million-file data dirs
+  (Cache/blob_storage) no longer stall `check` for minutes. Capped scans
+  report honest lower bounds (`≥`, `(scan capped)`): they can prove WARN
+  but never PASS, so under-threshold capped results are WARN.
 - Docs: guias de plataforma regenerados (Zscaler com CA por ferramenta, exceções de rede nomeadas).
 - README gains the generated `Part of the DEVIN ecosystem` block
   (track/nature/audience/interface rendered from the registry).
@@ -23,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-09-29
 
 ### Added
+
+- Read-only adapters: `devin_doctor.mcp_server` MCP server
+  (`doctor_check` + `doctor_capabilities`, `devin-doctor-mcp` entry
+  point, `mcp` extra), Devin skill and `adapters/` plugin root. The
+  `offline` flag is scoped per call through `Context.offline` — the MCP
+  server never mutates `DEVIN_DOCTOR_OFFLINE`, so concurrent calls
+  cannot interfere with each other's update check.
 
 - `devin-doctor check` — five read-only checks over a Devin data dir:
   `stores` (presence/size/row counts), `schema` (version + layout detection

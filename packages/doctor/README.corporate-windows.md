@@ -43,7 +43,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 
 Zscaler é comum em ambientes corporativos e se comporta diferente de um proxy genérico. Dois produtos importam aqui: **Zscaler Internet Access (ZIA)**, proxy com inspeção de TLS, e **Zscaler Private Access (ZPA)**, túnel/VPN para aplicações internas.
 
-- **Certificado raiz:** a inspeção de TLS da ZIA substitui o certificado dos sites pelo da Zscaler. Sem a raiz no bundle correto, `pip`/`uv`/`npm`/`git` falham com `SSL: CERTIFICATE_VERIFY_FAILED`. A raiz normalmente está em `C:\ProgramData\Zscaler\` (ou pode ser exportada pelo Zscaler Client Connector). Cada ferramenta lê a raiz de um lugar diferente:
+- **Certificado raiz:** a inspeção de TLS da ZIA substitui o certificado dos sites pelo da Zscaler. Sem a raiz no bundle correto, `pip`/`uv`/`npm`/`git` falham com `SSL: CERTIFICATE_VERIFY_FAILED`. A raiz vive no repositório de certificados do Windows (instalada por política ou pelo Client Connector), que tem duas lojas: `certmgr.msc` cobre o usuário atual e `certlm.msc` cobre a máquina; a raiz pode estar em só uma delas. Exporte pelo assistente (Trusted Root Certification Authorities → Zscaler → Export) escolhendo "Base-64 encoded X.509 (.CER)", que já sai em PEM; via PowerShell, `Get-ChildItem Cert:\CurrentUser\Root, Cert:\LocalMachine\Root | ? Subject -like "*Zscaler*"` acha o cert nas duas lojas, mas `Export-Certificate` grava DER, não PEM; converta com `certutil -encode zscaler-root.cer zscaler-root.pem`. Em alternativa peça o PEM ao TI. Cada ferramenta lê a raiz de um lugar diferente:
   ```powershell
   $env:REQUESTS_CA_BUNDLE="C:\path\zscaler-root.pem"   # pip e ferramentas baseadas em requests
   $env:SSL_CERT_FILE="C:\path\zscaler-root.pem"        # uv, urllib do Python (inclui o check de manifest do DevKit)
@@ -66,6 +66,31 @@ schtasks /create /tn "devin-explore" /tr "devin-doctor check" /sc weekly /d MON 
 
 User-scope registration (`schtasks` or the `ScheduledTask` cmdlets) needs no admin. If Group Policy disables Task Scheduler (`0x80070005` "Access is denied"), run the command manually or use the tool's own `install` subcommand where available. Options needing elevation, "Run whether user is logged on or not", highest privileges, are usually policy-blocked; when they are, a user-scope logon trigger (`/sc onlogon`, or `New-ScheduledTaskTrigger -AtLogOn`) is the realistic fallback.
 
+
+## VS Code extension: o container não é local-only
+
+A extensão `icaro0310.devin-doctor` (Open VSX) é thin shell: corre `devin-doctor check --json`, `report --md` e `plan` no PATH e só renderiza o resultado — a extensão em si não faz chamadas de rede. O container, porém, faz rede por desenho e fica fora do contrato local-only:
+
+- **Auto-update do marketplace:** `extensions.autoUpdate: false` (e `extensions.autoCheckUpdates: false`) para o editor não falar com o registry sem pedir. Se a política do TI exigir artefato auditado, instale por VSIX sideloaded em vez do marketplace.
+- **Telemetria:** `telemetry.telemetryLevel: "off"` no profile corporate, ou a policy equivalente definida pelo TI.
+- **Política de extensões:** confirme com o TI se extensões de marketplace são permitidas ou se só VSIX aprovado internamente — o `.vsix` publicado e o source em `packages/doctor/adapters/vscode/` são o artefato auditável.
+- **Workspace trust:** a extensão só precisa de executar o CLI no PATH; o modo Restricted do workspace segue a política padrão do TI.
+- **Extension host:** cada extensão instalada corre num processo com o perfil de rede do editor — a auditoria de "quem faz chamadas externas" cobre o VS Code e o marketplace configurado (Open VSX, Marketplace ou nenhum), não só este `.vsix`.
+
+
+
+## Adapters (MCP / Devin skill / plugin)
+
+- MCP server: `pip install 'devin-doctor[mcp]'` then run
+  `devin-doctor-mcp` (stdio). Read-only tools only.
+- Devin plugin + skill: `devin plugins install
+  Icaro0310/devin-explore#packages/doctor/adapters`. The manifest
+  launches the server through `uvx --from 'devin-doctor[mcp]'
+  devin-doctor-mcp`, which resolves once the matching PyPI release
+  ships. Until then, an editable install does not change what
+  `uvx --from` resolves — either run the source-installed
+  `devin-doctor-mcp` directly, or point a local manifest copy at the
+  checkout: `uvx --from './packages/doctor[mcp]' devin-doctor-mcp`.
 
 ## Troubleshooting
 
