@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0]
+
+### Added
+
+- CLI compatibility contract: `devin-doctor-cli` range in `package.json`
+  enforced at runtime against the payload's `version` — out-of-range CLIs
+  get a warning marker and a named compatible range instead of silent drift.
+- Payload validation: a `check --json` response missing contracted fields
+  fails loudly as version drift.
+- `test/cli-contract.test.js` keeps the declared range and the enforced
+  range in sync, and pins the rendered JSON shape.
+
+### Fixed
+
+- `npm test` now uses bare `node --test` (discovers all test files).
+
 ## [0.1.1]
 
 ### Fixed

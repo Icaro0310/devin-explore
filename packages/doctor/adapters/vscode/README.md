@@ -29,6 +29,23 @@ uv tool install devin-doctor
 
 or set `devinDoctor.executable` to an absolute path.
 
+## Version compatibility
+
+The extension and the CLI version independently; the JSON emitted by
+`devin-doctor check --json` is the contract between them. The extension
+declares the CLI range it understands in `package.json`
+(`"devin-doctor-cli": ">=0.1,<0.2"`) and enforces it at runtime:
+
+- A payload missing a contracted field fails loudly with a version-drift
+  error instead of rendering a blank badge.
+- A CLI version outside the range still renders, but the status bar gains a
+  warning marker and a notification names the compatible range.
+
+When the CLI's JSON schema changes, bump the range here and in
+`COMPATIBLE_CLI` (extension.js) together — `test/cli-contract.test.js`
+fails if they disagree. The Python-side schema is pinned by
+`tests/test_cli.py::test_check_json_schema`.
+
 ## Settings
 
 | Setting | Default | Description |
