@@ -1,4 +1,8 @@
-# Known-legitimate hits for scripts/check-adapters-hygiene.py —
+# Known-legitimate hits for the adapters-check sensor. The scanner is
+# not shipped in this repo — CI fetches it from the control plane at the
+# pinned tag (Icaro0310/devin-powerups@v1,
+# scripts/check-adapters-hygiene.py). Reproduce locally with:
+#   curl -sL https://raw.githubusercontent.com/Icaro0310/devin-powerups/v1/scripts/check-adapters-hygiene.py | python3 - --root .
 # one `path sha256=<hex>` line each; editing a pinned file re-triggers
 # the scan (same mechanism as .secrets-scan-allow).
 
