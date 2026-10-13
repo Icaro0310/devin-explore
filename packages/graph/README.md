@@ -136,6 +136,45 @@ DDL, synthetic rows) — no binary fixtures are committed. See
 [docs/SPEC.md](docs/SPEC.md) for the graph model and
 [STATUS.md](STATUS.md) for the roadmap.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_graph.mcp_server` exposes one read-only tool via the
+`devin-graph-mcp` entry point (`pip install 'devin-graph[mcp]'`):
+`graph_query` (same JSON as `devin-graph query <what> --json`).
+
+`adapters/` is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` +
+`adapters/skills/devin-graph/SKILL.md`), installed with
+`devin plugins install
+Icaro0310/devin-explore#packages/graph/adapters` — it ships in the
+repo, not inside the wheel. The manifest launches the server through
+`uvx --from 'devin-graph[mcp]' devin-graph-mcp`, which resolves once
+the matching PyPI release ships; until then run the source-installed
+`devin-graph-mcp` directly or point a local manifest copy at the
+checkout (`uvx --from './packages/graph[mcp]' devin-graph-mcp`).
+
+### MCP host configs
+
+Same stdio server in other hosts — server name `devin-graph`:
+
+**Zed** — `context_servers` in `~/.config/zed/settings.json`:
+
+```jsonc
+{ "context_servers": { "devin-graph": { "command": { "path": "devin-graph-mcp", "args": [] } } } }
+```
+
+**JetBrains AI Assistant** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-graph": { "command": "devin-graph-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-graph": { "command": "devin-graph-mcp" } } }
+```
+
 ## When to use this
 
 - You need cross-session questions: which sessions touched file X, which

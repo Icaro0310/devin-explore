@@ -196,6 +196,47 @@ pytest
 Fixtures are generated at test time by `devin_internals.fixtures` (real v17
 DDL, synthetic rows) — no binary fixtures are committed.
 
+## Adapters (MCP server, Devin skill, plugin)
+
+`devin_history.mcp_server` exposes two tools via the
+`devin-history-mcp` entry point (`pip install 'devin-history[mcp]'`):
+`history_list` (same JSON as `devin-history list --json`) and
+`history_export` (same JSON as `devin-history export --json` — writes
+only inside the given `out_dir`, never to the source stores).
+
+`adapters/` is a self-contained Devin plugin root
+(`adapters/.devin-plugin/plugin.json` +
+`adapters/skills/devin-history/SKILL.md`), installed with
+`devin plugins install
+Icaro0310/devin-explore#packages/history/adapters` — it ships in the
+repo, not inside the wheel. The manifest launches the server through
+`uvx --from 'devin-history[mcp]' devin-history-mcp`, which resolves once
+the matching PyPI release ships; until then run the source-installed
+`devin-history-mcp` directly or point a local manifest copy at the
+checkout (`uvx --from './packages/history[mcp]' devin-history-mcp`).
+
+### MCP host configs
+
+Same stdio server in other hosts — server name `devin-history`:
+
+**Zed** — `context_servers` in `~/.config/zed/settings.json`:
+
+```jsonc
+{ "context_servers": { "devin-history": { "command": { "path": "devin-history-mcp", "args": [] } } } }
+```
+
+**JetBrains AI Assistant** — Settings → Tools → AI Assistant → Model Context Protocol → Add:
+
+```json
+{ "mcpServers": { "devin-history": { "command": "devin-history-mcp" } } }
+```
+
+**Antigravity** — `~/.gemini/config/mcp_config.json`:
+
+```json
+{ "mcpServers": { "devin-history": { "command": "devin-history-mcp" } } }
+```
+
 ## When to use this
 
 - You want your Devin session history out of the app before sessions scroll
