@@ -250,7 +250,8 @@ function activate(context) {
     vscode.commands.registerCommand("devin-doctor.plan", openPlan),
   );
 
-  if (vscode.workspace.getConfiguration("devinDoctor").get("checkOnStartup", false)) {
+  if (vscode.workspace.isTrusted &&
+      vscode.workspace.getConfiguration("devinDoctor").get("checkOnStartup", false)) {
     check();
   }
 }

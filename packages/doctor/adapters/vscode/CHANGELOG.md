@@ -2,6 +2,16 @@
 
 ## [0.2.0]
 
+### Security
+
+- Declared `capabilities.untrustedWorkspaces` (`supported: "limited"`)
+  with `restrictedConfigurations` covering `devinDoctor.executable`,
+  `devinDoctor.extraArgs` and `devinDoctor.checkOnStartup`; executable
+  resolution rejects candidates inside an untrusted workspace, and the
+  startup check now requires `vscode.workspace.isTrusted`, so a
+  user-level `checkOnStartup` can no longer spawn the CLI in a
+  restricted folder.
+
 ### Added
 
 - CLI compatibility contract: `devin-doctor-cli` range in `package.json`
