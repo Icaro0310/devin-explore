@@ -26,6 +26,17 @@
     "onStartupFinished"
   ],
   "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "devinDoctor.executable",
+        "devinDoctor.extraArgs",
+        "devinDoctor.checkOnStartup"
+      ],
+      "description": "Runs the user-installed devin-doctor CLI on demand. In Restricted Mode the workspace-configured executable, extraArgs and checkOnStartup are ignored; the CLI resolves from PATH and never runs automatically."
+    }
+  },
   "contributes": {
     "commands": [
       {

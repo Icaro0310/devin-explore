@@ -28,3 +28,7 @@ jobs:
     permissions:
       contents: read
     uses: Icaro0310/devin-powerups/.github/workflows/adapters-check.yml@v1
+  config-restricted-check:
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/config-restricted-check.yml@v1

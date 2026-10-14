@@ -2,6 +2,11 @@
 
 const vscode = require("vscode");
 const cp = require("child_process");
+// Shared Restricted-Mode-safe executable resolver — byte-identical copy of
+// devin-powerups/adapters/shared/safe-executable.cjs (lockstep enforced).
+// On Windows, CreateProcess searches cwd before PATH: spawn only the
+// absolute path this returns.
+const { resolveSafeExecutable } = require("./safe-executable.cjs");
 
 let statusBar;
 let output;
@@ -77,15 +82,37 @@ function config() {
   };
 }
 
+// Every open workspace folder — used only to bound
+// resolveSafeExecutable's inside-workspace rejection, not as spawn cwd.
+// Multi-root: a PATH candidate living in ANY folder is workspace code.
+function workspaceDirs() {
+  const folders = vscode.workspace.workspaceFolders;
+  return folders ? folders.map((f) => f.uri.fsPath) : [];
+}
+
 // Runs the CLI once and resolves {code, stdout, stderr}. Never throws on a
 // non-zero exit — doctor exits 1 only when overall is FAIL (0 on PASS and
 // WARN), which is a result, not an error.
 function runDoctor(args) {
   const { executable, extraArgs } = config();
+  const spec = resolveSafeExecutable(executable, {
+    workspaceDirs: workspaceDirs(),
+    trusted: vscode.workspace.isTrusted,
+    npmPackage: null,
+  });
   return new Promise((resolve, reject) => {
+    if (!spec) {
+      reject(
+        new Error(
+          `devin-doctor not found on PATH. Install it (uv tool install devin-doctor) ` +
+          `or set devinDoctor.executable.`,
+        ),
+      );
+      return;
+    }
     cp.execFile(
-      executable,
-      args.concat(extraArgs),
+      spec.file,
+      spec.argv.concat(args, extraArgs),
       { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err && err.killed) {
@@ -224,7 +251,8 @@ function activate(context) {
     vscode.commands.registerCommand("devin-doctor.plan", openPlan),
   );
 
-  if (vscode.workspace.getConfiguration("devinDoctor").get("checkOnStartup", false)) {
+  if (vscode.workspace.isTrusted &&
+      vscode.workspace.getConfiguration("devinDoctor").get("checkOnStartup", false)) {
     check();
   }
 }
