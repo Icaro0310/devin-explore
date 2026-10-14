@@ -2,6 +2,11 @@
 
 const vscode = require("vscode");
 const cp = require("child_process");
+// Shared Restricted-Mode-safe executable resolver — byte-identical copy of
+// devin-powerups/adapters/shared/safe-executable.cjs (lockstep enforced).
+// On Windows, CreateProcess searches cwd before PATH: spawn only the
+// absolute path this returns.
+const { resolveSafeExecutable } = require("./safe-executable.cjs");
 
 let statusBar;
 let output;
@@ -23,13 +28,31 @@ function config() {
     extraArgs: c.get("extraArgs", []), limit: clampLimit(c.get("limit", 20)) };
 }
 
+// Every open workspace folder — used only to bound
+// resolveSafeExecutable's inside-workspace rejection, not as spawn cwd.
+// Multi-root: a PATH candidate living in ANY folder is workspace code.
+function workspaceDirs() {
+  const folders = vscode.workspace.workspaceFolders;
+  return folders ? folders.map((f) => f.uri.fsPath) : [];
+}
+
 // Injectable for tests. Non-zero exits are results, not errors:
 // query exits 1 on zero hits, 2 on usage/store problems.
 const deps = {
-  runCli: (args) =>
-    new Promise((resolve, reject) => {
-      const { executable, extraArgs } = config();
-      cp.execFile(executable, args.concat(extraArgs),
+  runCli: (args) => {
+    const { executable, extraArgs } = config();
+    const spec = resolveSafeExecutable(executable, {
+      workspaceDirs: workspaceDirs(),
+      trusted: vscode.workspace.isTrusted,
+      npmPackage: null,
+    });
+    return new Promise((resolve, reject) => {
+      if (!spec) {
+        return reject(new Error(
+          "devin-search not found on PATH. Install it " +
+            "(uv tool install devin-search) or set devinSearch.executable."));
+      }
+      cp.execFile(spec.file, spec.argv.concat(args, extraArgs),
         { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && err.killed) {
@@ -42,7 +65,8 @@ const deps = {
           }
           resolve({ code: err ? err.code : 0, stdout, stderr });
         });
-    }),
+    });
+  },
 };
 
 // Contract: `devin-search query --json` → {term, hits:[{session_id, role,
