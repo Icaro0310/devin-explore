@@ -27,6 +27,16 @@
     "onStartupFinished"
   ],
   "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "devinSearch.executable",
+        "devinSearch.extraArgs"
+      ],
+      "description": "Runs the user-installed devin-search CLI on demand. In Restricted Mode the workspace-configured executable and extraArgs are ignored; the CLI resolves from PATH."
+    }
+  },
   "contributes": {
     "commands": [
       {
