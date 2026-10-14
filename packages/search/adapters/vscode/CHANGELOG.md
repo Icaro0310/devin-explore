@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- Executable resolution hardened for Restricted Mode (shared
+  safe-executable resolver): PATH candidates and npm `.cmd` shim entries
+  are realpath'd and rejected when they resolve inside any untrusted
+  workspace folder (multi-root included).
+
 ## [0.1.1]
 
 ### Fixed
