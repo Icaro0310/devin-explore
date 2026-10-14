@@ -2,6 +2,11 @@
 
 const vscode = require("vscode");
 const cp = require("child_process");
+// Shared Restricted-Mode-safe executable resolver — byte-identical copy of
+// devin-powerups/adapters/shared/safe-executable.cjs (lockstep enforced).
+// On Windows, CreateProcess searches cwd before PATH: spawn only the
+// absolute path this returns.
+const { resolveSafeExecutable } = require("./safe-executable.cjs");
 
 let statusBar;
 let output;
@@ -77,15 +82,36 @@ function config() {
   };
 }
 
+// First workspace folder, when one is open — used only to bound
+// resolveSafeExecutable's inside-workspace rejection, not as spawn cwd.
+function workspaceDir() {
+  const folders = vscode.workspace.workspaceFolders;
+  return folders && folders.length ? folders[0].uri.fsPath : null;
+}
+
 // Runs the CLI once and resolves {code, stdout, stderr}. Never throws on a
 // non-zero exit — doctor exits 1 only when overall is FAIL (0 on PASS and
 // WARN), which is a result, not an error.
 function runDoctor(args) {
   const { executable, extraArgs } = config();
+  const spec = resolveSafeExecutable(executable, {
+    workspaceDir: workspaceDir(),
+    trusted: vscode.workspace.isTrusted,
+    npmPackage: null,
+  });
   return new Promise((resolve, reject) => {
+    if (!spec) {
+      reject(
+        new Error(
+          `devin-doctor not found on PATH. Install it (uv tool install devin-doctor) ` +
+          `or set devinDoctor.executable.`,
+        ),
+      );
+      return;
+    }
     cp.execFile(
-      executable,
-      args.concat(extraArgs),
+      spec.file,
+      spec.argv.concat(args, extraArgs),
       { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err && err.killed) {
