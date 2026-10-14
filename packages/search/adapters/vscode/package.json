@@ -32,9 +32,10 @@
       "supported": "limited",
       "restrictedConfigurations": [
         "devinSearch.executable",
-        "devinSearch.extraArgs"
+        "devinSearch.extraArgs",
+        "devinSearch.limit"
       ],
-      "description": "Runs the user-installed devin-search CLI on demand. In Restricted Mode the workspace-configured executable and extraArgs are ignored; the CLI resolves from PATH."
+      "description": "Runs the user-installed devin-search CLI on demand. In Restricted Mode all workspace-configured settings are ignored; the CLI resolves from PATH with built-in defaults."
     }
   },
   "contributes": {
