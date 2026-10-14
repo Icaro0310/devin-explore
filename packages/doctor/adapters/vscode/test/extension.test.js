@@ -94,7 +94,8 @@ test("manifest declares limited untrusted-workspace support", () => {
 
 test("checkOnStartup never spawns in an untrusted workspace", async () => {
   settings = { checkOnStartup: true };
-  process.env.DOCTOR_VSCODE_TEST_EXE = "/bin/true";
+  // process.execPath resolves on every platform (/bin/true is POSIX-only).
+  process.env.DOCTOR_VSCODE_TEST_EXE = process.execPath;
   vscodeStub.workspace.isTrusted = false;
   cpCalls.length = 0;
   ext.activate({ subscriptions: [] });
