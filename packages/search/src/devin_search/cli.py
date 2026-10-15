@@ -20,8 +20,11 @@ from devin_search.history import attach_history_notes
 from devin_search.index import build_index
 from devin_search.paths import (
     default_acp_dir,
+    default_codex_dir,
+    default_copilot_dirs,
     default_index_path,
     default_sessions_db,
+    default_vscode_chat_dirs,
 )
 from devin_search.query import StaleIndexError, parse_since, search
 
@@ -43,10 +46,38 @@ def _cmd_index(args: argparse.Namespace) -> int:
         if args.acp_dir
         else default_acp_dir()
     )
-    if sessions_db is None and acp_dir is None:
+    copilot_dirs = (
+        None
+        if args.no_copilot
+        else [Path(args.copilot_dir).expanduser()]
+        if args.copilot_dir
+        else default_copilot_dirs()
+    )
+    codex_dir = (
+        None
+        if args.no_codex
+        else Path(args.codex_dir).expanduser()
+        if args.codex_dir
+        else default_codex_dir()
+    )
+    vscode_chat_dirs = (
+        None
+        if args.no_vscode_chat
+        else [Path(args.vscode_chat_dir).expanduser()]
+        if args.vscode_chat_dir
+        else default_vscode_chat_dirs()
+    )
+    if (
+        sessions_db is None
+        and acp_dir is None
+        and not copilot_dirs
+        and codex_dir is None
+        and not vscode_chat_dirs
+    ):
         print(
-            "devin-search: no Devin stores found in the default locations; "
-            "pass --sessions-db and/or --acp-dir",
+            "devin-search: no session stores found in the default "
+            "locations; pass --sessions-db, --acp-dir, --copilot-dir, "
+            "--codex-dir and/or --vscode-chat-dir",
             file=sys.stderr,
         )
         return 2
@@ -60,6 +91,9 @@ def _cmd_index(args: argparse.Namespace) -> int:
             _resolve_index(args.index),
             sessions_db=sessions_db,
             acp_dir=acp_dir,
+            copilot_dirs=copilot_dirs,
+            codex_dir=codex_dir,
+            vscode_chat_dirs=vscode_chat_dirs,
             rebuild=args.rebuild,
         )
     except SchemaError as exc:
@@ -117,8 +151,9 @@ def _cmd_query(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="devin-search",
-        description="Full-text search across all Devin sessions "
-        "(sessions.db + acp-messages → local FTS5 index).",
+        description="Full-text search across all agent sessions "
+        "(Devin sessions.db + acp-messages, Copilot CLI, Codex CLI and "
+        "VS Code chatSessions → local FTS5 index).",
     )
     p.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -141,6 +176,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="index sessions.db only — never auto-detect the real "
         "acp-messages dir (also the deterministic choice for tests)",
+    )
+    ix.add_argument(
+        "--copilot-dir",
+        help="path to a GitHub Copilot CLI root (default: auto-detect "
+        "$COPILOT_DIR, $COPILOT_HOME, ~/.copilot — all existing merged)",
+    )
+    ix.add_argument(
+        "--no-copilot",
+        action="store_true",
+        help="never auto-detect Copilot session-state dirs",
+    )
+    ix.add_argument(
+        "--codex-dir",
+        help="path to a Codex CLI root (default: auto-detect $CODEX_HOME "
+        "or ~/.codex)",
+    )
+    ix.add_argument(
+        "--no-codex",
+        action="store_true",
+        help="never auto-detect the Codex state db and rollouts",
+    )
+    ix.add_argument(
+        "--vscode-chat-dir",
+        help="path to one VS Code <Variant>/User dir holding "
+        "chatSessions stores (default: auto-detect Code + "
+        "Code - Insiders + ~/.vscode-server/data/User)",
+    )
+    ix.add_argument(
+        "--no-vscode-chat",
+        action="store_true",
+        help="never auto-detect VS Code chatSessions dirs",
     )
     ix.add_argument("--index", help="index file path (default: app dir)")
     ix.add_argument(

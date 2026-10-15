@@ -77,11 +77,15 @@ def stats_to_dict(stats: IndexStats) -> dict:
         "indexed": stats.indexed,
         "removed": stats.removed,
         "sources": stats.sources,
+        "skipped_records": stats.skipped_records,
         "by_source": {
             "message_nodes": stats.message_nodes,
             "prompt_history": stats.prompt_history,
             "tool_calls": stats.tool_calls,
             "devin_chat_messages": stats.devin_chat_messages,
+            "copilot_messages": stats.copilot_messages,
+            "codex_messages": stats.codex_messages,
+            "vscode_chat_messages": stats.vscode_chat_messages,
         },
     }
 
@@ -91,6 +95,8 @@ def stats_line(stats: IndexStats) -> str:
     return (
         f"{verb}: +{stats.indexed} docs"
         f" (nodes {stats.message_nodes} · prompts {stats.prompt_history}"
-        f" · tools {stats.tool_calls} · devin-chat {stats.devin_chat_messages})"
+        f" · tools {stats.tool_calls} · devin-chat {stats.devin_chat_messages}"
+        f" · copilot {stats.copilot_messages} · codex {stats.codex_messages}"
+        f" · vscode-chat {stats.vscode_chat_messages})"
         f" · removed {stats.removed} → {stats.index_path}"
     )

@@ -23,10 +23,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `devin-search-mcp` keeps the traceback on `.run()` `ImportError`s; the
   missing-extra hint only covers failures while building the app.
+- Multi-source collector correctness (review hardening): JSONL
+  watermarks now cover only well-formed records, so a truncated tail
+  completed upstream is indexed on the next run (copilot + codex);
+  the vscode-chat watermark is a content hash, so equal-size rewrites
+  re-index; codex `threads` rows upsert by ref and drop docs for
+  deleted threads; a higher-priority copilot root claiming an
+  already-indexed session evicts the stale copy; codex exec payloads
+  index `command` *and* `output`; vscode-chat extraction is restricted
+  to documented content fields so request metadata stays out.
 
 
 ### Added
 
+- **Multi-source collectors**: the index now covers the three non-Devin
+  session surfaces from `SESSION-SURFACES.md` — `copilot-cli`
+  (`session-state`/`history-session-state` event logs, all layouts),
+  `codex-cli` (newest `state_<N>.sqlite` `threads` text fields +
+  `sessions/`/`archived_sessions`/`$CODEX_SESSIONS_DIR` rollout JSONL)
+  and `vscode-chat` (`chatSessions` `.json` snapshots + `.jsonl`
+  mutation-log replay, workspace and global storage). Per-file
+  watermarks + presence markers give the same incremental/deletion
+  semantics as `devin-chat`; malformed JSONL lines are counted and
+  skipped. New `index` flags: `--copilot-dir`/`--no-copilot`,
+  `--codex-dir`/`--no-codex`, `--vscode-chat-dir`/`--no-vscode-chat`;
+  defaults auto-detect the spec roots. Index format stays at v2 —
+  existing indexes gain the new docs on the next run, no rebuild needed.
 - JSON payloads now self-report the CLI `version` (query and misses
   outputs), and `--version` prints it — the VS Code adapter uses both
   for precise compatibility classification instead of shape-only checks.

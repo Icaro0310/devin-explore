@@ -1,7 +1,17 @@
 import json
 
 import devin_search
-from conftest import add_acp_db, add_session, msg
+from conftest import (
+    add_acp_db,
+    add_codex_home,
+    add_copilot_session,
+    add_session,
+    add_vscode_chat,
+    codex_record,
+    copilot_event,
+    msg,
+    vscode_request,
+)
 from devin_search.cli import main
 
 
@@ -155,6 +165,100 @@ def test_version(capsys):
         main(["--version"])
     assert exc.value.code == 0
     assert "devin-search" in capsys.readouterr().out
+
+
+def test_index_and_query_each_new_surface(tmp_path, capsys):
+    """--copilot-dir/--codex-dir/--vscode-chat-dir index their stores;
+    hits land in query output."""
+    copilot_root = tmp_path / "copilot"
+    add_copilot_session(
+        copilot_root,
+        "cp-1",
+        [copilot_event("user.message", {"content": "cli copilot zephyr"})],
+    )
+    codex_root = add_codex_home(
+        tmp_path / "codex",
+        rollouts=[
+            (
+                "sessions/x/rollout-cli-1.jsonl",
+                [
+                    codex_record(
+                        "session_meta",
+                        {"id": "cx-1", "timestamp": "2026-05-28T20:26:40Z",
+                         "cwd": "/w"},
+                    ),
+                    codex_record(
+                        "event_msg",
+                        {"type": "user_message", "message": "cli codex zephyr"},
+                    ),
+                ],
+            )
+        ],
+    )
+    vscode_user = tmp_path / "Code" / "User"
+    add_vscode_chat(
+        vscode_user,
+        "vs-1",
+        doc={
+            "version": 3,
+            "requests": [vscode_request("cli vscode zephyr", "resp")],
+        },
+        ws_dir="h",
+    )
+    idx = tmp_path / "search.db"
+
+    rc = main(
+        [
+            "index",
+            "--copilot-dir", str(copilot_root),
+            "--codex-dir", str(codex_root),
+            "--vscode-chat-dir", str(vscode_user),
+            "--index", str(idx),
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    rc = main(["query", "zephyr", "--index", str(idx), "--json"])
+    assert rc == 0
+    hits = json.loads(capsys.readouterr().out)["hits"]
+    assert {h["source"] for h in hits} == {
+        "copilot-cli",
+        "codex-cli",
+        "vscode-chat",
+    }
+
+
+def test_no_surface_flags_exclude_sources(tmp_path, capsys):
+    copilot_root = tmp_path / "copilot"
+    add_copilot_session(
+        copilot_root,
+        "cp-2",
+        [copilot_event("user.message", {"content": "solo copilot term"})],
+    )
+    codex_root = add_codex_home(
+        tmp_path / "codex",
+        state_n=4,
+        threads=[{"id": "t-1", "first_user_message": "solo codex term"}],
+    )
+    idx = tmp_path / "search.db"
+
+    rc = main(
+        [
+            "index",
+            "--copilot-dir", str(copilot_root),
+            "--no-codex", "--no-vscode-chat", "--no-acp",
+            "--index", str(idx),
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    rc = main(["query", "solo", "--index", str(idx), "--json"])
+    assert rc == 0
+    hits = json.loads(capsys.readouterr().out)["hits"]
+    assert {h["source"] for h in hits} == {"copilot-cli"}
+    assert codex_root.exists()  # passed dir untouched but unused here
 
 
 def test_query_stale_index_is_store_error_not_traceback(db_path, tmp_path, capsys):

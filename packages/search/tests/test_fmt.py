@@ -83,3 +83,23 @@ def test_stats_line_and_dict():
     assert d["indexed"] == 10
     assert d["by_source"]["devin_chat_messages"] == 4
     assert d["sources"] == ["devin-cli", "devin-chat"]
+
+
+def test_stats_exposes_new_surface_counts():
+    stats = IndexStats(
+        index_path="/tmp/search.db",
+        copilot_messages=2,
+        codex_messages=3,
+        vscode_chat_messages=5,
+        skipped_records=1,
+        sources=["copilot-cli", "codex-cli", "vscode-chat"],
+    )
+    assert stats.indexed == 10
+    line = stats_line(stats)
+    assert "copilot 2" in line and "codex 3" in line and "vscode-chat 5" in line
+    d = stats_to_dict(stats)
+    assert d["indexed"] == 10
+    assert d["by_source"]["copilot_messages"] == 2
+    assert d["by_source"]["codex_messages"] == 3
+    assert d["by_source"]["vscode_chat_messages"] == 5
+    assert d["skipped_records"] == 1
