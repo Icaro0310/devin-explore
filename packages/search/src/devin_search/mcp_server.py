@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from devin_search import __version__
 from devin_search.fmt import hits_to_dicts
 from devin_search.paths import default_index_path
 from devin_search.query import parse_since, search
@@ -58,7 +59,8 @@ def do_query(
             "error": "no_index",
             "detail": "run `devin-search index` first",
         }
-    return {"term": term, "hits": hits_to_dicts(hits)}
+    return {"term": term, "version": __version__,
+            "hits": hits_to_dicts(hits)}
 
 
 def _err(error: Exception) -> dict:

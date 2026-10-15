@@ -15,6 +15,38 @@ let output;
 let searchSeq = 0;
 let lastTerm = null;
 
+// Same bounds as the "devin-search-cli" pin in package.json —
+// test/cli-contract.test.js asserts the pin, these bounds and the real
+// CLI version agree.
+const COMPATIBLE_CLI = { min: [0, 1, 0], maxExclusive: [0, 2, 0] };
+const CLI_RANGE = ">=0.1,<0.2";
+
+function parseVersion(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]*)?$/.exec(
+    String(version || "").trim(),
+  );
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+const cmp3 = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+// "compatible" | "too-old" | "too-new" | "unknown"
+function cliCompatStatus(version) {
+  const v = parseVersion(version);
+  if (!v) return "unknown";
+  if (cmp3(v, COMPATIBLE_CLI.min) < 0) return "too-old";
+  if (cmp3(v, COMPATIBLE_CLI.maxExclusive) >= 0) return "too-new";
+  return "compatible";
+}
+
+// CLIs ≥0.1.3 self-report "version" inside the JSON payload (same probe
+// doctor uses); older ones omit it — an absent field is "unknown", not
+// drift. Shape validation is the loud guard; this is the precise one.
+
+function compatSuffix(compat, version) {
+  return compat === "too-old" || compat === "too-new"
+    ? ` — CLI ${version} outside ${CLI_RANGE}` : "";
+}
+
 // devin-search LIMIT maps to SQLite's: -1 means "unlimited" and can blow
 // the 8 MiB output buffer, so the setting is clamped to a sane range.
 function clampLimit(n) {
@@ -143,18 +175,27 @@ async function search() {
     } catch {
       output.appendLine(stdout || "");
       output.appendLine(stderr || "");
+      // argparse rejects flags it does not know — a too-old CLI, not a
+      // broken index. Name the floor instead of the generic hint.
+      if (/unrecognized arguments|invalid choice/.test(stderr || "")) {
+        throw new Error(`devin-search CLI is too old for this extension ` +
+          `(requires ${CLI_RANGE}); the installed CLI rejected an argument — ` +
+          `upgrade: uv tool upgrade devin-search`);
+      }
       throw new Error(`devin-search query returned no JSON (exit ${code}) — ` +
         "run `devin-search index` first? See output channel.");
     }
     const shape = validateQueryPayload(payload);
     if (!shape.ok) {
       throw new Error(`devin-search JSON missing ${shape.missing.join(", ")} — ` +
-        "extension/CLI drift (compatible: devin-search >=0.1,<0.2)");
+        `extension/CLI drift (compatible: devin-search ${CLI_RANGE})`);
     }
+    const compat = cliCompatStatus(payload.version);
     if (seq === searchSeq) {
       lastTerm = term.trim();
       statusBar.text = `$(search) search: ${payload.hits.length}`;
-      statusBar.tooltip = `devin-search — "${lastTerm}": ${payload.hits.length} hit(s)`;
+      statusBar.tooltip = `devin-search — "${lastTerm}": ${payload.hits.length} hit(s)` +
+        compatSuffix(compat, payload.version);
       if (payload.hits.length === 0) {
         vscode.window.showInformationMessage(`devin-search: no hits for "${lastTerm}"`);
       } else {
@@ -184,6 +225,12 @@ async function showMisses() {
     try {
       const s = JSON.parse(stdout);
       output.appendLine(`query log: ${s.log}`);
+      const compat = cliCompatStatus(s.version);
+      if (compat === "too-old" || compat === "too-new") {
+        output.appendLine(`CLI ${s.version} outside ${CLI_RANGE} — ` +
+          (compat === "too-old" ? "upgrade: uv tool upgrade devin-search"
+            : "downgrade the CLI or update the extension"));
+      }
       output.appendLine(`${s.total_queries} queries · ${s.zero_hit} zero-hit ` +
         `(${Math.round((s.zero_hit_rate || 0) * 100)}%)`);
       Object.entries(s.per_month || {}).sort().forEach(([m, b]) =>
@@ -221,4 +268,5 @@ module.exports = { activate, deactivate };
 // Test-only surface — internals reachable without the editor.
 module.exports.__internals__ = {
   deps, clampLimit, validateQueryPayload, fmtHit, search, showMisses,
+  COMPATIBLE_CLI, CLI_RANGE, parseVersion, cliCompatStatus, compatSuffix,
 };
