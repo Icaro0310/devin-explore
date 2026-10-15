@@ -17,7 +17,7 @@ def _hit(**kw):
         "ts": 1_780_000_000_000,
         "project": "/projects/alpha",
         "session_title": "alpha",
-        "source": "sessions",
+        "source": "devin-cli",
         "ref": "node:7",
         "snippet": "deploy with «kubectl»",
         "rank": -1.5,
@@ -73,13 +73,13 @@ def test_stats_line_and_dict():
         message_nodes=3,
         prompt_history=1,
         tool_calls=2,
-        acp_messages=4,
+        devin_chat_messages=4,
         removed=1,
-        sources=["sessions", "acp"],
+        sources=["devin-cli", "devin-chat"],
     )
     line = stats_line(stats)
     assert "+10 docs" in line and "removed 1" in line
     d = stats_to_dict(stats)
     assert d["indexed"] == 10
-    assert d["by_source"]["acp_messages"] == 4
-    assert d["sources"] == ["sessions", "acp"]
+    assert d["by_source"]["devin_chat_messages"] == 4
+    assert d["sources"] == ["devin-cli", "devin-chat"]

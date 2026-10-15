@@ -24,7 +24,7 @@ from devin_internals.parsers import AcpMessagesStore, SessionsStore
 
 from devin_search.extract import extract_chat_message, extract_payload
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 
 _INDEX_DDL = """
 CREATE TABLE IF NOT EXISTS index_meta (
@@ -46,8 +46,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
 
 WM_NODES = "wm:sessions:message_nodes"
 WM_PROMPTS = "wm:sessions:prompt_history"
-SOURCE_SESSIONS = "sessions"
-SOURCE_ACP = "acp"
+SOURCE_DEVIN_CLI = "devin-cli"
+SOURCE_DEVIN_CHAT = "devin-chat"
 
 
 @dataclass
@@ -58,7 +58,7 @@ class IndexStats:
     message_nodes: int = 0
     prompt_history: int = 0
     tool_calls: int = 0
-    acp_messages: int = 0
+    devin_chat_messages: int = 0
     removed: int = 0
     rebuilt: bool = False
     sources: list[str] = field(default_factory=list)
@@ -69,7 +69,7 @@ class IndexStats:
             self.message_nodes
             + self.prompt_history
             + self.tool_calls
-            + self.acp_messages
+            + self.devin_chat_messages
         )
 
 
@@ -142,9 +142,9 @@ def _index_sessions_db(
     """Index message_nodes / prompt_history / tool_call_state.
 
     Returns ``session_id -> (project, title, created_at)`` so other sources
-    (acp) can resolve project names.
+    (devin-chat) can resolve project names.
     """
-    stats.sources.append(SOURCE_SESSIONS)
+    stats.sources.append(SOURCE_DEVIN_CLI)
     with SessionsStore(db_path) as store:
         sessions = {
             s.id: (s.working_directory, s.title, s.created_at)
@@ -163,7 +163,7 @@ def _index_sessions_db(
         wm_prompts and max_prompt < wm_prompts
     ):
         stats.removed += _reset_source(
-            con, SOURCE_SESSIONS, (WM_NODES, WM_PROMPTS)
+            con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS)
         )
         wm_nodes = wm_prompts = 0
 
@@ -183,7 +183,7 @@ def _index_sessions_db(
             ts=node.created_at,
             project=project,
             session_title=title,
-            source=SOURCE_SESSIONS,
+            source=SOURCE_DEVIN_CLI,
             ref=f"node:{node.row_id}",
         )
         stats.message_nodes += 1
@@ -201,7 +201,7 @@ def _index_sessions_db(
             ts=p.timestamp,
             project=project,
             session_title=title,
-            source=SOURCE_SESSIONS,
+            source=SOURCE_DEVIN_CLI,
             ref=f"prompt:{p.id}",
         )
         stats.prompt_history += 1
@@ -212,7 +212,7 @@ def _index_sessions_db(
         r["ref"]
         for r in con.execute(
             "SELECT ref FROM docs WHERE source = ? AND ref LIKE 'tool:%'",
-            (SOURCE_SESSIONS,),
+            (SOURCE_DEVIN_CLI,),
         )
     }
     for tc in tool_calls:
@@ -235,7 +235,7 @@ def _index_sessions_db(
             ts=created,
             project=project,
             session_title=title,
-            source=SOURCE_SESSIONS,
+            source=SOURCE_DEVIN_CLI,
             ref=ref,
         )
         stats.tool_calls += 1
@@ -255,7 +255,7 @@ def _index_acp_dir(
     stats: IndexStats,
     sessions: dict[str, tuple[str, str | None, int]],
 ) -> None:
-    stats.sources.append(SOURCE_ACP)
+    stats.sources.append(SOURCE_DEVIN_CHAT)
     files = sorted(acp_dir.glob("*.db"))
     present = {f.name for f in files}
 
@@ -263,20 +263,20 @@ def _index_acp_dir(
     known = {
         r["value"]
         for r in con.execute(
-            "SELECT value FROM index_meta WHERE key LIKE 'acp:file:%'"
+            "SELECT value FROM index_meta WHERE key LIKE 'devin-chat:file:%'"
         )
     }
     for gone in sorted(known - present):
         cur = con.execute(
             "DELETE FROM docs WHERE source = ? AND ref LIKE ?",
-            (SOURCE_ACP, f"acp:{gone}:%"),
+            (SOURCE_DEVIN_CHAT, f"devin-chat:{gone}:%"),
         )
         stats.removed += cur.rowcount
-        for key in (f"acp:file:{gone}", f"acp:wm:{gone}"):
+        for key in (f"devin-chat:file:{gone}", f"devin-chat:wm:{gone}"):
             con.execute("DELETE FROM index_meta WHERE key = ?", (key,))
 
     for path in files:
-        wm_key = f"acp:wm:{path.name}"
+        wm_key = f"devin-chat:wm:{path.name}"
         # positions start at 0 — an absent watermark must be -1
         raw_wm = _meta_get(con, wm_key)
         wm = int(raw_wm) if raw_wm is not None else -1
@@ -288,7 +288,7 @@ def _index_acp_dir(
             # Not an acp-messages db (or unreadable) — skip it.
             continue
         if wm and not any(m.position > wm for m in messages):
-            _meta_set(con, f"acp:file:{path.name}", path.name)
+            _meta_set(con, f"devin-chat:file:{path.name}", path.name)
             continue
 
         sid = _acp_meta(meta, "session_id") or path.stem
@@ -315,13 +315,13 @@ def _index_acp_dir(
                 ts=base_ts + m.position,
                 project=project,
                 session_title=title,
-                source=SOURCE_ACP,
-                ref=f"acp:{path.name}:{m.position}",
+                source=SOURCE_DEVIN_CHAT,
+                ref=f"devin-chat:{path.name}:{m.position}",
             )
-            stats.acp_messages += 1
+            stats.devin_chat_messages += 1
         if messages:
             _meta_set(con, wm_key, max(m.position for m in messages))
-        _meta_set(con, f"acp:file:{path.name}", path.name)
+        _meta_set(con, f"devin-chat:file:{path.name}", path.name)
 
 
 def build_index(

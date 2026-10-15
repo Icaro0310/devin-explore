@@ -73,8 +73,8 @@ def test_indexes_acp_dir(db_path, acp_dir, tmp_path):
     idx = tmp_path / "search.db"
     stats = build_index(idx, sessions_db=db_path, acp_dir=acp_dir)
 
-    assert stats.acp_messages == 2
-    assert "acp" in stats.sources
+    assert stats.devin_chat_messages == 2
+    assert "devin-chat" in stats.sources
     texts = "\n".join(_doc_texts(idx))
     assert "flaky test" in texts
 
@@ -127,8 +127,8 @@ def test_missing_acp_dir_is_not_an_error(db_path, tmp_path):
         sessions_db=db_path,
         acp_dir=tmp_path / "does-not-exist",
     )
-    assert stats.acp_messages == 0
-    assert "acp" not in stats.sources
+    assert stats.devin_chat_messages == 0
+    assert "devin-chat" not in stats.sources
 
 
 def test_project_and_session_link_stored(db_path, tmp_path):
@@ -138,7 +138,7 @@ def test_project_and_session_link_stored(db_path, tmp_path):
     try:
         row = con.execute(
             "SELECT session_id, project, source, ref FROM docs"
-            " WHERE source = 'sessions' LIMIT 1"
+            " WHERE source = 'devin-cli' LIMIT 1"
         ).fetchone()
     finally:
         con.close()
