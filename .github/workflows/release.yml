@@ -91,7 +91,7 @@ jobs:
           fi
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
           KEYID=$(printf '%s' "$GPG_PRIVATE_KEY" | \
-            gpg --batch --import --show-keys --with-colons | \
+            gpg --batch --show-keys --with-colons | \
             awk -F: '/^fpr/{print $10; exit}')
           for f in "$PKG_DIR"/dist/* sbom.cdx.json; do
             gpg --batch --yes --pinentry-mode loopback \
