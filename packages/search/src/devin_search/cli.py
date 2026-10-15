@@ -103,7 +103,8 @@ def _cmd_query(args: argparse.Namespace) -> int:
     if args.json:
         print(
             json.dumps(
-                {"term": args.term, "hits": hits_to_dicts(hits)},
+                {"term": args.term, "version": __version__,
+                 "hits": hits_to_dicts(hits)},
                 ensure_ascii=False,
                 indent=2,
             )
@@ -192,7 +193,8 @@ def _cmd_misses(args: argparse.Namespace) -> int:
     from devin_search.misslog import summarize
     s = summarize(_resolve_index(args.index))
     if args.json:
-        print(json.dumps(s, ensure_ascii=False, indent=2))
+        print(json.dumps({**s, "version": __version__},
+                         ensure_ascii=False, indent=2))
         return 0
     print(f"query log: {s['log']}")
     print(f"  {s['total_queries']} queries · "

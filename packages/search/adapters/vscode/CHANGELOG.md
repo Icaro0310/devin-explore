@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- CLI compatibility check: `devin-search --version` is probed once per
+  session so an argparse `unrecognized arguments` failure is classified
+  precisely — a bad `devinSearch.extraArgs` flag now names the setting
+  instead of telling the user to upgrade a healthy CLI.
+
 ### Security
 
 - Executable resolution hardened for Restricted Mode (shared
