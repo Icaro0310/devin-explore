@@ -74,7 +74,11 @@ class IndexStats:
 
 
 def open_index(path: str | Path, *, rebuild: bool = False) -> sqlite3.Connection:
-    """Open (creating if needed) the index DB and ensure the schema."""
+    """Open (creating if needed) the index DB and ensure the schema.
+
+    Returns ``(connection, rebuilt)`` — ``rebuilt`` is true when the index
+    was rebuilt, either by explicit request or automatically after a
+    schema-version mismatch, so callers can report it honestly."""
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
@@ -90,9 +94,10 @@ def open_index(path: str | Path, *, rebuild: bool = False) -> sqlite3.Connection
     elif int(version) != INDEX_SCHEMA_VERSION:
         # Index format drifted — rebuild rather than misread our own store.
         con.close()
-        return open_index(path, rebuild=True)
+        con, _ = open_index(path, rebuild=True)
+        return con, True
     con.commit()
-    return con
+    return con, rebuild
 
 
 def _meta_get(con: sqlite3.Connection, key: str) -> str | None:
@@ -334,7 +339,8 @@ def build_index(
     """Index the given stores into ``index_path`` (incrementally)."""
     index_path = Path(index_path).expanduser()
     stats = IndexStats(index_path=index_path, rebuilt=bool(rebuild))
-    con = open_index(index_path, rebuild=rebuild)
+    con, auto_rebuilt = open_index(index_path, rebuild=rebuild)
+    stats.rebuilt = stats.rebuilt or auto_rebuilt
     try:
         sessions: dict[str, tuple[str, str | None, int]] = {}
         if sessions_db is not None:
@@ -349,7 +355,7 @@ def build_index(
 
 def index_doc_count(index_path: str | Path) -> int:
     """Total documents currently in the index."""
-    con = open_index(index_path)
+    con, _ = open_index(index_path)
     try:
         return con.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
     finally:

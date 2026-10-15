@@ -53,7 +53,10 @@ def acp_dir_candidates(
     if (platform or sys.platform).startswith("win"):
         return [r.joinpath("Devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
     if (platform or sys.platform) == "darwin":
-        return [r.joinpath("devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
+        # UI/config dir is capitalized "Devin" on macOS too (canonical
+        # paths in devin-internals-spec) — lowercase misses on
+        # case-sensitive volumes.
+        return [r.joinpath("Devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
     return [r.joinpath(*ACP_MESSAGES_RELPATH) if r.name in ("Devin", "devin")
             else r.joinpath(APP_DIRNAME, *ACP_MESSAGES_RELPATH)
             for r in config_roots]

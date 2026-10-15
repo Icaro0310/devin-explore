@@ -145,3 +145,52 @@ def test_project_and_session_link_stored(db_path, tmp_path):
     assert row[0]
     assert row[1].startswith("/fixture/workspace/")
     assert row[3].split(":", 1)[0] in {"node", "prompt", "tool"}
+
+
+def test_stale_schema_index_auto_rebuilds_and_reports(db_path, tmp_path):
+    """A v1 index is rebuilt on the next index run and stats say so."""
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    con = sqlite3.connect(idx)
+    try:
+        con.execute(
+            "UPDATE index_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        con.execute("UPDATE docs SET source = 'sessions' WHERE source = 'devin-cli'")
+        con.commit()
+    finally:
+        con.close()
+
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.rebuilt
+    con = sqlite3.connect(idx)
+    try:
+        stale = con.execute(
+            "SELECT COUNT(*) FROM docs WHERE source IN ('sessions', 'acp')"
+            " OR ref LIKE 'acp:%' OR ref LIKE 'session:%'"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert stale == 0
+
+
+def test_query_rejects_stale_schema_index(db_path, tmp_path):
+    """Queries on a pre-upgrade index fail closed instead of returning
+    rows labelled with the old source vocabulary."""
+    import pytest
+
+    from devin_search.query import search
+
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    con = sqlite3.connect(idx)
+    try:
+        con.execute(
+            "UPDATE index_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    with pytest.raises(RuntimeError, match="stale"):
+        search(idx, "kubectl")
