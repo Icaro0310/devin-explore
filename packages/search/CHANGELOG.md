@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-source collectors**: the index now covers the three non-Devin
+  session surfaces from `SESSION-SURFACES.md` — `copilot-cli`
+  (`session-state`/`history-session-state` event logs, all layouts),
+  `codex-cli` (newest `state_<N>.sqlite` `threads` text fields +
+  `sessions/`/`archived_sessions`/`$CODEX_SESSIONS_DIR` rollout JSONL)
+  and `vscode-chat` (`chatSessions` `.json` snapshots + `.jsonl`
+  mutation-log replay, workspace and global storage). Per-file
+  watermarks + presence markers give the same incremental/deletion
+  semantics as `devin-chat`; malformed JSONL lines are counted and
+  skipped. New `index` flags: `--copilot-dir`/`--no-copilot`,
+  `--codex-dir`/`--no-codex`, `--vscode-chat-dir`/`--no-vscode-chat`;
+  defaults auto-detect the spec roots. Index format stays at v2 —
+  existing indexes gain the new docs on the next run, no rebuild needed.
 - JSON payloads now self-report the CLI `version` (query and misses
   outputs), and `--version` prints it — the VS Code adapter uses both
   for precise compatibility classification instead of shape-only checks.

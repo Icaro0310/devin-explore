@@ -50,7 +50,13 @@ def _block_text(block: Any) -> str:
     return ""
 
 
-def _walk_strings(value: Any, out: list[str], *, _depth: int = 0) -> None:
+def _walk_strings(
+    value: Any,
+    out: list[str],
+    *,
+    skip_keys: frozenset[str] = frozenset(),
+    _depth: int = 0,
+) -> None:
     """Collect string leaves from arbitrary JSON — the fallback path."""
     if _depth > 8:
         return
@@ -58,11 +64,25 @@ def _walk_strings(value: Any, out: list[str], *, _depth: int = 0) -> None:
         if value.strip():
             out.append(value)
     elif isinstance(value, dict):
-        for v in value.values():
-            _walk_strings(v, out, _depth=_depth + 1)
+        for k, v in value.items():
+            if k not in skip_keys:
+                _walk_strings(v, out, skip_keys=skip_keys, _depth=_depth + 1)
     elif isinstance(value, (list, tuple)):
         for v in value:
-            _walk_strings(v, out, _depth=_depth + 1)
+            _walk_strings(v, out, skip_keys=skip_keys, _depth=_depth + 1)
+
+
+def extract_strings(value: Any, *, skip_keys: frozenset[str] = frozenset()) -> str:
+    """Join every string leaf in an arbitrary JSON value.
+
+    Used by the non-Devin collectors, whose message payloads
+    (``data``/``response`` blobs) vary in shape between stores. Dict keys
+    in ``skip_keys`` are skipped at any depth — structural fields like
+    ``type``/``id`` that are not user-visible text.
+    """
+    parts: list[str] = []
+    _walk_strings(value, parts, skip_keys=skip_keys)
+    return "\n".join(parts)
 
 
 def extract_text(d: dict[str, Any]) -> str:

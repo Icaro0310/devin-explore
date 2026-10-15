@@ -32,9 +32,10 @@
 
 Part of the [awesome-devin](https://github.com/Icaro0310/awesome-devin) ecosystem: the curated hub for the devin-* tools.
 
-Full-text search across all your Devin sessions — find that command, that
+Full-text search across all your agent sessions — find that command, that
 error message, that file path or that decision from months ago in under a
-second.
+second. Devin (`sessions.db`, `acp-messages/*.db`), GitHub Copilot CLI,
+OpenAI Codex CLI and VS Code chat sessions all land in one index.
 
 ## The problem
 
@@ -92,7 +93,10 @@ devin-search query "migration" --since 2026-09-01 --limit 5 --json
 # link hits to devin-history export notes
 devin-search query "kubectl" --history-dir ~/notes/devin-history
 
-# deterministic index: sessions.db only, never the auto-detected acp dir
+# deterministic index: sessions.db only, never the auto-detected dirs
+# (--no-acp, --no-copilot, --no-codex and --no-vscode-chat each disable
+# one source; --copilot-dir/--codex-dir/--vscode-chat-dir pin it to one
+# root instead of auto-detecting)
 devin-search index --no-acp
 
 # zero-hit stats from the local query log (evidence for/against semantic
@@ -102,7 +106,8 @@ devin-search misses
 
 Hits print as `WHEN · ROLE · PROJECT · SESSION · SNIPPET` with the match
 wrapped in `«»`; each hit carries a `ref` (e.g. `node:1234`,
-`devin-chat:file.db:7`) pointing back to the exact source row.
+`devin-chat:file.db:7`, `codex-cli:…/rollout-x.jsonl:41`,
+`vscode-chat:…/vs-1.jsonl:0:resp`) pointing back to the exact source row.
 
 With `--history-dir <dir>` pointing at a
 [`devin-history`](https://github.com/Icaro0310/devin-explore) export
@@ -128,13 +133,26 @@ on Windows and `$XDG_DATA_HOME/devin/cli/sessions.db` on Linux (default
 `~/.config/Devin/User/acp-messages`). A legacy `~/.config/devin` layout is
 also checked. Use `--sessions-db` or `--acp-dir` to override.
 
+The non-Devin surfaces auto-detect per the session-surface spec
+(`devin-internals-spec` → `docs/SESSION-SURFACES.md` §6.3–§6.5):
+**copilot-cli** merges `$COPILOT_DIR`, `$COPILOT_HOME` and `~/.copilot`
+(`session-state/` dir + flat files, legacy `history-session-state/`);
+**codex-cli** reads `$CODEX_HOME` else `~/.codex` (newest `state_<N>.sqlite`
+plus `sessions/`/`archived_sessions/` rollouts); **vscode-chat** merges the
+`Code` and `Code - Insiders` `User` dirs plus `~/.vscode-server/data/User`
+(`workspaceStorage/*/chatSessions` + `globalStorage/*ChatSessions`). Use
+`--copilot-dir`/`--codex-dir`/`--vscode-chat-dir` to pin one root or
+`--no-copilot`/`--no-codex`/`--no-vscode-chat` to disable a surface.
+
 ## Limitations
 
 - **Schema-gated.** Only `sessions.db` schema v15–v17 is accepted; newer
   versions fail loudly (update `devin-internals-spec` first).
-- **Opaque payloads.** `chat_message`, `tool_call_*_json` and acp
-  `payload` formats are undocumented/unstable — text extraction is
-  best-effort and tolerant, not contractual.
+- **Opaque payloads.** `chat_message`, `tool_call_*_json`, acp
+  `payload`, copilot event `data`, codex rollout payloads and
+  vscode-chat `requests[]` shapes are undocumented/unstable — text
+  extraction is best-effort and tolerant, not contractual. Malformed
+  JSONL lines are skipped, never fatal.
 - **Keyword search only (M1).** BM25 over tokens — no synonyms or
   embeddings; semantic search is an opt-in M2 candidate.
 - **Deletion lag.** New rows are picked up incrementally, but rows
@@ -151,7 +169,9 @@ pytest
 ```
 
 Fixtures are generated at test time by `devin_internals.fixtures` (real
-v17 DDL, synthetic rows) — no binary fixtures are committed.
+v17 DDL, synthetic rows) plus per-surface writers in `tests/conftest.py`
+for the copilot/codex/vscode-chat stores — no binary fixtures are
+committed.
 
 ## Adapters (MCP server, Devin skill, plugin)
 
