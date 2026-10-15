@@ -1,9 +1,11 @@
 import hashlib
 import sqlite3
 
+import pytest
 from conftest import add_acp_db, add_session, msg
 from devin_internals.fixtures import create_acp_messages_db
 from devin_search.index import build_index, index_doc_count
+from devin_search.query import search
 
 
 def _sha256(path):
@@ -177,10 +179,6 @@ def test_stale_schema_index_auto_rebuilds_and_reports(db_path, tmp_path):
 def test_query_rejects_stale_schema_index(db_path, tmp_path):
     """Queries on a pre-upgrade index fail closed instead of returning
     rows labelled with the old source vocabulary."""
-    import pytest
-
-    from devin_search.query import search
-
     idx = tmp_path / "search.db"
     build_index(idx, sessions_db=db_path)
     con = sqlite3.connect(idx)
