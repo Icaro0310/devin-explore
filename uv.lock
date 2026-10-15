@@ -250,7 +250,7 @@ wheels = [
 
 [[package]]
 name = "devin-doctor"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/doctor" }
 dependencies = [
     { name = "devin-internals-spec" },
@@ -382,7 +382,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-search"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/search" }
 dependencies = [
     { name = "devin-internals-spec" },
