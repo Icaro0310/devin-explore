@@ -415,3 +415,25 @@ test("a failed probe keeps the ambiguous hint with both causes", async () => {
     __internals__.resetProbe();
   }
 });
+
+test("a flag the query never sends (extraArgs --version) blames the setting", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--version"];
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --version" });
+  try {
+    await __internals__.search();
+    // queries never send --version, so the rejection can only be the
+    // user's extraArgs — even when the probe says the CLI is old.
+    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});

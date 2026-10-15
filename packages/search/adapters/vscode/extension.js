@@ -47,11 +47,6 @@ function cliCompatStatus(version) {
 // mean a too-old CLI missing a built-in flag OR a typo in the user's
 // devinSearch.extraArgs. The probe plus the flag/setting comparison
 // below decides which; the cached result is reused for the session.
-// Flags the extension itself passes to the CLI. A rejection of one of
-// these is the CLI's fault even when extraArgs happens to repeat it —
-// so they are excluded from the "only settings" check below.
-const BUILT_IN_FLAGS = new Set(["--json", "--no-log", "--limit", "--version"]);
-
 // Cached as a promise so concurrent searches share one probe (a second
 // caller must not read a null placeholder while the first is still
 // awaiting). The cache is keyed by devinSearch.executable — changing the
@@ -201,9 +196,10 @@ async function search() {
   try {
     // --no-log keeps the extension strictly read-only: the CLI otherwise
     // appends every query to <index>.queries.jsonl.
-    const { code, stdout, stderr } = await deps.runCli([
+    const args = [
       "query", term.trim(), "--json", "--no-log", "--limit", String(config().limit),
-    ]);
+    ];
+    const { code, stdout, stderr } = await deps.runCli(args);
     let payload;
     try {
       payload = JSON.parse(stdout);
@@ -219,8 +215,12 @@ async function search() {
         const rejected = (stderr.match(/unrecognized arguments:\s*(.+)/) || [])[1]
           ?.trim().split(/\s+/).filter((t) => t.startsWith("-")) || [];
         const userFlags = new Set(config().extraArgs.filter((t) => t.startsWith("-")));
+        // A rejected flag is the CLI's fault only if THIS call sent it;
+        // flags the extension never passes (--version, audit-only
+        // options) in a rejection must have come from extraArgs.
+        const sentFlags = new Set(args.filter((t) => t.startsWith("-")));
         const onlySettings = rejected.length > 0 &&
-          rejected.every((t) => userFlags.has(t) && !BUILT_IN_FLAGS.has(t));
+          rejected.every((t) => userFlags.has(t) && !sentFlags.has(t));
         const probed = await probeVersion();
         const compat = probed ? cliCompatStatus(probed) : "unknown";
         if (onlySettings || compat === "compatible") {
