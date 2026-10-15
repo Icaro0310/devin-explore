@@ -1,7 +1,7 @@
 import json
 
-from conftest import add_acp_db, add_session, msg
 import devin_search
+from conftest import add_acp_db, add_session, msg
 from devin_search.cli import main
 
 
