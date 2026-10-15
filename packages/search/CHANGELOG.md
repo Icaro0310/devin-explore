@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `docs.ts` for `devin-cli` sources now normalizes epoch **seconds** to
+  milliseconds (Linux v17 stores use seconds; SESSION-SURFACES §6.1) —
+  previously hits rendered ~1970 and `--since` dropped them. Covers
+  `message_nodes`, `prompt_history` and `tool_call_state` insert points.
+  `INDEX_SCHEMA_VERSION` bumped to 3 so existing indexes rebuild with
+  corrected timestamps.
+
 ### Changed
 
 - **Index format v2**: logical source vocabulary renamed to the canonical

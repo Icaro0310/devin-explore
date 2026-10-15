@@ -38,7 +38,7 @@ from devin_search.extract import (
     normalize_role,
 )
 
-INDEX_SCHEMA_VERSION = 2
+INDEX_SCHEMA_VERSION = 3
 
 _INDEX_DDL = """
 CREATE TABLE IF NOT EXISTS index_meta (
@@ -209,7 +209,7 @@ def _index_sessions_db(
             text=text,
             session_id=node.session_id,
             role=role,
-            ts=node.created_at,
+            ts=_epoch_ms(node.created_at) or 0,
             project=project,
             session_title=title,
             source=SOURCE_DEVIN_CLI,
@@ -227,7 +227,7 @@ def _index_sessions_db(
             text=p.content,
             session_id=p.session_id,
             role="shell" if p.is_shell else "user",
-            ts=p.timestamp,
+            ts=_epoch_ms(p.timestamp) or 0,
             project=project,
             session_title=title,
             source=SOURCE_DEVIN_CLI,
@@ -261,7 +261,7 @@ def _index_sessions_db(
             text="\n".join(parts),
             session_id=tc.session_id,
             role="tool",
-            ts=created,
+            ts=_epoch_ms(created) or 0,
             project=project,
             session_title=title,
             source=SOURCE_DEVIN_CLI,
