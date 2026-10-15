@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `devin-search-mcp` keeps the traceback on `.run()` `ImportError`s; the
   missing-extra hint only covers failures while building the app.
+- Multi-source collector correctness (review hardening): JSONL
+  watermarks now cover only well-formed records, so a truncated tail
+  completed upstream is indexed on the next run (copilot + codex);
+  the vscode-chat watermark is a content hash, so equal-size rewrites
+  re-index; codex `threads` rows upsert by ref and drop docs for
+  deleted threads; a higher-priority copilot root claiming an
+  already-indexed session evicts the stale copy; codex exec payloads
+  index `command` *and* `output`; vscode-chat extraction is restricted
+  to documented content fields so request metadata stays out.
 
 
 ### Added

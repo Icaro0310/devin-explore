@@ -214,15 +214,18 @@ def add_codex_home(
     root = Path(codex_root)
     root.mkdir(parents=True, exist_ok=True)
     if state_n is not None:
-        db_path_ = root / f"state_{state_n}.sqlite"
+        db_path_ = root / ("state_" + str(state_n) + ".sqlite")
         con = sqlite3.connect(db_path_)
         with con:
+            # Idempotent: re-calling rewrites the table, so tests can
+            # mutate threads between index runs.
             con.execute(
-                "CREATE TABLE threads("
+                "CREATE TABLE IF NOT EXISTS threads("
                 "  id TEXT PRIMARY KEY, created_at INTEGER,"
                 "  updated_at INTEGER, cwd TEXT, has_user_event INTEGER,"
                 "  title TEXT, preview TEXT, first_user_message TEXT)"
             )
+            con.execute("DELETE FROM threads")
             for t in threads:
                 con.execute(
                     "INSERT INTO threads(id, created_at, updated_at, cwd,"

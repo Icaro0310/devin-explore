@@ -636,6 +636,18 @@ def _index_copilot_dirs(
         if root_key in seen_native_in_root or (
             dedup_key is not None and dedup_key in seen_sessions
         ):
+            # A higher-priority copy already claimed this session — docs
+            # indexed from *this* file (when it was the only copy) are
+            # stale duplicates, and its watermark must reset so it can
+            # take over cleanly if the winner ever disappears.
+            loser_key = str(path)
+            stats.removed += _drop_source_file_docs(
+                con, SOURCE_COPILOT, loser_key
+            )
+            con.execute(
+                "DELETE FROM index_meta WHERE key = ?",
+                (f"{SOURCE_COPILOT}:wm:{loser_key}",),
+            )
             continue
         lines = _read_lines(path)
         if lines is None:
@@ -651,6 +663,12 @@ def _index_copilot_dirs(
             # File shrank below its watermark — lines were lost upstream.
             stats.removed += _drop_source_file_docs(con, SOURCE_COPILOT, file_key)
             wm = 0
+        # The watermark is the position just past the last *well-formed*
+        # record — never past a malformed tail. A truncated trailing line
+        # stays uncovered so the writer completing it is picked up next
+        # run; malformed mid-file lines are permanently behind the next
+        # good record and never re-parsed.
+        last_complete = wm
         for i in range(wm, len(lines)):
             line = lines[i].strip()
             if not line:
@@ -658,10 +676,9 @@ def _index_copilot_dirs(
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                # Malformed mid-file lines (and a truncated tail) are
-                # counted and skipped — they never fail the surface.
-                stats.skipped_records += 1
+                stats.skipped_records += 1  # malformed — may complete later
                 continue
+            last_complete = i + 1  # well-formed record — safe to cover
             if not isinstance(event, dict):
                 stats.skipped_records += 1
                 continue
@@ -683,7 +700,7 @@ def _index_copilot_dirs(
                 ref=f"{SOURCE_COPILOT}:{file_key}:{i}",
             )
             stats.copilot_messages += 1
-        _meta_set(con, wm_key, len(lines))
+        _meta_set(con, wm_key, last_complete)
         _meta_set(con, f"{SOURCE_COPILOT}:file:{file_key}", file_key)
 
 
@@ -736,8 +753,32 @@ _CODEX_PAYLOAD_SKIP = frozenset(
 
 def _codex_record_text(payload: dict[str, Any]) -> str:
     """Text of one ``response_item``/``event_msg`` payload — known
-    content keys first, recursive walk minus structural keys last."""
+    content keys first, recursive walk minus structural keys last.
+
+    Exec-style records carry *both* ``command`` and ``output``; they are
+    concatenated (command first) so the invoked command stays searchable
+    alongside its result — not swallowed by the first-key-wins rule."""
+    parts: list[str] = []
+    for key in ("command", "output"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value)
+        elif isinstance(value, list) and all(
+            isinstance(v, str) for v in value
+        ):
+            # argv-style command lists — one searchable line.
+            text = " ".join(value).strip()
+            if text:
+                parts.append(text)
+        elif isinstance(value, (dict, list)):
+            text = extract_strings(value, skip_keys=_CODEX_PAYLOAD_SKIP)
+            if text:
+                parts.append(text)
+    if parts:
+        return "\n".join(parts)
     for key in _CODEX_CONTENT_KEYS:
+        if key in ("command", "output"):
+            continue  # already handled above
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value
@@ -780,9 +821,10 @@ def _index_codex_state_db(
     """Index the text fields of ``threads`` rows in ``state_<N>.sqlite``.
 
     ``threads`` has no dependable auto-increment key (``id`` is a TEXT
-    primary key), so incrementality is ref-dedup — the same approach as
-    ``tool_call_state``: ``codex-cli:<file>:<thread-id>/<field>`` is
-    indexed once and updates to a row are not re-indexed."""
+    primary key) and rows are *mutable*: incrementality is ref-keyed
+    upsert — ``codex-cli:<file>:<thread-id>/<field>`` re-inserts when the
+    stored text changed — plus stale-ref cleanup, so a thread deleted
+    upstream (or a field emptied) loses its docs next run."""
     file_key = str(path)
     try:
         db = _connect_readonly(path)
@@ -803,13 +845,15 @@ def _index_codex_state_db(
     finally:
         db.close()
     prefix = f"{SOURCE_CODEX}:{file_key}:"
-    indexed_refs = {
-        r["ref"]
+    indexed = {
+        r["ref"]: r["text"]
         for r in con.execute(
-            "SELECT ref FROM docs WHERE source = ? AND substr(ref, 1, ?) = ?",
+            "SELECT ref, text FROM docs WHERE source = ?"
+            " AND substr(ref, 1, ?) = ?",
             (SOURCE_CODEX, len(prefix), prefix),
         )
     }
+    seen_refs: set[str] = set()
     for row in rows:
         keys = set(row.keys())
         tid = row["id"] if "id" in keys else None
@@ -830,8 +874,14 @@ def _index_codex_state_db(
             if not isinstance(value, str) or not value.strip():
                 continue
             ref = f"{prefix}{tid}/{field_name}"
-            if ref in indexed_refs:
-                continue
+            seen_refs.add(ref)
+            if indexed.get(ref) == value:
+                continue  # unchanged — nothing to do
+            if ref in indexed:
+                stats.removed += con.execute(
+                    "DELETE FROM docs WHERE source = ? AND ref = ?",
+                    (SOURCE_CODEX, ref),
+                ).rowcount
             _insert_doc(
                 con,
                 text=value,
@@ -846,7 +896,14 @@ def _index_codex_state_db(
                 ref=ref,
             )
             stats.codex_messages += 1
-            indexed_refs.add(ref)
+    # Refs indexed under this file but absent from the current table —
+    # a deleted thread or an emptied field. Same presence rule as the
+    # file markers, applied at row granularity.
+    for stale in sorted(set(indexed) - seen_refs):
+        stats.removed += con.execute(
+            "DELETE FROM docs WHERE source = ? AND ref = ?",
+            (SOURCE_CODEX, stale),
+        ).rowcount
     _meta_set(con, f"{SOURCE_CODEX}:file:{file_key}", file_key)
 
 
@@ -900,6 +957,9 @@ def _index_codex_rollout(
     if wm and len(lines) < wm:
         stats.removed += _drop_source_file_docs(con, SOURCE_CODEX, file_key)
         wm = 0
+    # Same truncated-tail rule as copilot: the watermark covers only
+    # well-formed records, so a completed tail line is re-read next run.
+    last_complete = wm
     if not forked:
         for i in range(wm, len(lines)):
             line = lines[i].strip()
@@ -910,6 +970,7 @@ def _index_codex_rollout(
             except json.JSONDecodeError:
                 stats.skipped_records += 1
                 continue
+            last_complete = i + 1
             if not isinstance(record, dict):
                 stats.skipped_records += 1
                 continue
@@ -934,7 +995,12 @@ def _index_codex_rollout(
                 ref=f"{SOURCE_CODEX}:{file_key}:{i}",
             )
             stats.codex_messages += 1
-    _meta_set(con, wm_key, len(lines))
+    else:
+        # Forks are never indexed — and if the fork meta arrived after
+        # docs were already written, they are dropped here.
+        stats.removed += _drop_source_file_docs(con, SOURCE_CODEX, file_key)
+        last_complete = len(lines)
+    _meta_set(con, wm_key, last_complete)
     _meta_set(con, f"{SOURCE_CODEX}:file:{file_key}", file_key)
 
 
@@ -1000,10 +1066,31 @@ _VSCODE_KNOWN_KEYS = frozenset(
 # Mutation-log path components that must never be followed (parity with
 # the TS parser's prototype-pollution guard).
 _VSCODE_UNSAFE_KEYS = frozenset({"__proto__", "prototype", "constructor"})
-# Structural request/response keys whose string values are metadata.
-_VSCODE_SKIP = frozenset(
-    {"kind", "$mid", "id", "command", "extensionId", "extensionVersion", "publisher"}
-)
+# Documented readable-content keys of a chat request (§6.5 shape:
+# ``requests[].message.{text,parts[]}`` and the ``requests[].response[]``
+# part objects' ``value``/``content``). Only these are indexed — request
+# ids, agent/extension metadata, model info and timings inside a request
+# are metadata, not searchable content.
+_VSCODE_CONTENT_KEYS = ("text", "value", "content", "parts")
+
+
+def _vscode_field_text(node: Any) -> str:
+    """Text under a vscode-chat content field: strings pass through and
+    containers are walked through the content keys only, so metadata
+    (agent ids, ranges, extension info) never reaches the index."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "\n".join(
+            t for t in (_vscode_field_text(x) for x in node) if t
+        )
+    if isinstance(node, dict):
+        return "\n".join(
+            t
+            for key in _VSCODE_CONTENT_KEYS
+            if (t := _vscode_field_text(node.get(key)))
+        )
+    return ""
 
 
 def _vscode_chat_files(
@@ -1199,21 +1286,19 @@ def _index_vscode_chat_dirs(
 
     for path, session_id, workspace in files:
         file_key = str(path)
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
         wm_key = f"{SOURCE_VSCODE_CHAT}:wm:{file_key}"
-        # vscode-chat has no intrinsic row position: .json snapshots are
-        # rewritten whole and .jsonl logs append mutations that rewrite
-        # earlier state — the watermark is the file size in bytes and any
-        # change re-indexes the whole file.
-        if _meta_get(con, wm_key) == str(size):
-            _meta_set(con, f"{SOURCE_VSCODE_CHAT}:file:{file_key}", file_key)
-            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            continue
+        # vscode-chat has no intrinsic row position: .json snapshots are
+        # rewritten whole and .jsonl mutation logs rewrite earlier state.
+        # The watermark is therefore a *content* signal — sha256 of the
+        # file — not a size: an equal-size edit must re-index (the other
+        # surfaces watermark a position/id, which a replace-log lacks).
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if _meta_get(con, wm_key) == digest:
+            _meta_set(con, f"{SOURCE_VSCODE_CHAT}:file:{file_key}", file_key)
             continue
         doc, bad_lines = _vscode_rebuild(text)
         stats.skipped_records += bad_lines
@@ -1221,7 +1306,7 @@ def _index_vscode_chat_dirs(
         if not (_VSCODE_KNOWN_KEYS & set(doc)):
             # Present but not a recognizable session document — the
             # watermark still moves so it is not reparsed every run.
-            _meta_set(con, wm_key, size)
+            _meta_set(con, wm_key, digest)
             _meta_set(con, f"{SOURCE_VSCODE_CHAT}:file:{file_key}", file_key)
             continue
         created = _epoch_ms(doc.get("creationDate"))
@@ -1231,9 +1316,7 @@ def _index_vscode_chat_dirs(
                 if not isinstance(request, dict):
                     continue
                 ts = _epoch_ms(request.get("timestamp")) or created or 0
-                message = extract_strings(
-                    request.get("message"), skip_keys=_VSCODE_SKIP
-                )
+                message = _vscode_field_text(request.get("message"))
                 if message.strip():
                     _insert_doc(
                         con,
@@ -1247,9 +1330,7 @@ def _index_vscode_chat_dirs(
                         ref=f"{SOURCE_VSCODE_CHAT}:{file_key}:{i}:req",
                     )
                     stats.vscode_chat_messages += 1
-                response = extract_strings(
-                    request.get("response"), skip_keys=_VSCODE_SKIP
-                )
+                response = _vscode_field_text(request.get("response"))
                 if response.strip():
                     _insert_doc(
                         con,
@@ -1263,7 +1344,7 @@ def _index_vscode_chat_dirs(
                         ref=f"{SOURCE_VSCODE_CHAT}:{file_key}:{i}:resp",
                     )
                     stats.vscode_chat_messages += 1
-        _meta_set(con, wm_key, size)
+        _meta_set(con, wm_key, digest)
         _meta_set(con, f"{SOURCE_VSCODE_CHAT}:file:{file_key}", file_key)
 
 

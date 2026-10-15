@@ -18,7 +18,7 @@ uv tool install "devin-search"
 
 ## Devin paths
 
-Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
+The CLI session DB is auto-detected at `%APPDATA%\devin\cli\sessions.db`; ACP logs are searched under `%APPDATA%\Devin\User\acp-messages`.
 Use `--sessions-db`/`--acp-dir` for non-default locations.
 
 ## Environment notes

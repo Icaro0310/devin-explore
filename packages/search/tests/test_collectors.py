@@ -196,6 +196,80 @@ def test_copilot_truncated_tail_is_skipped(tmp_path):
     assert stats.skipped_records == 1
 
 
+def test_copilot_completed_tail_is_indexed_next_run(tmp_path):
+    """Regression: a truncated tail must NOT be covered by the watermark.
+
+    The writer completing the last line keeps the line count identical,
+    so a ``len(lines)`` watermark would miss it forever — the watermark
+    only covers well-formed records.
+    """
+    root = tmp_path / "copilot"
+    events = add_copilot_session(
+        root,
+        "tail",
+        [
+            copilot_event("user.message", {"content": "first complete"}),
+            '{"type": "user.message", "data": {"con',  # truncated tail
+        ],
+        newline_at_end=False,
+    )
+    idx = tmp_path / "search.db"
+    first = build_index(idx, copilot_dirs=[root])
+    assert first.copilot_messages == 1
+    assert first.skipped_records == 1
+
+    events.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    copilot_event("user.message", {"content": "first complete"})
+                ),
+                json.dumps(
+                    copilot_event("user.message", {"content": "tail now whole"})
+                ),
+            ]
+        )
+        + "\n"
+    )
+    second = build_index(idx, copilot_dirs=[root])
+    assert second.copilot_messages == 1
+    texts = [r[6] for r in _docs(idx, "copilot-cli")]
+    assert texts == ["first complete", "tail now whole"]
+
+
+def test_copilot_late_winner_root_drops_lower_copy(tmp_path):
+    """Regression: a higher-priority root gaining an already-indexed
+    session must evict the losing copy's docs — and if the winner later
+    disappears the loser re-indexes from scratch (its watermark was
+    reset while it was the duplicate)."""
+    root_hi, root_lo = tmp_path / "hi", tmp_path / "lo"
+    ws = {"git_root": "/fixture/workspace/shared"}
+    add_copilot_session(
+        root_lo,
+        "dup",
+        [copilot_event("user.message", {"content": "low copy"})],
+        workspace=ws,
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root_hi, root_lo])
+    assert [r[6] for r in _docs(idx, "copilot-cli")] == ["low copy"]
+
+    add_copilot_session(
+        root_hi,
+        "dup",
+        [copilot_event("user.message", {"content": "high copy"})],
+        workspace=ws,
+    )
+    stats = build_index(idx, copilot_dirs=[root_hi, root_lo])
+    assert stats.copilot_messages == 1
+    assert stats.removed == 1
+    assert [r[6] for r in _docs(idx, "copilot-cli")] == ["high copy"]
+
+    (root_hi / "session-state" / "dup" / "events.jsonl").unlink()
+    build_index(idx, copilot_dirs=[root_hi, root_lo])
+    assert [r[6] for r in _docs(idx, "copilot-cli")] == ["low copy"]
+
+
 def test_copilot_user_named_title_is_kept(tmp_path):
     root = tmp_path / "copilot"
     add_copilot_session(
@@ -434,6 +508,96 @@ def test_codex_incremental_and_removal(tmp_path):
     assert index_doc_count(idx) == 0
 
 
+def test_codex_thread_edit_and_delete_refresh(tmp_path):
+    """Regression: threads rows are mutable — ref-dedup alone would pin
+    stale text forever; a deleted thread must lose its docs."""
+    root = add_codex_home(
+        tmp_path / "codex",
+        state_n=2,
+        threads=[
+            {"id": "t1", "title": "title alpha"},
+            {"id": "t2", "title": "title static"},
+        ],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, codex_dir=root)
+    assert index_doc_count(idx) == 2
+    assert build_index(idx, codex_dir=root).indexed == 0  # unchanged
+
+    add_codex_home(  # rewrite: t1's title edited, t2 deleted upstream
+        root,
+        state_n=2,
+        threads=[{"id": "t1", "title": "title bravo"}],
+    )
+    third = build_index(idx, codex_dir=root)
+    assert third.codex_messages == 1
+    assert third.removed == 2  # stale t1 doc replaced + t2 doc dropped
+    assert [r[6] for r in _docs(idx, "codex-cli")] == ["title bravo"]
+
+
+def test_codex_completed_rollout_tail_is_indexed(tmp_path):
+    """Regression: rollout watermarks must not cover a truncated tail —
+    completing the line leaves the line count unchanged."""
+    rel = "sessions/t/rollout-9-tail.jsonl"
+    good = codex_record(
+        "event_msg", {"type": "user_message", "message": "rollout head"}
+    )
+    root = add_codex_home(
+        tmp_path / "codex",
+        rollouts=[(rel, [good, '{"type": "event_msg", "pay'])],
+    )
+    idx = tmp_path / "search.db"
+    first = build_index(idx, codex_dir=root)
+    assert first.codex_messages == 1
+    assert first.skipped_records == 1
+
+    (root / rel).write_text(
+        json.dumps(good)
+        + "\n"
+        + json.dumps(
+            codex_record(
+                "event_msg",
+                {"type": "agent_message", "message": "tail landed"},
+            )
+        )
+        + "\n"
+    )
+    second = build_index(idx, codex_dir=root)
+    assert second.codex_messages == 1
+    texts = [r[6] for r in _docs(idx, "codex-cli")]
+    assert texts == ["rollout head", "tail landed"]
+
+
+def test_codex_exec_record_indexes_command_and_output(tmp_path):
+    """Regression: exec payloads carry command AND output — first-key
+    wins would silently drop whichever comes second."""
+    root = add_codex_home(
+        tmp_path / "codex",
+        rollouts=[
+            (
+                "sessions/e/rollout-8-exec.jsonl",
+                [
+                    codex_record(
+                        "response_item",
+                        {
+                            "type": "local_shell_call",
+                            "command": ["kubectl", "get", "zebracmd"],
+                            "output": "zebraout rows",
+                        },
+                    ),
+                ],
+            )
+        ],
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, codex_dir=root)
+    assert stats.codex_messages == 1
+    (text,) = [r[6] for r in _docs(idx, "codex-cli")]
+    assert text.index("zebracmd") < text.index("zebraout")  # command first
+    assert search(idx, "zebracmd")
+    assert search(idx, "zebraout")
+
+
 def test_codex_malformed_midfile_line_skipped(tmp_path):
     root = add_codex_home(
         tmp_path / "codex",
@@ -531,6 +695,79 @@ def test_vscode_globalstorage_has_empty_project(tmp_path):
     row = _docs(idx, "vscode-chat")[0]
     assert row[0] == "g-1"
     assert row[3] == ""  # no workspace identity — legitimately hashless
+
+
+def test_vscode_same_size_edit_reindexed(tmp_path):
+    """Regression: the file-size watermark misses equal-size rewrites —
+    the content hash catches them."""
+    user_dir = tmp_path / "Code" / "User"
+    path = add_vscode_chat(
+        user_dir,
+        "vs-eq",
+        doc={
+            "version": 3,
+            "requests": [vscode_request("alpha ask", "alpha resp")],
+        },
+        ws_dir="h",
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, vscode_chat_dirs=[user_dir])
+
+    # Identical length ("alpha"→"bravo") — size alone cannot see this.
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "requests": [vscode_request("bravo ask", "bravo resp")],
+            }
+        )
+    )
+    stats = build_index(idx, vscode_chat_dirs=[user_dir])
+    assert stats.vscode_chat_messages == 2
+    texts = [r[6] for r in _docs(idx, "vscode-chat")]
+    assert "bravo ask" in texts and all("alpha ask" not in t for t in texts)
+
+
+def test_vscode_request_metadata_is_not_indexed(tmp_path):
+    """Regression: request objects carry agent/extension metadata —
+    only the documented content fields (text/value/content/parts) are
+    searchable."""
+    request = {
+        "requestId": "reqid-noise",
+        "message": {
+            "text": "real ask text",
+            "parts": [
+                {
+                    "range": {"start": 0, "endExclusive": 5},
+                    "agent": {
+                        "extensionId": {"value": "acme.agentext"},
+                        "description": "agentmetanoise",
+                    },
+                }
+            ],
+        },
+        "response": [
+            {"kind": "mcpServersStarting", "didStartServerIds": ["srvnoise"]},
+            {"kind": "markdownContent", "content": {"value": "real reply"}},
+        ],
+        "timestamp": BASE_MS,
+    }
+    user_dir = tmp_path / "Code" / "User"
+    add_vscode_chat(
+        user_dir,
+        "vs-meta",
+        doc={"version": 3, "requests": [request]},
+        ws_dir="h",
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, vscode_chat_dirs=[user_dir])
+    assert stats.vscode_chat_messages == 2
+    texts = "\n".join(r[6] for r in _docs(idx, "vscode-chat"))
+    assert "real ask text" in texts and "real reply" in texts
+    assert not search(idx, "agentmetanoise")
+    assert not search(idx, "agentext")
+    assert not search(idx, "srvnoise")
+    assert not search(idx, "reqid")
 
 
 def test_vscode_incremental_unchanged_and_rewrite(tmp_path):

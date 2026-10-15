@@ -90,16 +90,18 @@ are not unique.
 | `wm:devin-cli:prompt_history` | max `id` indexed |
 | `devin-chat:wm:<file>` | max `position` indexed per acp file |
 | `devin-chat:file:<file>` | presence marker — used to detect deleted files |
-| `copilot-cli:wm:<file>` | count of JSONL lines indexed per events file |
+| `copilot-cli:wm:<file>` | index just past the last *well-formed* JSONL record — a truncated tail stays uncovered so a completed line is picked up next run |
 | `copilot-cli:file:<file>` | presence marker |
-| `codex-cli:wm:<file>` | count of JSONL lines indexed per rollout file |
+| `codex-cli:wm:<file>` | index just past the last well-formed JSONL record per rollout file |
 | `codex-cli:file:<file>` | presence marker (rollouts *and* the state db) |
-| `vscode-chat:wm:<file>` | file size in bytes — snapshots rewrite whole and mutation logs rewrite earlier state, so any change re-indexes the file |
+| `vscode-chat:wm:<file>` | sha256 of the file content — snapshots rewrite whole and mutation logs rewrite earlier state, so any change (including equal-size edits) re-indexes the file |
 | `vscode-chat:file:<file>` | presence marker |
 
 `tool_call_state` has no auto-increment id, so incrementality there is
-ref-dedup (`ref NOT IN docs`) — codex `threads` rows work the same way
-(`id` is a TEXT primary key, not a position). If a source's max id is
+ref-dedup (`ref NOT IN docs`). Codex `threads` rows are mutable, so they
+use ref-keyed *upsert* instead: a changed field re-inserts its doc, and
+refs produced under the state file but absent from the current table
+(deleted threads, emptied fields) are dropped. If a source's max id is
 ever *below* its watermark the upstream store was pruned/rebuilt: that
 source's docs are dropped and re-indexed — watermarks cannot see
 mid-table deletions. For the JSONL surfaces the same shrink check runs

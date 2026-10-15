@@ -97,7 +97,7 @@ devin-search query "kubectl" --history-dir ~/notes/devin-history
 # (--no-acp, --no-copilot, --no-codex and --no-vscode-chat each disable
 # one source; --copilot-dir/--codex-dir/--vscode-chat-dir pin it to one
 # root instead of auto-detecting)
-devin-search index --no-acp
+devin-search index --no-acp --no-copilot --no-codex --no-vscode-chat
 
 # zero-hit stats from the local query log (evidence for/against semantic
 # search — SE-1's trigger; log is opt-out via query --no-log)
@@ -126,12 +126,11 @@ data it covers.
 ## Platform support
 
 Tested on **Windows and Linux** (`windows-latest` + `ubuntu-latest` in CI).
-The CLI session DB is auto-detected from `%APPDATA%/devin/cli/sessions.db`
-on Windows and `$XDG_DATA_HOME/devin/cli/sessions.db` on Linux (default
-`~/.local/share/devin/cli/sessions.db`). ACP logs are searched under
-`$XDG_CONFIG_HOME/Devin/User/acp-messages` (default
-`~/.config/Devin/User/acp-messages`). A legacy `~/.config/devin` layout is
-also checked. Use `--sessions-db` or `--acp-dir` to override.
+The Devin stores are auto-detected from the OS-specific locations listed
+in the platform guides — [Linux](README.linux.md) ·
+[Personal Windows](README.windows.md) ·
+[Corporate Windows](README.corporate-windows.md) — and
+`--sessions-db`/`--acp-dir` override them.
 
 The non-Devin surfaces auto-detect per the session-surface spec
 (`devin-internals-spec` → `docs/SESSION-SURFACES.md` §6.3–§6.5):
