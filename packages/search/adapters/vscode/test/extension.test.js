@@ -437,3 +437,49 @@ test("a flag the query never sends (extraArgs --version) blames the setting", as
     __internals__.resetProbe();
   }
 });
+
+test("extraArgs error note reports too-old and too-new verdicts accurately", async () => {
+  ext.activate({ subscriptions: [] });
+  const real = __internals__.deps.runCli;
+  try {
+    for (const [version, want] of [
+      ["0.0.1", /also outside.*upgrade the CLI/s],
+      ["0.2.0", /also outside.*downgrade the CLI or update the extension/s],
+    ]) {
+      __internals__.resetProbe();
+      testExtras = ["--bogus"];
+      errorMessages.length = 0;
+      __internals__.deps.runCli = (args) =>
+        args[0] === "--version"
+          ? Promise.resolve({ code: 0, stdout: `devin-search ${version}\n`, stderr: "" })
+          : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --bogus" });
+      await __internals__.search();
+      assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+      assert.match(errorMessages.at(-1), want, `verdict note for ${version}`);
+    }
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("extraArgs error note covers an unprobed CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--bogus"];
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.reject(new Error("spawn failed"))
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --bogus" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /could not be probed/);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
