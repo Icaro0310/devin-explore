@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `devin-search-mcp` keeps the traceback on `.run()` `ImportError`s; the
+  missing-extra hint only covers failures while building the app.
+
+
 ### Added
 
 - Read-only adapters: `devin_search.mcp_server` MCP server
