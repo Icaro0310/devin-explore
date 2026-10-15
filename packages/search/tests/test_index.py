@@ -197,19 +197,24 @@ def test_query_rejects_stale_schema_index(db_path, tmp_path):
 def test_devin_cli_epoch_seconds_normalize_to_ms(db_path, tmp_path):
     """Linux v17 stores write created_at in epoch seconds (spec §6.1
     dual-magnitude) — docs.ts must land as epoch ms, not ~1970."""
+    secs = 1_786_000_000  # seconds, not ms — real Linux layout
     add_session(
         db_path,
         "sec-sess",
-        created_ms=1_786_000_000,  # seconds, not ms — real Linux layout
+        created_ms=secs,
         messages=[msg("user", "xyzzy seconds probe")],
+        tool_calls=[({"command": "ls"}, {"output": "ok"})],
     )
     idx = tmp_path / "search.db"
     build_index(idx, sessions_db=db_path)
     con = sqlite3.connect(idx)
     try:
-        ts = con.execute(
-            "SELECT ts FROM docs WHERE source = 'devin-cli' LIMIT 1"
-        ).fetchone()[0]
+        rows = con.execute(
+            "SELECT ts FROM docs WHERE session_id = 'sec-sess'"
+        ).fetchall()
     finally:
         con.close()
-    assert ts >= 1_700_000_000_000  # ms magnitude — raw seconds would be 1.78e9
+    assert len(rows) == 2  # 1 message node + 1 tool-call row
+    # message derives ts from created_at+10_000 (still <1e12 → seconds);
+    # the tool-call row derives from the session's created_at.
+    assert all(ts >= 1_700_000_000_000 for (ts,) in rows), rows
