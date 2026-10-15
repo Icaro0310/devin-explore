@@ -238,11 +238,23 @@ async function search() {
             `fix the setting (${cliNote})`);
         }
         const found = probed ? `, found ${probed}` : "";
-        const hint = probed
-          ? "upgrade: uv tool upgrade devin-search"
-          : "upgrade: uv tool upgrade devin-search — or check devinSearch.extraArgs";
-        throw new Error(`devin-search CLI is too old for this extension ` +
-          `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ${hint}`);
+        // The probe already ran: a rejected built-in flag with a too-new
+        // CLI means downgrade (not upgrade), and an unprobed CLI is
+        // ambiguous — it could still be a bad extraArgs entry.
+        if (compat === "too-new") {
+          throw new Error(
+            `devin-search CLI is newer than this extension supports ` +
+            `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ` +
+            `downgrade the CLI or update the extension`);
+        }
+        if (compat === "too-old") {
+          throw new Error(`devin-search CLI is too old for this extension ` +
+            `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ` +
+            `upgrade: uv tool upgrade devin-search`);
+        }
+        throw new Error(`devin-search CLI version could not be probed ` +
+          `(requires ${CLI_RANGE}); the CLI rejected an argument — ` +
+          `upgrade: uv tool upgrade devin-search — or check devinSearch.extraArgs`);
       }
       throw new Error(`devin-search query returned no JSON (exit ${code}) — ` +
         "run `devin-search index` first? See output channel.");

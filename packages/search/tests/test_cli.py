@@ -1,6 +1,7 @@
 import json
 
 from conftest import add_acp_db, add_session, msg
+import devin_search
 from devin_search.cli import main
 
 
@@ -47,6 +48,7 @@ def test_query_json_shape(db_path, tmp_path, capsys):
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["term"] == "xyzzy"
+    assert data["version"] == devin_search.__version__
     assert data["hits"][0]["session_id"] == "s1"
     assert data["hits"][0]["role"] == "user"
     assert data["hits"][0]["ref"].startswith("node:")
@@ -110,6 +112,7 @@ def test_query_log_and_misses(db_path, tmp_path, capsys):
     rc = main(["misses", "--index", str(idx), "--json"])
     assert rc == 0
     s = json.loads(capsys.readouterr().out)
+    assert s["version"] == devin_search.__version__
     assert s["total_queries"] == 3 and s["zero_hit"] == 3
     assert s["zero_hit_rate"] == 1.0
     assert dict(s["top_missed_terms"]) == {"absent-one": 2, "absent-two": 1}
