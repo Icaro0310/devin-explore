@@ -44,8 +44,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
 );
 """
 
-WM_NODES = "wm:sessions:message_nodes"
-WM_PROMPTS = "wm:sessions:prompt_history"
+WM_NODES = "wm:devin-cli:message_nodes"
+WM_PROMPTS = "wm:devin-cli:prompt_history"
 SOURCE_DEVIN_CLI = "devin-cli"
 SOURCE_DEVIN_CHAT = "devin-chat"
 

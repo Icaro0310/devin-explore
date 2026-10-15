@@ -55,23 +55,27 @@ CREATE VIRTUAL TABLE docs USING fts5(
   session_id UNINDEXED,  role UNINDEXED,       -- filters
   ts UNINDEXED,                                -- epoch ms
   project UNINDEXED,     session_title UNINDEXED,
-  source UNINDEXED,      ref UNINDEXED         -- 'sessions'|'acp' + rowid
+  source UNINDEXED,      ref UNINDEXED         -- 'devin-cli'|'devin-chat' + rowid
 );
 ```
 
+`source` uses the canonical session-surface vocabulary
+(`devin-internals-spec` → `docs/SESSION-SURFACES.md`): `devin-cli` for
+`cli/sessions.db` rows, `devin-chat` for `User/acp-messages/*.db` rows.
+
 `ref` links each hit back to its source row: `node:<row_id>`,
 `prompt:<id>`, `tool:<session_id>/<tool_call_id>`,
-`acp:<file>:<position>`.
+`devin-chat:<file>:<position>`.
 
 ### Watermarks (`index_meta`)
 
 | key | value |
 |---|---|
-| `schema_version` | index format version (currently `1`) |
-| `wm:sessions:message_nodes` | max `row_id` indexed |
-| `wm:sessions:prompt_history` | max `id` indexed |
-| `acp:wm:<file>` | max `position` indexed per acp file |
-| `acp:file:<file>` | presence marker — used to detect deleted files |
+| `schema_version` | index format version (currently `2`) |
+| `wm:devin-cli:message_nodes` | max `row_id` indexed |
+| `wm:devin-cli:prompt_history` | max `id` indexed |
+| `devin-chat:wm:<file>` | max `position` indexed per acp file |
+| `devin-chat:file:<file>` | presence marker — used to detect deleted files |
 
 `tool_call_state` has no auto-increment id, so incrementality there is
 ref-dedup (`ref NOT IN docs`). If a source's max id is ever *below* its
