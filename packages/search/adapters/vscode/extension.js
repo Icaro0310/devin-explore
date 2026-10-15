@@ -38,9 +38,28 @@ function cliCompatStatus(version) {
   return "compatible";
 }
 
-// CLIs ≥0.1.3 self-report "version" inside the JSON payload (same probe
+// CLIs ≥0.1.2 self-report "version" inside the JSON payload (same probe
 // doctor uses); older ones omit it — an absent field is "unknown", not
 // drift. Shape validation is the loud guard; this is the precise one.
+
+// Once-per-session `devin-search --version` probe (best-effort). An
+// argparse rejection ("unrecognized arguments") is ambiguous — it can
+// mean a too-old CLI missing a built-in flag OR a typo in the user's
+// devinSearch.extraArgs. The probe plus the flag/setting comparison
+// below decides which; the cached result is reused for the session.
+let probedCliVersion;
+async function probeVersion() {
+  if (probedCliVersion !== undefined) return probedCliVersion;
+  probedCliVersion = null;
+  try {
+    const { stdout } = await deps.runCli(["--version"], { includeExtraArgs: false });
+    const m = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]*)?)/.exec(stdout || "");
+    if (m) probedCliVersion = m[1];
+  } catch {
+    /* probe is best-effort — classification falls back to the flag check */
+  }
+  return probedCliVersion;
+}
 
 function compatSuffix(compat, version) {
   return compat === "too-old" || compat === "too-new"
@@ -71,7 +90,9 @@ function workspaceDirs() {
 // Injectable for tests. Non-zero exits are results, not errors:
 // query exits 1 on zero hits, 2 on usage/store problems.
 const deps = {
-  runCli: (args) => {
+  // opts.includeExtraArgs:false skips devinSearch.extraArgs — used by the
+  // --version probe so a bad setting cannot break the probe itself.
+  runCli: (args, opts = {}) => {
     const { executable, extraArgs } = config();
     const spec = resolveSafeExecutable(executable, {
       workspaceDirs: workspaceDirs(),
@@ -84,7 +105,8 @@ const deps = {
           "devin-search not found on PATH. Install it " +
             "(uv tool install devin-search) or set devinSearch.executable."));
       }
-      cp.execFile(spec.file, spec.argv.concat(args, extraArgs),
+      cp.execFile(spec.file,
+        spec.argv.concat(args, ...(opts.includeExtraArgs === false ? [] : extraArgs)),
         { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && err.killed) {
@@ -175,12 +197,29 @@ async function search() {
     } catch {
       output.appendLine(stdout || "");
       output.appendLine(stderr || "");
-      // argparse rejects flags it does not know — a too-old CLI, not a
-      // broken index. Name the floor instead of the generic hint.
+      // argparse rejects flags it does not know — but that is ambiguous:
+      // a too-old CLI missing a built-in flag, or a bad entry in
+      // devinSearch.extraArgs. Probe --version once per session and
+      // compare the rejected flags against the setting before blaming
+      // the CLI.
       if (/unrecognized arguments|invalid choice/.test(stderr || "")) {
+        const rejected = (stderr.match(/unrecognized arguments:\s*(.+)/) || [])[1]
+          ?.trim().split(/\s+/).filter((t) => t.startsWith("-")) || [];
+        const userFlags = new Set(config().extraArgs.filter((t) => t.startsWith("-")));
+        const onlySettings = rejected.length > 0 && rejected.every((t) => userFlags.has(t));
+        const probed = await probeVersion();
+        const compat = probed ? cliCompatStatus(probed) : "unknown";
+        if (onlySettings || compat === "compatible") {
+          throw new Error(
+            `devinSearch.extraArgs contains unsupported option(s): ${rejected.join(", ")} — ` +
+            `fix the setting (the installed CLI${probed ? ` ${probed}` : ""} is inside ${CLI_RANGE})`);
+        }
+        const found = probed ? `, found ${probed}` : "";
+        const hint = probed
+          ? "upgrade: uv tool upgrade devin-search"
+          : "upgrade: uv tool upgrade devin-search — or check devinSearch.extraArgs";
         throw new Error(`devin-search CLI is too old for this extension ` +
-          `(requires ${CLI_RANGE}); the installed CLI rejected an argument — ` +
-          `upgrade: uv tool upgrade devin-search`);
+          `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ${hint}`);
       }
       throw new Error(`devin-search query returned no JSON (exit ${code}) — ` +
         "run `devin-search index` first? See output channel.");
@@ -269,4 +308,5 @@ module.exports = { activate, deactivate };
 module.exports.__internals__ = {
   deps, clampLimit, validateQueryPayload, fmtHit, search, showMisses,
   COMPATIBLE_CLI, CLI_RANGE, parseVersion, cliCompatStatus, compatSuffix,
+  probeVersion, resetProbe: () => { probedCliVersion = undefined; },
 };

@@ -294,3 +294,69 @@ test("package.json devin-search-cli pin covers the package version", () => {
     `package ${v[0]} outside pinned range ${range}`,
   );
 });
+
+test("cliCompatStatus classifies versions against the pin", async () => {
+  const { cliCompatStatus } = __internals__;
+  assert.strictEqual(cliCompatStatus("0.1.2"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.0.9"), "too-old");
+  assert.strictEqual(cliCompatStatus("0.2.0"), "too-new");
+  assert.strictEqual(cliCompatStatus("garbage"), "unknown");
+  assert.strictEqual(cliCompatStatus(undefined), "unknown");
+});
+
+test("unrecognized args on a compatible CLI blames devinSearch.extraArgs, not the CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.1.2\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "usage: x\nerror: unrecognized arguments: --indx" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+  } finally {
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("unrecognized args on a too-old CLI names the floor and the upgrade", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(
+      errorMessages.at(-1),
+      /too old.*found 0\.0\.1.*uv tool upgrade devin-search/s,
+    );
+  } finally {
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("a failed probe keeps the ambiguous hint with both causes", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.reject(new Error("spawn failed"))
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /uv tool upgrade devin-search.*extraArgs/);
+  } finally {
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
