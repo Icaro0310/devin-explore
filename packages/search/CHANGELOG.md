@@ -31,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted threads; a higher-priority copilot root claiming an
   already-indexed session evicts the stale copy; codex exec payloads
   index `command` *and* `output`; vscode-chat extraction is restricted
-  to documented content fields so request metadata stays out.
+  to documented content fields so request metadata stays out;
+  `_vscode_field_text` walks containers iteratively, so a chat doc with
+  deeply nested `content` fields no longer RecursionErrors the whole
+  index run.
 
 
 ### Added

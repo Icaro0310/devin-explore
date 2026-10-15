@@ -1077,20 +1077,28 @@ _VSCODE_CONTENT_KEYS = ("text", "value", "content", "parts")
 def _vscode_field_text(node: Any) -> str:
     """Text under a vscode-chat content field: strings pass through and
     containers are walked through the content keys only, so metadata
-    (agent ids, ranges, extension info) never reaches the index."""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return "\n".join(
-            t for t in (_vscode_field_text(x) for x in node) if t
-        )
-    if isinstance(node, dict):
-        return "\n".join(
-            t
-            for key in _VSCODE_CONTENT_KEYS
-            if (t := _vscode_field_text(node.get(key)))
-        )
-    return ""
+    (agent ids, ranges, extension info) never reaches the index.
+
+    Iterative — a chat doc can nest ``content`` hundreds of levels deep
+    and a recursive walk would RecursionError, aborting the whole index
+    run (devin-review on #82). Joining is associative over the flat leaf
+    sequence, so traversal order matches the old recursive walk: lists
+    in order, dicts in ``_VSCODE_CONTENT_KEYS`` order, empties dropped."""
+    parts: list[str] = []
+    stack: list[Any] = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if cur:
+                parts.append(cur)
+        elif isinstance(cur, list):
+            stack.extend(reversed(cur))
+        elif isinstance(cur, dict):
+            for key in reversed(_VSCODE_CONTENT_KEYS):
+                child = cur.get(key)
+                if child is not None:
+                    stack.append(child)
+    return "\n".join(parts)
 
 
 def _vscode_chat_files(

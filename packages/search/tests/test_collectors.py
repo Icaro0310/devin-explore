@@ -832,3 +832,34 @@ def test_vscode_server_remote_dir(tmp_path):
     idx = tmp_path / "search.db"
     stats = build_index(idx, vscode_chat_dirs=[server_dir])
     assert stats.vscode_chat_messages == 2
+
+
+def test_vscode_deep_content_nesting_indexes(tmp_path):
+    """~5000 nested ``content`` fields must not RecursionError the
+    collector — one such doc previously aborted the whole index run
+    (devin-review on #82)."""
+    user_dir = tmp_path / "Code" / "User"
+    leaf = "vscode deepnest leaf"
+    message = leaf
+    for _ in range(5_000):
+        message = {"content": message}
+    doc = {
+        "version": 3,
+        "sessionId": "vs-deep",
+        "creationDate": BASE_MS,
+        "lastMessageDate": BASE_MS + 5_000,
+        "requests": [
+            {
+                "message": message,
+                "response": [{"value": "vscode deepnest answer"}],
+                "timestamp": BASE_MS,
+                "responseTimestamp": BASE_MS + 5_000,
+            }
+        ],
+    }
+    add_vscode_chat(user_dir, "vs-deep", doc=doc, ws_dir="a1b2c3hash")
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, vscode_chat_dirs=[user_dir])
+
+    assert stats.vscode_chat_messages == 2
+    assert search(idx, "deepnest")
