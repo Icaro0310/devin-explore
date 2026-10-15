@@ -6,6 +6,7 @@ const statusBarStub = { text: "", tooltip: "", command: "", show() {}, hide() {}
 const outputStub = { lines: [], appendLine(l) { this.lines.push(l); }, clear() { this.lines = []; }, show() {} };
 const errorMessages = [];
 let docsOpened = 0;
+let testExtras = [];
 
 const vscodeStub = {
   ThemeColor: class {
@@ -29,7 +30,9 @@ const vscodeStub = {
       get: (k, d) =>
         k === "executable"
           ? process.env.SEARCH_VSCODE_TEST_EXE || "devin-search"
-          : d,
+          : k === "extraArgs"
+            ? testExtras
+            : d,
     }),
     openTextDocument: () => Promise.resolve({}),
   },
@@ -307,6 +310,7 @@ test("cliCompatStatus classifies versions against the pin", async () => {
 test("unrecognized args on a compatible CLI blames devinSearch.extraArgs, not the CLI", async () => {
   ext.activate({ subscriptions: [] });
   __internals__.resetProbe();
+  testExtras = ["--indx"]; // the rejected flag is user-supplied
   errorMessages.length = 0;
   const real = __internals__.deps.runCli;
   __internals__.deps.runCli = (args) =>
@@ -315,8 +319,59 @@ test("unrecognized args on a compatible CLI blames devinSearch.extraArgs, not th
       : Promise.resolve({ code: 2, stdout: "", stderr: "usage: x\nerror: unrecognized arguments: --indx" });
   try {
     await __internals__.search();
-    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option.*inside/s);
   } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("a built-in flag duplicated in extraArgs still blames an old CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--no-log"]; // user repeats a built-in flag
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /too old.*found 0\.0\.1/s);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("changing devinSearch.executable re-probes the version", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  let probes = 0;
+  __internals__.deps.runCli = (args) => {
+    if (args[0] === "--version") {
+      probes++;
+      return Promise.resolve({ code: 0, stdout: "devin-search 0.1.2\n", stderr: "" });
+    }
+    return Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --indx" });
+  };
+  try {
+    testExtras = ["--indx"];
+    await __internals__.search();
+    assert.strictEqual(probes, 1);
+    await __internals__.search();
+    assert.strictEqual(probes, 1, "same executable reuses the probe");
+    process.env.SEARCH_VSCODE_TEST_EXE = "/opt/other/devin-search";
+    await __internals__.search();
+    assert.strictEqual(probes, 2, "new executable triggers a fresh probe");
+  } finally {
+    testExtras = [];
+    delete process.env.SEARCH_VSCODE_TEST_EXE;
     __internals__.deps.runCli = real;
     __internals__.resetProbe();
   }

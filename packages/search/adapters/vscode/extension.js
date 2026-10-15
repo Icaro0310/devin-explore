@@ -47,18 +47,31 @@ function cliCompatStatus(version) {
 // mean a too-old CLI missing a built-in flag OR a typo in the user's
 // devinSearch.extraArgs. The probe plus the flag/setting comparison
 // below decides which; the cached result is reused for the session.
-let probedCliVersion;
-async function probeVersion() {
-  if (probedCliVersion !== undefined) return probedCliVersion;
-  probedCliVersion = null;
-  try {
-    const { stdout } = await deps.runCli(["--version"], { includeExtraArgs: false });
-    const m = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]*)?)/.exec(stdout || "");
-    if (m) probedCliVersion = m[1];
-  } catch {
-    /* probe is best-effort — classification falls back to the flag check */
-  }
-  return probedCliVersion;
+// Flags the extension itself passes to the CLI. A rejection of one of
+// these is the CLI's fault even when extraArgs happens to repeat it —
+// so they are excluded from the "only settings" check below.
+const BUILT_IN_FLAGS = new Set(["--json", "--no-log", "--limit", "--version"]);
+
+// Cached as a promise so concurrent searches share one probe (a second
+// caller must not read a null placeholder while the first is still
+// awaiting). The cache is keyed by devinSearch.executable — changing the
+// configured binary re-probes instead of reusing a stale verdict.
+let versionProbe;
+let probedExecutable;
+function probeVersion() {
+  const exe = config().executable;
+  if (versionProbe && probedExecutable === exe) return versionProbe;
+  probedExecutable = exe;
+  versionProbe = (async () => {
+    try {
+      const { stdout } = await deps.runCli(["--version"], { includeExtraArgs: false });
+      const m = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]*)?)/.exec(stdout || "");
+      return m ? m[1] : null;
+    } catch {
+      return null; /* probe is best-effort — falls back to the flag check */
+    }
+  })();
+  return versionProbe;
 }
 
 function compatSuffix(compat, version) {
@@ -206,7 +219,8 @@ async function search() {
         const rejected = (stderr.match(/unrecognized arguments:\s*(.+)/) || [])[1]
           ?.trim().split(/\s+/).filter((t) => t.startsWith("-")) || [];
         const userFlags = new Set(config().extraArgs.filter((t) => t.startsWith("-")));
-        const onlySettings = rejected.length > 0 && rejected.every((t) => userFlags.has(t));
+        const onlySettings = rejected.length > 0 &&
+          rejected.every((t) => userFlags.has(t) && !BUILT_IN_FLAGS.has(t));
         const probed = await probeVersion();
         const compat = probed ? cliCompatStatus(probed) : "unknown";
         if (onlySettings || compat === "compatible") {
@@ -308,5 +322,5 @@ module.exports = { activate, deactivate };
 module.exports.__internals__ = {
   deps, clampLimit, validateQueryPayload, fmtHit, search, showMisses,
   COMPATIBLE_CLI, CLI_RANGE, parseVersion, cliCompatStatus, compatSuffix,
-  probeVersion, resetProbe: () => { probedCliVersion = undefined; },
+  probeVersion, resetProbe: () => { versionProbe = undefined; probedExecutable = undefined; },
 };
