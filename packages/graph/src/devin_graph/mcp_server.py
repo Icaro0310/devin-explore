@@ -13,6 +13,7 @@ server or the ``mcp`` package. ``build_server()`` wraps it — needs the
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from devin_graph.query import (
@@ -118,7 +119,11 @@ def build_server():
 
 
 def main() -> None:
-    build_server().run(transport="stdio")
+    try:
+        build_server().run(transport="stdio")
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

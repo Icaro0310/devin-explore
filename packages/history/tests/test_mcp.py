@@ -148,3 +148,18 @@ def test_mcp_tool_surface_is_pinned():
     tool only lands after a deliberate edit here — check it stays
     read-only before widening."""
     assert _registered_tool_names() == {"history_export","history_list"}
+
+
+def test_main_missing_mcp_extra_exits_with_hint(monkeypatch, capsys):
+    from devin_history import mcp_server
+    def _boom(*_a, **_k):
+        raise ImportError(
+            "The MCP server needs the 'mcp' extra: "
+            "pip install 'devin-history[mcp]'")
+    monkeypatch.setattr(mcp_server, "build_server", _boom)
+    with pytest.raises(SystemExit) as exc:
+        mcp_server.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "mcp" in err
+    assert "Traceback" not in err
