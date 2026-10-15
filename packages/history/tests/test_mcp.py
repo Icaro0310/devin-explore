@@ -169,7 +169,7 @@ def test_main_run_import_error_keeps_traceback(monkeypatch):
     """An ImportError raised by ``server.run()`` is a startup failure,
     not a missing extra: it must propagate with its traceback instead
     of exiting 1 with the install hint."""
-    from devin_history import mcp_server  # noqa: PLC0415
+    from devin_history import mcp_server
 
     class _StubServer:
         def run(self, **_kwargs):
