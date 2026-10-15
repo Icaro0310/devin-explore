@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **MCP** — every `*-mcp` serve entry point now keeps the traceback for
+  startup `ImportError`s from `.run()`; only app-build failures get the
+  missing-extra hint (exit 1).
+
 - **Release** — version lockstep for the shared `devin-powerups` release
   gate (tag ↔ pyproject ↔ package.json): `devin-doctor` pyproject,
   `__version__` and `plugin.json` aligned to the already-published 0.2.0
