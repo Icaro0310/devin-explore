@@ -192,3 +192,24 @@ def test_query_rejects_stale_schema_index(db_path, tmp_path):
 
     with pytest.raises(RuntimeError, match="stale"):
         search(idx, "kubectl")
+
+
+def test_devin_cli_epoch_seconds_normalize_to_ms(db_path, tmp_path):
+    """Linux v17 stores write created_at in epoch seconds (spec §6.1
+    dual-magnitude) — docs.ts must land as epoch ms, not ~1970."""
+    add_session(
+        db_path,
+        "sec-sess",
+        created_ms=1_786_000_000,  # seconds, not ms — real Linux layout
+        messages=[msg("user", "xyzzy seconds probe")],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    con = sqlite3.connect(idx)
+    try:
+        ts = con.execute(
+            "SELECT ts FROM docs WHERE source = 'devin-cli' LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert ts >= 1_700_000_000_000  # ms magnitude — raw seconds would be 1.78e9
