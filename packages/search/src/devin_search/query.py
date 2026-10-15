@@ -19,6 +19,10 @@ _SNIP_ELLIPSIS = "…"
 _SNIP_TOKENS = 24
 
 
+class StaleIndexError(RuntimeError):
+    """The index exists but was built by an older index format."""
+
+
 @dataclass(frozen=True)
 class Hit:
     session_id: str
@@ -77,7 +81,7 @@ def search(
     version = int(row[0]) if row else 0
     if version != INDEX_SCHEMA_VERSION:
         con.close()
-        raise RuntimeError(
+        raise StaleIndexError(
             f"{index_path}: index schema v{version} is stale "
             f"(need v{INDEX_SCHEMA_VERSION}) — run `devin-search index` to rebuild"
         )

@@ -28,7 +28,8 @@ def _platform_roots(
         roots.append(Path.home() / "AppData" / "Roaming")
         return list(dict.fromkeys(roots)), list(dict.fromkeys(roots))
     if plat == "darwin":
-        roots = [Path.home() / "Library" / "Application Support"]
+        home = Path(env.get("HOME") or Path.home())
+        roots = [home / "Library" / "Application Support"]
         return roots, roots
     data_home = Path(env.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
     config_home = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
