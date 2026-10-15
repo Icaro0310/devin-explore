@@ -54,9 +54,9 @@ jobs:
           esac
 
   release:
-    # GitHub release creation stays tag-only — a dispatch proves the
-    # fan-out legs without minting a release.
-    if: github.ref_type == 'tag'
+    # GitHub release creation stays tag-push-only — a dispatch (even
+    # against an existing tag ref) proves nothing here.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     needs: resolve
     steps:
@@ -103,7 +103,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --verify-tag --generate-notes
+        run: |
+          # Idempotent: a rerun after a partial failure (e.g. attach-vsix
+          # died after this job created the release) uploads over the
+          # existing release instead of dying on `gh release create`.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --clobber
+          else
+            gh release create "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --verify-tag --generate-notes
+          fi
 
   # Channel fan-out for the resolved package: wheel gate → PyPI (skips
   # the upload cross-repo — the inline pypi-publish.yml owns PyPI via
@@ -111,7 +119,13 @@ jobs:
   # when an image is named. Idempotent: re-run without a version bump
   # is a no-op on every leg.
   fanout:
-    needs: resolve
+    # Same gate as the dedicated callers (release-qa-pack/devkit/bridge/
+    # memory): publish legs only ever run on a real tag push after the
+    # GitHub release succeeded — a workflow_dispatch must not publish to
+    # the registries, and a failed release must not strand a published
+    # extension (the 0.2.0 incident: GPG sign died, fanout still shipped).
+    needs: [resolve, release]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     permissions:
       contents: read
       id-token: write
@@ -126,3 +140,32 @@ jobs:
       package-dir: ${{ needs.resolve.outputs.dir }}
       pypi-environment: pypi
       vscode-ext-dir: ${{ needs.resolve.outputs.vsix-dir }}
+
+  # Attach the published .vsix to the GitHub release — same convention as
+  # release-qa-pack/release-devkit/release-bridge/release-memory. The
+  # air-gapped corporate path installs by manual .vsix; without the asset
+  # on the release that channel does not exist. The artifact the fanout
+  # produced is the same bytes that went to Open VSX / Marketplace.
+  attach-vsix:
+    needs: [resolve, release, fanout]
+    # needs.release.result is a status check, so the implicit success()
+    # no longer applies to fanout — a failed registry leg (e.g. the
+    # AZURE_MARKETPLACE_REQUIRED gate) must not strand the .vsix asset
+    # when the GitHub release itself minted fine. A genuine packaging
+    # failure still surfaces: download-artifact fails loudly when the
+    # fanout never produced the vsix artifact.
+    if: >-
+      github.event_name == 'push' && github.ref_type == 'tag'
+      && needs.resolve.outputs.vsix-dir != ''
+      && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: vsix
+          path: vsix
+      - name: Attach .vsix to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release upload "$RELEASE_TAG" vsix/*.vsix --clobber

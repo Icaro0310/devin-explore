@@ -15,6 +15,65 @@ let output;
 let searchSeq = 0;
 let lastTerm = null;
 
+// Same bounds as the "devin-search-cli" pin in package.json —
+// test/cli-contract.test.js asserts the pin, these bounds and the real
+// CLI version agree.
+const COMPATIBLE_CLI = { min: [0, 1, 0], maxExclusive: [0, 2, 0] };
+const CLI_RANGE = ">=0.1,<0.2";
+
+function parseVersion(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]*)?$/.exec(
+    String(version || "").trim(),
+  );
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+const cmp3 = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+// "compatible" | "too-old" | "too-new" | "unknown"
+function cliCompatStatus(version) {
+  const v = parseVersion(version);
+  if (!v) return "unknown";
+  if (cmp3(v, COMPATIBLE_CLI.min) < 0) return "too-old";
+  if (cmp3(v, COMPATIBLE_CLI.maxExclusive) >= 0) return "too-new";
+  return "compatible";
+}
+
+// CLIs ≥0.1.2 self-report "version" inside the JSON payload (same probe
+// doctor uses); older ones omit it — an absent field is "unknown", not
+// drift. Shape validation is the loud guard; this is the precise one.
+
+// Once-per-session `devin-search --version` probe (best-effort). An
+// argparse rejection ("unrecognized arguments") is ambiguous — it can
+// mean a too-old CLI missing a built-in flag OR a typo in the user's
+// devinSearch.extraArgs. The probe plus the flag/setting comparison
+// below decides which; the cached result is reused for the session.
+// Cached as a promise so concurrent searches share one probe (a second
+// caller must not read a null placeholder while the first is still
+// awaiting). The cache is keyed by devinSearch.executable — changing the
+// configured binary re-probes instead of reusing a stale verdict.
+let versionProbe;
+let probedExecutable;
+function probeVersion() {
+  const exe = config().executable;
+  if (versionProbe && probedExecutable === exe) return versionProbe;
+  probedExecutable = exe;
+  versionProbe = (async () => {
+    try {
+      const { stdout } = await deps.runCli(["--version"], { includeExtraArgs: false });
+      const m = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]*)?)/.exec(stdout || "");
+      return m ? m[1] : null;
+    } catch {
+      return null; /* probe is best-effort — falls back to the flag check */
+    }
+  })();
+  return versionProbe;
+}
+
+function compatSuffix(compat, version) {
+  return compat === "too-old" || compat === "too-new"
+    ? ` — CLI ${version} outside ${CLI_RANGE}` : "";
+}
+
 // devin-search LIMIT maps to SQLite's: -1 means "unlimited" and can blow
 // the 8 MiB output buffer, so the setting is clamped to a sane range.
 function clampLimit(n) {
@@ -39,7 +98,9 @@ function workspaceDirs() {
 // Injectable for tests. Non-zero exits are results, not errors:
 // query exits 1 on zero hits, 2 on usage/store problems.
 const deps = {
-  runCli: (args) => {
+  // opts.includeExtraArgs:false skips devinSearch.extraArgs — used by the
+  // --version probe so a bad setting cannot break the probe itself.
+  runCli: (args, opts = {}) => {
     const { executable, extraArgs } = config();
     const spec = resolveSafeExecutable(executable, {
       workspaceDirs: workspaceDirs(),
@@ -52,7 +113,8 @@ const deps = {
           "devin-search not found on PATH. Install it " +
             "(uv tool install devin-search) or set devinSearch.executable."));
       }
-      cp.execFile(spec.file, spec.argv.concat(args, extraArgs),
+      cp.execFile(spec.file,
+        spec.argv.concat(args, ...(opts.includeExtraArgs === false ? [] : extraArgs)),
         { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && err.killed) {
@@ -134,27 +196,80 @@ async function search() {
   try {
     // --no-log keeps the extension strictly read-only: the CLI otherwise
     // appends every query to <index>.queries.jsonl.
-    const { code, stdout, stderr } = await deps.runCli([
+    const args = [
       "query", term.trim(), "--json", "--no-log", "--limit", String(config().limit),
-    ]);
+    ];
+    const { code, stdout, stderr } = await deps.runCli(args);
     let payload;
     try {
       payload = JSON.parse(stdout);
     } catch {
       output.appendLine(stdout || "");
       output.appendLine(stderr || "");
+      // argparse rejects flags it does not know — but that is ambiguous:
+      // a too-old CLI missing a built-in flag, or a bad entry in
+      // devinSearch.extraArgs. Probe --version once per session and
+      // compare the rejected flags against the setting before blaming
+      // the CLI.
+      if (/unrecognized arguments|invalid choice/.test(stderr || "")) {
+        const rejected = (stderr.match(/unrecognized arguments:\s*(.+)/) || [])[1]
+          ?.trim().split(/\s+/).filter((t) => t.startsWith("-")) || [];
+        const userFlags = new Set(config().extraArgs.filter((t) => t.startsWith("-")));
+        // A rejected flag is the CLI's fault only if THIS call sent it;
+        // flags the extension never passes (--version, audit-only
+        // options) in a rejection must have come from extraArgs.
+        const sentFlags = new Set(args.filter((t) => t.startsWith("-")));
+        const onlySettings = rejected.length > 0 &&
+          rejected.every((t) => userFlags.has(t) && !sentFlags.has(t));
+        const probed = await probeVersion();
+        const compat = probed ? cliCompatStatus(probed) : "unknown";
+        if (onlySettings || compat === "compatible") {
+          // Blame the setting without lying about the CLI: when the probe
+          // reports a version outside the range, say so instead of
+          // claiming compatibility.
+          const cliNote = !probed
+            ? "the CLI version could not be probed"
+            : compat === "compatible"
+              ? `the installed CLI ${probed} is inside ${CLI_RANGE}`
+              : `the installed CLI ${probed} is also outside ${CLI_RANGE} — ` +
+                (compat === "too-new" ? "downgrade the CLI or update the extension" : "upgrade the CLI");
+          throw new Error(
+            `devinSearch.extraArgs contains unsupported option(s): ${rejected.join(", ")} — ` +
+            `fix the setting (${cliNote})`);
+        }
+        const found = probed ? `, found ${probed}` : "";
+        // The probe already ran: a rejected built-in flag with a too-new
+        // CLI means downgrade (not upgrade), and an unprobed CLI is
+        // ambiguous — it could still be a bad extraArgs entry.
+        if (compat === "too-new") {
+          throw new Error(
+            `devin-search CLI is newer than this extension supports ` +
+            `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ` +
+            `downgrade the CLI or update the extension`);
+        }
+        if (compat === "too-old") {
+          throw new Error(`devin-search CLI is too old for this extension ` +
+            `(requires ${CLI_RANGE}${found}); the installed CLI rejected an argument — ` +
+            `upgrade: uv tool upgrade devin-search`);
+        }
+        throw new Error(`devin-search CLI version could not be probed ` +
+          `(requires ${CLI_RANGE}); the CLI rejected an argument — ` +
+          `upgrade: uv tool upgrade devin-search — or check devinSearch.extraArgs`);
+      }
       throw new Error(`devin-search query returned no JSON (exit ${code}) — ` +
         "run `devin-search index` first? See output channel.");
     }
     const shape = validateQueryPayload(payload);
     if (!shape.ok) {
       throw new Error(`devin-search JSON missing ${shape.missing.join(", ")} — ` +
-        "extension/CLI drift (compatible: devin-search >=0.1,<0.2)");
+        `extension/CLI drift (compatible: devin-search ${CLI_RANGE})`);
     }
+    const compat = cliCompatStatus(payload.version);
     if (seq === searchSeq) {
       lastTerm = term.trim();
       statusBar.text = `$(search) search: ${payload.hits.length}`;
-      statusBar.tooltip = `devin-search — "${lastTerm}": ${payload.hits.length} hit(s)`;
+      statusBar.tooltip = `devin-search — "${lastTerm}": ${payload.hits.length} hit(s)` +
+        compatSuffix(compat, payload.version);
       if (payload.hits.length === 0) {
         vscode.window.showInformationMessage(`devin-search: no hits for "${lastTerm}"`);
       } else {
@@ -184,6 +299,12 @@ async function showMisses() {
     try {
       const s = JSON.parse(stdout);
       output.appendLine(`query log: ${s.log}`);
+      const compat = cliCompatStatus(s.version);
+      if (compat === "too-old" || compat === "too-new") {
+        output.appendLine(`CLI ${s.version} outside ${CLI_RANGE} — ` +
+          (compat === "too-old" ? "upgrade: uv tool upgrade devin-search"
+            : "downgrade the CLI or update the extension"));
+      }
       output.appendLine(`${s.total_queries} queries · ${s.zero_hit} zero-hit ` +
         `(${Math.round((s.zero_hit_rate || 0) * 100)}%)`);
       Object.entries(s.per_month || {}).sort().forEach(([m, b]) =>
@@ -221,4 +342,6 @@ module.exports = { activate, deactivate };
 // Test-only surface — internals reachable without the editor.
 module.exports.__internals__ = {
   deps, clampLimit, validateQueryPayload, fmtHit, search, showMisses,
+  COMPATIBLE_CLI, CLI_RANGE, parseVersion, cliCompatStatus, compatSuffix,
+  probeVersion, resetProbe: () => { versionProbe = undefined; probedExecutable = undefined; },
 };

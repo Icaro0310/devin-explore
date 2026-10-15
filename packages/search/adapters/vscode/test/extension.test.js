@@ -6,6 +6,7 @@ const statusBarStub = { text: "", tooltip: "", command: "", show() {}, hide() {}
 const outputStub = { lines: [], appendLine(l) { this.lines.push(l); }, clear() { this.lines = []; }, show() {} };
 const errorMessages = [];
 let docsOpened = 0;
+let testExtras = [];
 
 const vscodeStub = {
   ThemeColor: class {
@@ -29,7 +30,9 @@ const vscodeStub = {
       get: (k, d) =>
         k === "executable"
           ? process.env.SEARCH_VSCODE_TEST_EXE || "devin-search"
-          : d,
+          : k === "extraArgs"
+            ? testExtras
+            : d,
     }),
     openTextDocument: () => Promise.resolve({}),
   },
@@ -54,7 +57,7 @@ const HIT = {
   session_id: "abcdef1234567890",
   role: "assistant",
   ts: 1760000000000,
-  project: "/home/u/repo",
+  project: "/tmp/repo",
   session_title: "fix tests",
   source: "sessions.db",
   ref: "msg:1",
@@ -293,4 +296,190 @@ test("package.json devin-search-cli pin covers the package version", () => {
       (maj < Number(m[3]) || (maj === Number(m[3]) && min < Number(m[4]))),
     `package ${v[0]} outside pinned range ${range}`,
   );
+});
+
+test("cliCompatStatus classifies versions against the pin", async () => {
+  const { cliCompatStatus } = __internals__;
+  assert.strictEqual(cliCompatStatus("0.1.2"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.0.9"), "too-old");
+  assert.strictEqual(cliCompatStatus("0.2.0"), "too-new");
+  assert.strictEqual(cliCompatStatus("garbage"), "unknown");
+  assert.strictEqual(cliCompatStatus(undefined), "unknown");
+});
+
+test("unrecognized args on a compatible CLI blames devinSearch.extraArgs, not the CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--indx"]; // the rejected flag is user-supplied
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.1.2\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "usage: x\nerror: unrecognized arguments: --indx" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option.*inside/s);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("a built-in flag duplicated in extraArgs still blames an old CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--no-log"]; // user repeats a built-in flag
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /too old.*found 0\.0\.1/s);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("changing devinSearch.executable re-probes the version", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  let probes = 0;
+  __internals__.deps.runCli = (args) => {
+    if (args[0] === "--version") {
+      probes++;
+      return Promise.resolve({ code: 0, stdout: "devin-search 0.1.2\n", stderr: "" });
+    }
+    return Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --indx" });
+  };
+  try {
+    testExtras = ["--indx"];
+    await __internals__.search();
+    assert.strictEqual(probes, 1);
+    await __internals__.search();
+    assert.strictEqual(probes, 1, "same executable reuses the probe");
+    process.env.SEARCH_VSCODE_TEST_EXE = "/opt/other/devin-search";
+    await __internals__.search();
+    assert.strictEqual(probes, 2, "new executable triggers a fresh probe");
+  } finally {
+    testExtras = [];
+    delete process.env.SEARCH_VSCODE_TEST_EXE;
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("unrecognized args on a too-old CLI names the floor and the upgrade", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(
+      errorMessages.at(-1),
+      /too old.*found 0\.0\.1.*uv tool upgrade devin-search/s,
+    );
+  } finally {
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("a failed probe keeps the ambiguous hint with both causes", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.reject(new Error("spawn failed"))
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --no-log" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /uv tool upgrade devin-search.*extraArgs/);
+  } finally {
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("a flag the query never sends (extraArgs --version) blames the setting", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--version"];
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.resolve({ code: 0, stdout: "devin-search 0.0.1\n", stderr: "" })
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --version" });
+  try {
+    await __internals__.search();
+    // queries never send --version, so the rejection can only be the
+    // user's extraArgs — even when the probe says the CLI is old.
+    assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("extraArgs error note reports too-old and too-new verdicts accurately", async () => {
+  ext.activate({ subscriptions: [] });
+  const real = __internals__.deps.runCli;
+  try {
+    for (const [version, want] of [
+      ["0.0.1", /also outside.*upgrade the CLI/s],
+      ["0.2.0", /also outside.*downgrade the CLI or update the extension/s],
+    ]) {
+      __internals__.resetProbe();
+      testExtras = ["--bogus"];
+      errorMessages.length = 0;
+      __internals__.deps.runCli = (args) =>
+        args[0] === "--version"
+          ? Promise.resolve({ code: 0, stdout: `devin-search ${version}\n`, stderr: "" })
+          : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --bogus" });
+      await __internals__.search();
+      assert.match(errorMessages.at(-1), /extraArgs contains unsupported option/);
+      assert.match(errorMessages.at(-1), want, `verdict note for ${version}`);
+    }
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
+});
+
+test("extraArgs error note covers an unprobed CLI", async () => {
+  ext.activate({ subscriptions: [] });
+  __internals__.resetProbe();
+  testExtras = ["--bogus"];
+  errorMessages.length = 0;
+  const real = __internals__.deps.runCli;
+  __internals__.deps.runCli = (args) =>
+    args[0] === "--version"
+      ? Promise.reject(new Error("spawn failed"))
+      : Promise.resolve({ code: 2, stdout: "", stderr: "error: unrecognized arguments: --bogus" });
+  try {
+    await __internals__.search();
+    assert.match(errorMessages.at(-1), /could not be probed/);
+  } finally {
+    testExtras = [];
+    __internals__.deps.runCli = real;
+    __internals__.resetProbe();
+  }
 });
