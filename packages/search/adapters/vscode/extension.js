@@ -224,9 +224,17 @@ async function search() {
         const probed = await probeVersion();
         const compat = probed ? cliCompatStatus(probed) : "unknown";
         if (onlySettings || compat === "compatible") {
+          // Blame the setting without lying about the CLI: when the probe
+          // reports a version outside the range, say so instead of
+          // claiming compatibility.
+          const cliNote = !probed
+            ? "the CLI version could not be probed"
+            : compat === "compatible"
+              ? `the installed CLI ${probed} is inside ${CLI_RANGE}`
+              : `the installed CLI ${probed} is also outside ${CLI_RANGE} — upgrade separately`;
           throw new Error(
             `devinSearch.extraArgs contains unsupported option(s): ${rejected.join(", ")} — ` +
-            `fix the setting (the installed CLI${probed ? ` ${probed}` : ""} is inside ${CLI_RANGE})`);
+            `fix the setting (${cliNote})`);
         }
         const found = probed ? `, found ${probed}` : "";
         const hint = probed
