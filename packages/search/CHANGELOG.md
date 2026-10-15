@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- JSON payloads now self-report the CLI `version` (query and misses
+  outputs), and `--version` prints it — the VS Code adapter uses both
+  for precise compatibility classification instead of shape-only checks.
 - Read-only adapters: `devin_search.mcp_server` MCP server
   (`search_query`, `devin-search-mcp` entry point, `mcp` extra), Devin
   skill and `adapters/` plugin root.
