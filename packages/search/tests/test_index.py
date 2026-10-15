@@ -1,9 +1,11 @@
 import hashlib
 import sqlite3
 
+import pytest
 from conftest import add_acp_db, add_session, msg
 from devin_internals.fixtures import create_acp_messages_db
 from devin_search.index import build_index, index_doc_count
+from devin_search.query import search
 
 
 def _sha256(path):
@@ -73,8 +75,8 @@ def test_indexes_acp_dir(db_path, acp_dir, tmp_path):
     idx = tmp_path / "search.db"
     stats = build_index(idx, sessions_db=db_path, acp_dir=acp_dir)
 
-    assert stats.acp_messages == 2
-    assert "acp" in stats.sources
+    assert stats.devin_chat_messages == 2
+    assert "devin-chat" in stats.sources
     texts = "\n".join(_doc_texts(idx))
     assert "flaky test" in texts
 
@@ -127,8 +129,8 @@ def test_missing_acp_dir_is_not_an_error(db_path, tmp_path):
         sessions_db=db_path,
         acp_dir=tmp_path / "does-not-exist",
     )
-    assert stats.acp_messages == 0
-    assert "acp" not in stats.sources
+    assert stats.devin_chat_messages == 0
+    assert "devin-chat" not in stats.sources
 
 
 def test_project_and_session_link_stored(db_path, tmp_path):
@@ -138,10 +140,55 @@ def test_project_and_session_link_stored(db_path, tmp_path):
     try:
         row = con.execute(
             "SELECT session_id, project, source, ref FROM docs"
-            " WHERE source = 'sessions' LIMIT 1"
+            " WHERE source = 'devin-cli' LIMIT 1"
         ).fetchone()
     finally:
         con.close()
     assert row[0]
     assert row[1].startswith("/fixture/workspace/")
     assert row[3].split(":", 1)[0] in {"node", "prompt", "tool"}
+
+
+def test_stale_schema_index_auto_rebuilds_and_reports(db_path, tmp_path):
+    """A v1 index is rebuilt on the next index run and stats say so."""
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    con = sqlite3.connect(idx)
+    try:
+        con.execute(
+            "UPDATE index_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        con.execute("UPDATE docs SET source = 'sessions' WHERE source = 'devin-cli'")
+        con.commit()
+    finally:
+        con.close()
+
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.rebuilt
+    con = sqlite3.connect(idx)
+    try:
+        stale = con.execute(
+            "SELECT COUNT(*) FROM docs WHERE source IN ('sessions', 'acp')"
+            " OR ref LIKE 'acp:%' OR ref LIKE 'session:%'"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert stale == 0
+
+
+def test_query_rejects_stale_schema_index(db_path, tmp_path):
+    """Queries on a pre-upgrade index fail closed instead of returning
+    rows labelled with the old source vocabulary."""
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    con = sqlite3.connect(idx)
+    try:
+        con.execute(
+            "UPDATE index_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    with pytest.raises(RuntimeError, match="stale"):
+        search(idx, "kubectl")

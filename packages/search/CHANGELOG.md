@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Index format v2**: logical source vocabulary renamed to the canonical
+  session-surface set (`devin-internals-spec` → `docs/SESSION-SURFACES.md`) —
+  `docs.source` values `sessions`→`devin-cli`, `acp`→`devin-chat`; ref
+  prefixes `acp:`→`devin-chat:`; `index_meta` keys `wm:sessions:*`→
+  `wm:devin-cli:*`, `acp:*`→`devin-chat:*`; stats field `acp_messages`→
+  `devin_chat_messages`. Existing indexes auto-rebuild on next `index`
+  run; `query` on a stale-version index fails closed with a reindex hint.
+- `acp_dir_candidates` on darwin probes `Devin` (capitalized UI config
+  dir) instead of lowercase `devin` — case-sensitive volumes were missed.
+
 ### Fixed
 
 - `devin-search-mcp` keeps the traceback on `.run()` `ImportError`s; the

@@ -32,3 +32,15 @@ def test_linux_keeps_legacy_store_candidates(tmp_path):
     env = {"XDG_CONFIG_HOME": str(config_home)}
 
     assert default_acp_dir(environ=env, platform="linux") == legacy_acp
+
+
+def test_darwin_probes_capitalized_devin_config_dir(tmp_path):
+    """macOS UI config dir is `Devin`, not lowercase `devin` — case-
+    sensitive volumes report the store missing otherwise."""
+    lib = tmp_path / "Library" / "Application Support"
+    acp = lib / "Devin" / "User" / "acp-messages"
+    acp.mkdir(parents=True)
+    env = {"HOME": str(tmp_path)}
+
+    cands = acp_dir_candidates(environ=env, platform="darwin")
+    assert cands[0] == acp

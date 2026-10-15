@@ -23,7 +23,7 @@ from devin_search.paths import (
     default_index_path,
     default_sessions_db,
 )
-from devin_search.query import parse_since, search
+from devin_search.query import StaleIndexError, parse_since, search
 
 
 def _resolve_index(arg: str | None) -> Path:
@@ -91,7 +91,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
             since=since,
             limit=args.limit,
         )
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, StaleIndexError) as exc:
         print(f"devin-search: {exc}", file=sys.stderr)
         return 2
     if not args.no_log:

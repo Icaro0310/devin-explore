@@ -102,7 +102,7 @@ devin-search misses
 
 Hits print as `WHEN · ROLE · PROJECT · SESSION · SNIPPET` with the match
 wrapped in `«»`; each hit carries a `ref` (e.g. `node:1234`,
-`acp:file.db:7`) pointing back to the exact source row.
+`devin-chat:file.db:7`) pointing back to the exact source row.
 
 With `--history-dir <dir>` pointing at a
 [`devin-history`](https://github.com/Icaro0310/devin-explore) export

@@ -155,3 +155,27 @@ def test_version(capsys):
         main(["--version"])
     assert exc.value.code == 0
     assert "devin-search" in capsys.readouterr().out
+
+
+def test_query_stale_index_is_store_error_not_traceback(db_path, tmp_path, capsys):
+    """A v1 index queried after upgrade exits 2 with a reindex hint —
+    the documented store-error contract, not a Python traceback."""
+    import sqlite3
+
+    add_session(db_path, "s1", messages=[msg("user", "xyzzy marker")])
+    idx = tmp_path / "search.db"
+    main(["index", "--sessions-db", str(db_path), "--no-acp", "--index", str(idx)])
+    con = sqlite3.connect(idx)
+    try:
+        con.execute(
+            "UPDATE index_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+        con.commit()
+    finally:
+        con.close()
+    capsys.readouterr()
+
+    rc = main(["query", "xyzzy", "--index", str(idx)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "stale" in err and "rebuild" in err and "Traceback" not in err

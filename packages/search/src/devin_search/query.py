@@ -11,10 +11,16 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .index import INDEX_SCHEMA_VERSION
+
 _SNIP_OPEN = "«"
 _SNIP_CLOSE = "»"
 _SNIP_ELLIPSIS = "…"
 _SNIP_TOKENS = 24
+
+
+class StaleIndexError(RuntimeError):
+    """The index exists but was built by an older index format."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,19 @@ def search(
             f"{index_path}: no index — run `devin-search index` first"
         )
     con = sqlite3.connect(index_path)
+    try:
+        row = con.execute(
+            "SELECT value FROM index_meta WHERE key = 'schema_version'"
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    version = int(row[0]) if row else 0
+    if version != INDEX_SCHEMA_VERSION:
+        con.close()
+        raise StaleIndexError(
+            f"{index_path}: index schema v{version} is stale "
+            f"(need v{INDEX_SCHEMA_VERSION}) — run `devin-search index` to rebuild"
+        )
     con.row_factory = sqlite3.Row
     try:
         sql = (

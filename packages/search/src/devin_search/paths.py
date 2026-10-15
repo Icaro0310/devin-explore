@@ -28,7 +28,8 @@ def _platform_roots(
         roots.append(Path.home() / "AppData" / "Roaming")
         return list(dict.fromkeys(roots)), list(dict.fromkeys(roots))
     if plat == "darwin":
-        roots = [Path.home() / "Library" / "Application Support"]
+        home = Path(env.get("HOME") or Path.home())
+        roots = [home / "Library" / "Application Support"]
         return roots, roots
     data_home = Path(env.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
     config_home = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
@@ -53,7 +54,10 @@ def acp_dir_candidates(
     if (platform or sys.platform).startswith("win"):
         return [r.joinpath("Devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
     if (platform or sys.platform) == "darwin":
-        return [r.joinpath("devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
+        # UI/config dir is capitalized "Devin" on macOS too (canonical
+        # paths in devin-internals-spec) — lowercase misses on
+        # case-sensitive volumes.
+        return [r.joinpath("Devin", *ACP_MESSAGES_RELPATH) for r in config_roots]
     return [r.joinpath(*ACP_MESSAGES_RELPATH) if r.name in ("Devin", "devin")
             else r.joinpath(APP_DIRNAME, *ACP_MESSAGES_RELPATH)
             for r in config_roots]
