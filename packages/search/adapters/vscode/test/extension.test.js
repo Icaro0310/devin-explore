@@ -57,7 +57,7 @@ const HIT = {
   session_id: "abcdef1234567890",
   role: "assistant",
   ts: 1760000000000,
-  project: "/home/u/repo",
+  project: "/tmp/repo",
   session_title: "fix tests",
   source: "sessions.db",
   ref: "msg:1",
