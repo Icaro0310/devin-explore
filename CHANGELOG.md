@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Release** — version lockstep for the shared `devin-powerups` release
+  gate (tag ↔ pyproject ↔ package.json): `devin-doctor` pyproject,
+  `__version__` and `plugin.json` aligned to the already-published 0.2.0
+  VS Code extension, and the extension's `devin-doctor-cli` compatibility
+  range widened to `>=0.1,<0.3` so it accepts the matched 0.2.x CLI;
+  `devin-search` bumped to 0.1.2 across pyproject, package.json,
+  `__version__` and `plugin.json`.
 - **CI** — `open-pr-bot` fails closed without `PR_BOT_TOKEN` and its
   existing-PR lookup is base-, owner- and case-aware; fork PRs sharing
   the head name no longer block creating the repository's own PR.
