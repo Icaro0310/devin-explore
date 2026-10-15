@@ -18,12 +18,14 @@
   unreachable".
 - **CI** — `release.yml` gains a `fanout` job calling the reusable
   `devin-powerups` release workflow (wheel gate, `.vsix` artifact for
-  the doctor/search adapters). Dispatch runs prove the pipeline without
-  minting a GitHub release; `packages/search` bumped to 0.1.1 to match
-  the already-published `devin-search` extension version. The fanout
-  job forwards `OVSX_PAT` explicitly (never `inherit`) so the Open VSX
-  publish leg activates without exposing unrelated secrets to the
-  reusable workflow.
+  the doctor/search adapters). `release` and `fanout` are tag-push-only;
+  a manual `workflow_dispatch` exercises the `resolve` job only — the
+  end-to-end proof is a real tag push (a fork works since the
+  Marketplace/PyPI legs skip without secrets). `packages/search` bumped
+  to 0.1.1 to match the already-published `devin-search` extension
+  version. The fanout job forwards `OVSX_PAT` explicitly (never
+  `inherit`) so the Open VSX publish leg activates without exposing
+  unrelated secrets to the reusable workflow.
 
 - **Docs** — corporate-Windows guides: new `devin-doctor` VS Code
   extension section (thin shell running `check --json`/`report --md`/

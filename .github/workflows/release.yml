@@ -103,7 +103,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --verify-tag --generate-notes
+        run: |
+          # Idempotent: a rerun after a partial failure (e.g. attach-vsix
+          # died after this job created the release) uploads over the
+          # existing release instead of dying on `gh release create`.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --clobber
+          else
+            gh release create "$RELEASE_TAG" "$PKG_DIR"/dist/* sbom.cdx.json* --verify-tag --generate-notes
+          fi
 
   # Channel fan-out for the resolved package: wheel gate → PyPI (skips
   # the upload cross-repo — the inline pypi-publish.yml owns PyPI via
@@ -140,9 +148,16 @@ jobs:
   # produced is the same bytes that went to Open VSX / Marketplace.
   attach-vsix:
     needs: [resolve, release, fanout]
+    # needs.release.result is a status check, so the implicit success()
+    # no longer applies to fanout — a failed registry leg (e.g. the
+    # AZURE_MARKETPLACE_REQUIRED gate) must not strand the .vsix asset
+    # when the GitHub release itself minted fine. A genuine packaging
+    # failure still surfaces: download-artifact fails loudly when the
+    # fanout never produced the vsix artifact.
     if: >-
       github.event_name == 'push' && github.ref_type == 'tag'
       && needs.resolve.outputs.vsix-dir != ''
+      && needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
