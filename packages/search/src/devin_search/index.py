@@ -60,6 +60,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
 
 WM_NODES = "wm:devin-cli:message_nodes"
 WM_PROMPTS = "wm:devin-cli:prompt_history"
+WM_CONTENT = "wm:devin-cli:content"
 SOURCE_DEVIN_CLI = "devin-cli"
 SOURCE_DEVIN_CHAT = "devin-chat"
 SOURCE_COPILOT = "copilot-cli"
@@ -165,6 +166,56 @@ def _reset_source(con: sqlite3.Connection, source: str, wm_keys: Iterable[str]) 
     return cur.rowcount
 
 
+def _devin_cli_content_digest(
+    sessions: dict[str, tuple[str, str | None, int]],
+    nodes,
+    prompts,
+    tool_calls,
+    wm_nodes: int,
+    wm_prompts: int,
+    indexed_tool_refs: set[str],
+) -> str:
+    """Content identity of the rows already covered by the watermarks.
+
+    Row ids are stable positions, not immutability guarantees: a same-id
+    UPDATE (or a mid-table DELETE) leaves the position watermark
+    untouched, so stale docs would survive forever without a content
+    signal. Only the covered prefix is hashed — new rows past the
+    watermark take the cheap incremental path, unchanged rows never
+    re-index."""
+    h = hashlib.sha256()
+    covered_sessions: set[str] = set()
+    for n in sorted(nodes, key=lambda x: x.row_id):
+        if n.row_id > wm_nodes:
+            continue
+        covered_sessions.add(n.session_id)
+        h.update(
+            f"n\x00{n.row_id}\x00{n.session_id}\x00{n.chat_message}"
+            f"\x00{n.created_at}\x00".encode()
+        )
+    for p in sorted(prompts, key=lambda x: x.id):
+        if p.id > wm_prompts:
+            continue
+        covered_sessions.add(p.session_id)
+        h.update(
+            f"p\x00{p.id}\x00{p.content}\x00{p.session_id}"
+            f"\x00{p.is_shell}\x00{p.timestamp}\x00".encode()
+        )
+    for tc in sorted(tool_calls, key=lambda x: (x.session_id, x.tool_call_id)):
+        ref = f"tool:{tc.session_id}/{tc.tool_call_id}"
+        if ref not in indexed_tool_refs:
+            continue
+        covered_sessions.add(tc.session_id)
+        h.update(
+            f"t\x00{tc.session_id}\x00{tc.tool_call_id}"
+            f"\x00{tc.tool_call_json}\x00{tc.tool_call_update_json}\x00".encode()
+        )
+    for sid in sorted(covered_sessions):
+        wd, title, created = sessions.get(sid, ("", None, 0))
+        h.update(f"s\x00{sid}\x00{wd}\x00{title}\x00{created}\x00".encode())
+    return h.hexdigest()
+
+
 def _index_sessions_db(
     con: sqlite3.Connection, db_path: Path, stats: IndexStats
 ) -> dict[str, tuple[str, str | None, int]]:
@@ -183,18 +234,37 @@ def _index_sessions_db(
         prompts = store.prompt_history()
         tool_calls = store.tool_call_state()
 
-    # Drift guard: a shrunk source invalidates its watermark.
+    # Drift guards: a source whose covered content changed under
+    # unchanged watermarks — an in-place row UPDATE or mid-table DELETE —
+    # or that shrank below its watermark invalidates the whole source
+    # slice (the store is already fully loaded, so the digest is cheap;
+    # re-indexing is the same reset the shrink path has always used).
     max_node = max((n.row_id for n in nodes), default=0)
     max_prompt = max((p.id for p in prompts), default=0)
     wm_nodes = int(_meta_get(con, WM_NODES) or 0)
     wm_prompts = int(_meta_get(con, WM_PROMPTS) or 0)
-    if (wm_nodes and max_node < wm_nodes) or (
+    indexed_tool_refs = {
+        r["ref"]
+        for r in con.execute(
+            "SELECT ref FROM docs WHERE source = ? AND ref LIKE 'tool:%'",
+            (SOURCE_DEVIN_CLI,),
+        )
+    }
+    stored_digest = _meta_get(con, WM_CONTENT)
+    pre_digest = _devin_cli_content_digest(
+        sessions, nodes, prompts, tool_calls,
+        wm_nodes, wm_prompts, indexed_tool_refs,
+    )
+    changed = stored_digest is not None and stored_digest != pre_digest
+    shrunk = (wm_nodes and max_node < wm_nodes) or (
         wm_prompts and max_prompt < wm_prompts
-    ):
+    )
+    if changed or shrunk:
         stats.removed += _reset_source(
-            con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS)
+            con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS, WM_CONTENT)
         )
         wm_nodes = wm_prompts = 0
+        indexed_tool_refs = set()
 
     for node in nodes:
         if node.row_id <= wm_nodes:
@@ -237,16 +307,9 @@ def _index_sessions_db(
     _meta_set(con, WM_PROMPTS, max(wm_prompts, max_prompt))
 
     # tool_call_state has no auto-increment id — dedup on the ref instead.
-    indexed_refs = {
-        r["ref"]
-        for r in con.execute(
-            "SELECT ref FROM docs WHERE source = ? AND ref LIKE 'tool:%'",
-            (SOURCE_DEVIN_CLI,),
-        )
-    }
     for tc in tool_calls:
         ref = f"tool:{tc.session_id}/{tc.tool_call_id}"
-        if ref in indexed_refs:
+        if ref in indexed_tool_refs:
             continue
         parts = []
         for raw in (tc.tool_call_json, tc.tool_call_update_json):
@@ -268,6 +331,26 @@ def _index_sessions_db(
             ref=ref,
         )
         stats.tool_calls += 1
+
+    # Record the digest over everything now covered — computed at the
+    # *new* watermarks so a run that both reset and picked up fresh rows
+    # does not trigger a second spurious reset next time.
+    all_tool_refs = {
+        f"tool:{tc.session_id}/{tc.tool_call_id}" for tc in tool_calls
+    }
+    _meta_set(
+        con,
+        WM_CONTENT,
+        _devin_cli_content_digest(
+            sessions,
+            nodes,
+            prompts,
+            tool_calls,
+            max(wm_nodes, max_node),
+            max(wm_prompts, max_prompt),
+            all_tool_refs,
+        ),
+    )
     return sessions
 
 
@@ -459,8 +542,12 @@ def _drop_vanished_files(
     for gone in sorted(known - present):
         stats.removed += _drop_source_file_docs(con, source, gone)
         con.execute(
-            "DELETE FROM index_meta WHERE key IN (?, ?)",
-            (f"{source}:file:{gone}", f"{source}:wm:{gone}"),
+            "DELETE FROM index_meta WHERE key IN (?, ?, ?)",
+            (
+                f"{source}:file:{gone}",
+                f"{source}:wm:{gone}",
+                f"{source}:head:{gone}",
+            ),
         )
 
 
@@ -645,8 +732,11 @@ def _index_copilot_dirs(
                 con, SOURCE_COPILOT, loser_key
             )
             con.execute(
-                "DELETE FROM index_meta WHERE key = ?",
-                (f"{SOURCE_COPILOT}:wm:{loser_key}",),
+                "DELETE FROM index_meta WHERE key IN (?, ?)",
+                (
+                    f"{SOURCE_COPILOT}:wm:{loser_key}",
+                    f"{SOURCE_COPILOT}:head:{loser_key}",
+                ),
             )
             continue
         lines = _read_lines(path)
@@ -658,9 +748,19 @@ def _index_copilot_dirs(
 
         file_key = str(path)
         wm_key = f"{SOURCE_COPILOT}:wm:{file_key}"
+        head_key = f"{SOURCE_COPILOT}:head:{file_key}"
         wm = int(_meta_get(con, wm_key) or 0)
-        if wm and len(lines) < wm:
-            # File shrank below its watermark — lines were lost upstream.
+        head = _meta_get(con, head_key)
+        # The watermark covers lines[:wm] — digest that prefix so an
+        # in-place edit (same length or longer) cannot hide behind it.
+        head_now = hashlib.sha256(
+            "\n".join(lines[:wm]).encode("utf-8")
+        ).hexdigest()
+        if wm and (
+            len(lines) < wm or (head is not None and head != head_now)
+        ):
+            # Lines below the watermark were lost or edited in place —
+            # docs derived from them are stale; re-index the whole file.
             stats.removed += _drop_source_file_docs(con, SOURCE_COPILOT, file_key)
             wm = 0
         # The watermark is the position just past the last *well-formed*
@@ -701,6 +801,13 @@ def _index_copilot_dirs(
             )
             stats.copilot_messages += 1
         _meta_set(con, wm_key, last_complete)
+        _meta_set(
+            con,
+            head_key,
+            hashlib.sha256(
+                "\n".join(lines[:last_complete]).encode("utf-8")
+            ).hexdigest(),
+        )
         _meta_set(con, f"{SOURCE_COPILOT}:file:{file_key}", file_key)
 
 
@@ -1362,7 +1469,12 @@ def build_index(
 
     ``copilot_dirs``/``vscode_chat_dirs`` take several roots because the
     spec merges every existing candidate (§6.3 roots, §6.5 variants);
-    ``codex_dir`` is a single root (§6.4 picks one home)."""
+    ``codex_dir`` is a single root (§6.4 picks one home).
+
+    Every non-``None`` argument is *managed*: a store path that is absent
+    on disk means the source vanished since the last run and its stale
+    docs are swept (``stats.removed``). ``None`` means "not managed this
+    run" — the CLI's ``--no-*`` flags — and preserves existing docs."""
     index_path = Path(index_path).expanduser()
     stats = IndexStats(index_path=index_path, rebuilt=bool(rebuild))
     con, auto_rebuilt = open_index(index_path, rebuild=rebuild)
@@ -1370,24 +1482,26 @@ def build_index(
     try:
         sessions: dict[str, tuple[str, str | None, int]] = {}
         if sessions_db is not None:
-            sessions = _index_sessions_db(con, Path(sessions_db), stats)
-        if acp_dir is not None and Path(acp_dir).is_dir():
-            _index_acp_dir(con, Path(acp_dir), stats, sessions)
-        copilot_roots = (
-            [Path(d).expanduser() for d in copilot_dirs]
-            if copilot_dirs is not None
-            else []
-        )
-        if any(r.is_dir() for r in copilot_roots):
+            sessions_db = Path(sessions_db)
+            if sessions_db.is_file():
+                sessions = _index_sessions_db(con, sessions_db, stats)
+            else:
+                stats.removed += _reset_source(
+                    con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS, WM_CONTENT)
+                )
+        if acp_dir is not None:
+            acp_dir = Path(acp_dir)
+            if acp_dir.is_dir():
+                _index_acp_dir(con, acp_dir, stats, sessions)
+            else:
+                _drop_vanished_files(con, SOURCE_DEVIN_CHAT, set(), stats)
+        if copilot_dirs is not None:
+            copilot_roots = [Path(d).expanduser() for d in copilot_dirs]
             _index_copilot_dirs(con, copilot_roots, stats)
-        if codex_dir is not None and Path(codex_dir).is_dir():
+        if codex_dir is not None:
             _index_codex_root(con, Path(codex_dir), stats)
-        vscode_dirs = (
-            [Path(d).expanduser() for d in vscode_chat_dirs]
-            if vscode_chat_dirs is not None
-            else []
-        )
-        if any(d.is_dir() for d in vscode_dirs):
+        if vscode_chat_dirs is not None:
+            vscode_dirs = [Path(d).expanduser() for d in vscode_chat_dirs]
             _index_vscode_chat_dirs(con, vscode_dirs, stats)
         con.commit()
     finally:

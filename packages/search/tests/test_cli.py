@@ -9,10 +9,12 @@ from conftest import (
     add_vscode_chat,
     codex_record,
     copilot_event,
+    lock_db_exclusively,
     msg,
     vscode_request,
 )
 from devin_search.cli import main
+from devin_search.index import index_doc_count
 
 
 def test_index_then_query_end_to_end(db_path, acp_dir, tmp_path, capsys):
@@ -147,6 +149,62 @@ def test_missing_sessions_db_exit_2(tmp_path, capsys):
     )
     assert rc == 2
     assert "no such file" in capsys.readouterr().err
+
+
+def test_index_corrupt_sessions_db_exit_2(tmp_path, capsys):
+    """A corrupt input store is a controlled error line, not a traceback."""
+    bad = tmp_path / "bad.db"
+    bad.write_bytes(b"junk junk junk")
+    rc = main(
+        [
+            "index",
+            "--sessions-db", str(bad),
+            "--index", str(tmp_path / "s.db"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "devin-search:" in err
+    assert "Traceback" not in err
+
+
+def test_index_locked_sessions_db_exit_2(db_path, tmp_path, capsys):
+    """SQLITE_BUSY input likewise reports as an error line, not a crash."""
+    holder = lock_db_exclusively(db_path)
+    try:
+        rc = main(
+            [
+                "index",
+                "--sessions-db", str(db_path),
+                "--index", str(tmp_path / "s.db"),
+            ]
+        )
+    finally:
+        holder.rollback()
+        holder.close()
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "devin-search:" in err
+    assert "Traceback" not in err
+
+
+def test_auto_detected_vanished_source_sweeps_stale_docs(
+    db_path, tmp_path, capsys
+):
+    """Auto-detect manages every surface: a store that vanished wholesale
+    still sweeps its stale docs rather than early-exiting on 'no stores
+    found' with the old index intact."""
+    idx = tmp_path / "search.db"
+    rc = main(["index", "--sessions-db", str(db_path), "--index", str(idx)])
+    assert rc == 0
+    capsys.readouterr()
+
+    db_path.unlink()
+    rc = main(["index", "--index", str(idx)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "removed" in out
+    assert index_doc_count(idx) == 0
 
 
 def test_no_stores_found_exit_2(tmp_path, capsys, monkeypatch):

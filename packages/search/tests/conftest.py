@@ -13,17 +13,21 @@ BASE_ISO = "2026-05-28T20:26:40Z"  # == BASE_MS
 
 
 @pytest.fixture(autouse=True)
-def _no_store_autodiscovery(monkeypatch):
+def _no_store_autodiscovery(monkeypatch, tmp_path):
     """Deterministic tests: never auto-detect this machine's real stores.
 
     The index command auto-detects sessions.db/acp/copilot/codex/
     vscode-chat locations when no flag is given; the dev box and CI
     runners may actually have some of them installed.
     """
+    absent = [tmp_path / "no-such-store"]
     monkeypatch.setattr("devin_search.cli.default_sessions_db", lambda: None)
+    monkeypatch.setattr("devin_search.cli.sessions_db_candidates", lambda: absent)
     monkeypatch.setattr("devin_search.cli.default_acp_dir", lambda: None)
+    monkeypatch.setattr("devin_search.cli.acp_dir_candidates", lambda: absent)
     monkeypatch.setattr("devin_search.cli.default_copilot_dirs", list)
     monkeypatch.setattr("devin_search.cli.default_codex_dir", lambda: None)
+    monkeypatch.setattr("devin_search.cli.codex_root_candidates", lambda: absent)
     monkeypatch.setattr("devin_search.cli.default_vscode_chat_dirs", list)
 
 
@@ -41,6 +45,19 @@ def acp_dir(tmp_path):
 
 def msg(role, text, **extra):
     return {"role": role, "text": text, **extra}
+
+
+def lock_db_exclusively(path: Path) -> sqlite3.Connection:
+    """Hold an EXCLUSIVE lock on ``path`` (rollback-journal mode) so other
+    connections hit SQLITE_BUSY. Caller must keep the returned connection
+    open."""
+    con = sqlite3.connect(path)
+    con.execute("PRAGMA journal_mode=DELETE")
+    con.execute("BEGIN EXCLUSIVE")
+    con.execute(
+        "INSERT INTO app_state(key, value) VALUES ('fixture.lock', '1')"
+    )
+    return con
 
 
 def add_session(
