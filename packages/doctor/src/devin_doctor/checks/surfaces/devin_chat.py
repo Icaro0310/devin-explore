@@ -264,7 +264,7 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
         with StateVscdbStore(path) as store:
             n_keys = store.counts()["ItemTable"]
             n_ws = len(store.list_prefix())
-    except (SchemaError, OSError, sqlite3.Error):
+    except SchemaError:
         return [
             Finding(
                 CHECK_ID,
@@ -274,6 +274,21 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
                 "version the spec does not know.",
                 rung="schema",
                 code="schema-unknown",
+            )
+        ]
+    except (sqlite3.Error, OSError) as exc:
+        # the file opened but its pages can't be read — that is a
+        # damaged store, not a foreign shape: FAIL store-corrupt
+        return [
+            Finding(
+                CHECK_ID,
+                Status.FAIL,
+                f"state.vscdb present ({human_size(size)}) but its "
+                f"tables cannot be read: {exc}",
+                fix="Store-corrupt — restore from backup or reinstall "
+                "Devin Desktop.",
+                rung="readable",
+                code="store-corrupt",
             )
         ]
     return [

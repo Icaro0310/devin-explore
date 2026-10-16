@@ -48,20 +48,25 @@ def _state_files(root: Path) -> list[Path]:
         return []
 
 
-def _pick_state_db(state_files: list[Path]) -> tuple[Path, bool] | None:
-    """``(path, numeric_suffix)`` — largest N wins; a purely non-numeric
-    set falls back to the lexicographic last (its N is unparseable →
-    schema rung flags it unknown)."""
+def _pick_state_db(
+    state_files: list[Path],
+) -> tuple[Path, bool, list[Path]] | None:
+    """``(path, numeric_suffix, nonnumeric)`` — largest N wins; a purely
+    non-numeric set falls back to the lexicographic last (its N is
+    unparseable → schema rung flags it unknown). ``nonnumeric`` carries
+    every ``state_*.sqlite`` whose suffix is not numeric — coexisting
+    foreign artifacts that still owe a schema-unknown WARN."""
     numeric = [
         (int(m.group(1)), p)
         for p in state_files
         if (m := _STATE_RE.match(p.name))
     ]
+    nonnumeric = [p for p in state_files if not _STATE_RE.match(p.name)]
     if numeric:
         _n, path = max(numeric, key=lambda t: t[0])
-        return path, True
+        return path, True, nonnumeric
     if state_files:
-        return state_files[-1], False
+        return state_files[-1], False, nonnumeric
     return None
 
 
@@ -101,12 +106,16 @@ def _sessions_dir() -> Path | None:
     return path if path.is_dir() else None
 
 
-def _classify_rollouts(rollouts: list[Path]) -> tuple[list[str], list[Path]]:
-    """``(unreadable names, live paths)`` — zero-byte or record-less logs
-    are empty artifacts, a terminated line that fails to parse is
-    corruption (readable FAIL)."""
+def _classify_rollouts(
+    rollouts: list[Path],
+) -> tuple[list[str], list[Path], list[Path]]:
+    """``(unreadable names, live paths, dead paths)`` — a terminated line
+    that fails to parse is corruption (readable FAIL); zero-byte or
+    record-less logs are dead artifacts the sane rung must still flag as
+    empty-store even when a healthy state db exists."""
     unreadable: list[str] = []
     live: list[Path] = []
+    dead: list[Path] = []
     for path in rollouts:
         try:
             size = path.stat().st_size
@@ -114,18 +123,22 @@ def _classify_rollouts(rollouts: list[Path]) -> tuple[list[str], list[Path]]:
             unreadable.append(path.name)
             continue
         if size == 0:
-            continue  # empty artifact — sane owns it
+            dead.append(path)
+            continue
         scan = scan_jsonl(path)
-        if not scan.ok or scan.records == 0:
-            # terminated malformed line → corrupt; whitespace-only or a
-            # single unterminated partial → nothing computable (an
-            # unterminated-only file can't be told apart from a writer
-            # mid-append of its first record — WARN, not FAIL).
-            if not scan.ok:
-                unreadable.append(path.name)
+        if not scan.ok:
+            # terminated malformed line → corrupt
+            unreadable.append(path.name)
+            continue
+        if scan.records == 0:
+            # whitespace-only or a single unterminated partial — nothing
+            # computable (an unterminated-only file can't be told apart
+            # from a writer mid-append of its first record — WARN, not
+            # FAIL).
+            dead.append(path)
             continue
         live.append(path)
-    return unreadable, live
+    return unreadable, live, dead
 
 
 def _state_ladder(
@@ -275,7 +288,7 @@ def run(ctx: Context) -> list[Finding]:
                 )
             )
             return findings
-        unreadable, live = _classify_rollouts(rollouts)
+        unreadable, live, _dead = _classify_rollouts(rollouts)
         if unreadable:
             shown = ", ".join(unreadable[:3]) + (
                 " …" if len(unreadable) > 3 else ""
@@ -330,10 +343,30 @@ def run(ctx: Context) -> list[Finding]:
         ]
         return findings
 
-    state, numeric = picked
+    state, numeric, nonnumeric = picked
     readable, schema, marker = _state_ladder(state, numeric)
     if readable is not None and readable.status is Status.FAIL:
         findings.append(readable)
+        return findings
+    # rollouts join the readable verdict: a malformed terminated line is
+    # corruption whatever the state db says
+    unreadable, live_rollouts, dead_rollouts = _classify_rollouts(rollouts)
+    if unreadable:
+        shown = ", ".join(unreadable[:3]) + (
+            " …" if len(unreadable) > 3 else ""
+        )
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.FAIL,
+                f"{len(unreadable)}/{len(rollouts)} rollout file(s) "
+                f"unreadable ({shown})",
+                fix="Store-corrupt — a log line is not JSON; the file "
+                "was truncated mid-write or damaged.",
+                rung="readable",
+                code="store-corrupt",
+            )
+        )
         return findings
     if isinstance(marker, str):  # "empty" — zero-byte state db
         findings.append(
@@ -352,34 +385,48 @@ def run(ctx: Context) -> list[Finding]:
     findings.append(schema)
     if schema is not None and schema.status is Status.FAIL:
         return findings
-
-    # sane — the state db's threads count; a rollout presence counts as a
-    # used signal when threads can't answer (§4.4).
-    unreadable, live_rollouts = _classify_rollouts(rollouts)
-    n_threads = marker if isinstance(marker, int) else None
-    if unreadable:
-        shown = ", ".join(unreadable[:3]) + (
-            " …" if len(unreadable) > 3 else ""
+    if nonnumeric:
+        # state_*.sqlite files without a numeric suffix — foreign
+        # artifacts the schema rung must flag, not silently ignore
+        shown = ", ".join(p.name for p in nonnumeric[:3]) + (
+            " …" if len(nonnumeric) > 3 else ""
         )
-        # surfaced at sane — the state db already passed readable
         findings.append(
             Finding(
                 CHECK_ID,
-                Status.FAIL,
-                f"{len(unreadable)}/{len(rollouts)} rollout file(s) "
-                f"unreadable ({shown})",
-                fix="Store-corrupt — a log line is not JSON; the file "
-                "was truncated mid-write or damaged.",
-                rung="sane",
-                code="store-corrupt",
+                Status.WARN,
+                f"{len(nonnumeric)} non-numeric state db name(s) — "
+                f"unrecognized layout ({shown})",
+                fix="Written by a codex-cli newer/older than the spec "
+                "knows — report it if the surface matters.",
+                rung="schema",
+                code="schema-unknown",
             )
         )
-        return findings
-    if n_threads is None and not rollouts:
+
+    # sane — one verdict: dead rollout artifacts WARN empty-store even
+    # beside a healthy state db; then the threads count / rollout
+    # presence answers "plausibly used" (§4.4).
+    n_threads = marker if isinstance(marker, int) else None
+    if dead_rollouts:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"{len(dead_rollouts)} rollout file(s) with no usable "
+                "records — empty-store",
+                fix="Zero-byte, whitespace-only or mid-append partial "
+                "files were never written to completion — safe to "
+                "delete or ignore.",
+                rung="sane",
+                code="empty-store",
+            )
+        )
+    elif n_threads is None and not rollouts:
         # no countable signal — schema-unknown shape with nothing else;
         # a rung with nothing to evaluate emits no finding
         return findings
-    if n_threads == 0 and not live_rollouts:
+    elif n_threads == 0 and not live_rollouts:
         findings.append(
             Finding(
                 CHECK_ID,

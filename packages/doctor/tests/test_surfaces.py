@@ -250,6 +250,36 @@ def test_devin_chat_zero_byte_db_warns(ctx):
     assert f.code == "empty-store"
 
 
+def test_devin_chat_corrupt_vscdb_fails(tmp_path):
+    """A state.vscdb whose pages can't be read is store-corrupt FAIL —
+    a damaged store, not a foreign shape (Devin Review). The file keeps
+    a readable sqlite_master (page 1 intact) so the failure surfaces
+    while the spec store reads its tables, exercising the
+    sqlite3.Error → corrupt reclassification."""
+    root = tmp_path / "devin"
+    root.mkdir()
+    donor = root / "donor.db"
+    con = sqlite3.connect(donor)
+    con.execute("CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value BLOB)")
+    con.executemany(
+        "INSERT INTO ItemTable VALUES (?, ?)",
+        [(f"k{i}", b"x" * 4000) for i in range(50)],
+    )
+    con.commit()
+    con.close()
+    data = bytearray(donor.read_bytes())
+    data[8192:12288] = b"\xde\xad" * 2048  # corrupt a mid-file page
+    path = root / "User" / "globalStorage" / "state.vscdb"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(bytes(data))
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    findings = devin_chat.run(ctx)
+    f = _finding(findings, "state.vscdb")
+    assert f.status is Status.FAIL
+    assert f.code == "store-corrupt"
+    assert f.rung == "readable"
+
+
 def test_devin_chat_detected_by_vscdb_alone(tmp_path):
     root = tmp_path / "devin"
     create_state_vscdb(root / "User" / "globalStorage" / "state.vscdb")
@@ -493,6 +523,27 @@ def test_codex_largest_n_wins(_hermetic_surfaces):
     assert "state_4.sqlite" in f.message
 
 
+def test_codex_nonnumeric_state_warns_schema_unknown(_hermetic_surfaces):
+    """A ``state_*.sqlite`` without a numeric suffix is a foreign
+    artifact — schema-unknown WARN, even when a numeric db is selected
+    (Devin Review: precedence must not silence it)."""
+    root = add_codex_home(
+        _hermetic_surfaces / ".codex",
+        state_n=4,
+        threads=[{"id": "t-1"}],
+    )
+    con = sqlite3.connect(root / "state_foo.sqlite")
+    con.execute("CREATE TABLE threads (id TEXT PRIMARY KEY)")
+    con.close()
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    # the numeric db is still selected for the ladder
+    assert "state_4.sqlite" in _finding(findings, "opens read-only").message
+    f = _finding(findings, "state_foo")
+    assert f.status is Status.WARN
+    assert f.rung == "schema"
+    assert f.code == "schema-unknown"
+
+
 def test_codex_rollouts_without_state(_hermetic_surfaces):
     add_codex_home(
         _hermetic_surfaces / ".codex",
@@ -517,6 +568,25 @@ def test_codex_zero_byte_rollout_warns(_hermetic_surfaces):
     assert f.status is Status.WARN
     # and it is not counted as a readable rollout
     assert all("readable" not in f.message for f in findings)
+
+
+def test_codex_zero_byte_rollout_with_state_warns(_hermetic_surfaces):
+    """A healthy state db must not silence an empty rollout — the sane
+    verdict is WARN empty-store, not PASS (Devin Review)."""
+    add_codex_home(
+        _hermetic_surfaces / ".codex",
+        state_n=4,
+        threads=[{"id": "t-1"}],
+        rollouts=[("sessions/rollout-dead.jsonl", [])],
+    )
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    f = _finding(findings, "empty-store")
+    assert f.status is Status.WARN
+    assert f.rung == "sane"
+    assert f.code == "empty-store"
+    # the sane rung emits exactly one verdict — no hidden PASS beside it
+    sane = [g for g in findings if g.rung == "sane"]
+    assert sane == [f]
 
 
 def test_codex_whitespace_rollout_warns(_hermetic_surfaces):
