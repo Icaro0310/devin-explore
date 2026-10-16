@@ -168,5 +168,8 @@ jobs:
       - name: Attach .vsix to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh resolves the repo from the git remote when GH_REPO is
+          # unset — there is no checkout in this job, so name it.
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: gh release upload "$RELEASE_TAG" vsix/*.vsix --clobber
