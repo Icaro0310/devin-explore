@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-10-16
+
+### Changed
+
+- `devin-doctor-cli` compatibility range widened to `>=0.1,<0.4` for the
+  0.3.x CLI line (surface-health ladder); the README's documented range
+  is corrected to match (it had drifted behind the real pin).
+
 ## [0.2.0]
 
 ### Security

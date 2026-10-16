@@ -7,6 +7,11 @@
   collectors + index format v2). The extension's `devin-search-cli`
   compatibility ceiling widened to `>=0.1,<0.3` so it accepts the
   matched 0.2.x CLI (contract test updated).
+- **Release** — `devin-doctor` bumped to 0.3.0 across pyproject,
+  `__version__`, `package.json` and `plugin.json` (agent-environment
+  surface-health ladder). The extension's `devin-doctor-cli`
+  compatibility ceiling widened to `>=0.1,<0.4` so it accepts the
+  matched 0.3.x CLI (contract test updated).
 - **MCP** — every `*-mcp` serve entry point now keeps the traceback for
   startup `ImportError`s from `.run()`; only app-build failures get the
   missing-extra hint (exit 1).

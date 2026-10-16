@@ -62,8 +62,9 @@ test("cliCompatStatus classifies versions against the pinned range", () => {
   assert.strictEqual(cliCompatStatus("0.1.0"), "compatible");
   assert.strictEqual(cliCompatStatus("0.1.9"), "compatible");
   assert.strictEqual(cliCompatStatus("0.2.0"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.3.0"), "compatible");
   assert.strictEqual(cliCompatStatus("0.0.9"), "too-old");
-  assert.strictEqual(cliCompatStatus("0.3.0"), "too-new");
+  assert.strictEqual(cliCompatStatus("0.4.0"), "too-new");
   assert.strictEqual(cliCompatStatus("1.0.0"), "too-new");
   assert.strictEqual(cliCompatStatus(""), "unknown");
   assert.strictEqual(cliCompatStatus("not-a-version"), "unknown");
