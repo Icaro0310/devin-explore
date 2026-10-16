@@ -53,12 +53,13 @@ def test_acp_accumulation_warns(ctx):
     assert f.status is Status.WARN
 
 
-def test_missing_data_dir_fails(tmp_path):
+def test_missing_data_dir_is_not_detected(tmp_path):
+    """No Devin data at all — the check emits nothing and the report lists
+    it under 'not detected' instead of hard-failing."""
     from devin_doctor.model import Context
 
     ctx = Context(data_dir=tmp_path / "nope", cwd=tmp_path)
-    findings = disk.run(ctx)
-    assert findings[0].status is Status.FAIL
+    assert disk.run(ctx) == []
 
 
 def test_uncapped_run_has_no_cap_markers(ctx):

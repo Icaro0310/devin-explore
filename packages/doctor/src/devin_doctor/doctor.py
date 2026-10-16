@@ -3,22 +3,46 @@
 ``run_all`` executes every registered check (a crashing check degrades to a
 FAIL finding instead of aborting the run). Renderers produce the three
 output shapes: text lines, the ``--json`` contract, and a markdown report.
+
+The report has two sections: 'surfaces' — one block per agent session
+surface that ran, undetected surfaces collapsed to a 'not detected' line —
+and 'devin environment' for the checks that diagnose the local Devin
+install itself.
 """
 
 from __future__ import annotations
 
 import json
 import platform
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 import devin_doctor
-from devin_doctor.checks import CHECKS
+from devin_doctor.checks import DEVIN_CHECKS, SURFACES
 from devin_doctor.model import Context, Finding, Report, Status, platform_name
 
 
-def run_all(ctx: Context) -> Report:
-    report = Report()
-    for check in CHECKS:
+def run_all(ctx: Context, *, surfaces: Sequence[str] | None = None) -> Report:
+    """Run every check; ``surfaces`` scopes the surface checks by name.
+
+    The Devin-environment checks always run unscoped — ``--surface``
+    narrows only the agent-surface ladder. Unknown surface names raise
+    ``ValueError`` (the CLI's argparse ``choices`` catches them first;
+    the MCP tool surfaces it as an ``{error, detail}`` reply).
+    """
+    known = {m.CHECK_ID for m in SURFACES}
+    if surfaces is not None:
+        unknown = [name for name in surfaces if name not in known]
+        if unknown:
+            raise ValueError(
+                f"unknown surface(s): {', '.join(unknown)} — known: "
+                + ", ".join(m.CHECK_ID for m in SURFACES)
+            )
+        selected = [m for m in SURFACES if m.CHECK_ID in surfaces]
+    else:
+        selected = list(SURFACES)
+    report = Report(surfaces_checked=[m.CHECK_ID for m in selected])
+    for check in [*selected, *DEVIN_CHECKS]:
         try:
             report.findings += check.run(ctx)
         except Exception as exc:  # noqa: BLE001 — a doctor must not die
@@ -38,17 +62,48 @@ def exit_code(report: Report) -> int:
     return 1 if report.overall is Status.FAIL else 0
 
 
+def _finding_lines(report: Report, check_id: str, indent: str) -> list[str]:
+    lines: list[str] = []
+    for f in report.findings:
+        if f.check != check_id:
+            continue
+        lines.append(f"{indent}{f.status.value:<4}  {f.message}")
+        if f.fix and f.status is not Status.PASS:
+            lines.append(f"{indent}      fix: {f.fix}")
+    return lines
+
+
 def render_text(report: Report) -> str:
     lines: list[str] = []
     check_status = report.check_status()
-    for check_id, status in check_status.items():
-        lines.append(f"{check_id} — {status}")
-        for f in report.findings:
-            if f.check != check_id:
+    if report.surfaces_checked:
+        surface_set = set(report.surfaces_checked)
+        lines.append("surfaces")
+        for name in report.surfaces_checked:
+            if name not in check_status:
                 continue
-            lines.append(f"  {f.status.value:<4}  {f.message}")
-            if f.fix and f.status is not Status.PASS:
-                lines.append(f"        fix: {f.fix}")
+            lines.append(f"  {name} — {check_status[name]}")
+            lines += _finding_lines(report, name, "    ")
+        missing = [n for n in report.surfaces_checked if n not in check_status]
+        if missing:
+            lines.append(f"  not detected: {', '.join(missing)}")
+        lines.append("")
+        lines.append("devin environment")
+        for check_id, status in check_status.items():
+            if check_id in surface_set:
+                continue
+            lines.append(f"  {check_id} — {status}")
+            lines += _finding_lines(report, check_id, "    ")
+        absent = [
+            c.CHECK_ID for c in DEVIN_CHECKS if c.CHECK_ID not in check_status
+        ]
+        if absent:
+            lines.append(f"  not detected: {', '.join(absent)}")
+    else:
+        # Legacy flat rendering — no surface check ran.
+        for check_id, status in check_status.items():
+            lines.append(f"{check_id} — {status}")
+            lines += _finding_lines(report, check_id, "  ")
     counts = report.counts()
     lines.append("")
     lines.append(
@@ -59,6 +114,7 @@ def render_text(report: Report) -> str:
 
 
 def render_json(report: Report, ctx: Context) -> str:
+    check_status = report.check_status()
     payload = {
         "tool": "devin-doctor",
         "version": devin_doctor.__version__,
@@ -68,14 +124,28 @@ def render_json(report: Report, ctx: Context) -> str:
         "cwd": str(ctx.cwd),
         "overall": report.overall.value,
         "summary": report.counts(),
-        "checks": report.check_status(),
+        "checks": check_status,
         "findings": [f.as_dict() for f in report.findings],
     }
+    if report.surfaces_checked:
+        payload["surfaces"] = {
+            "detected": {
+                name: check_status[name]
+                for name in report.surfaces_checked
+                if name in check_status
+            },
+            "not_detected": [
+                name
+                for name in report.surfaces_checked
+                if name not in check_status
+            ],
+        }
     return json.dumps(payload, indent=2)
 
 
 def render_markdown(report: Report, ctx: Context) -> str:
     counts = report.counts()
+    check_status = report.check_status()
     lines = [
         "# devin-doctor report",
         "",
@@ -86,6 +156,18 @@ def render_markdown(report: Report, ctx: Context) -> str:
         f"- project dir: `{ctx.cwd}`",
         (f"- **overall: {report.overall.value}** "
          f"({counts['pass']} PASS / {counts['warn']} WARN / {counts['fail']} FAIL)"),
+    ]
+    if report.surfaces_checked:
+        lines += ["", "## surfaces", ""]
+        for name in report.surfaces_checked:
+            if name in check_status:
+                lines.append(f"- **{name}** — {check_status[name]}")
+        missing = [
+            n for n in report.surfaces_checked if n not in check_status
+        ]
+        if missing:
+            lines.append(f"- not detected: {', '.join(missing)}")
+    lines += [
         "",
         "| check | status | finding |",
         "|---|---|---|",

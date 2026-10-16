@@ -15,12 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Agent-environment surface health: `check`/`report`/`plan` now run the
+  same four-rung ladder (present → readable → schema → sane) once per
+  agent session surface on the machine — `devin-cli`
+  (`cli/sessions.db`), `devin-chat` (`acp-messages/*.db` +
+  `state.vscdb`), `copilot-cli` (`session-state`/`history-session-state`
+  event logs), `codex-cli` (`state_<N>.sqlite` + rollout JSONL) and
+  `vscode-chat` (`chatSessions/*.json{,l}`). An absent surface emits no
+  findings and groups under `not detected` — an uninstalled agent is a
+  valid environment, never a failure. Privacy doctrine is strict:
+  headers/metadata only — counts, sizes, paths, statuses; never message
+  content.
+- `--surface NAME` (repeatable, `check`/`report`/`plan` and the MCP
+  `doctor_check` tool) scopes the surface ladder; the Devin-environment
+  checks always run unscoped. The report gains a `surfaces` section
+  (one line per surface) and `--json` gains a `surfaces` object
+  (`detected`/`not_detected`).
 - `check`/`report`/`plan` gain `--offline`, equivalent to
   `DEVIN_DOCTOR_OFFLINE=1`: the `updates` check skips its manifest fetch
   and the run stays fully local. Backs the repo's new `devin-doctor-gate`
   pre-commit hook (`devin-doctor check --offline`).
 
 ### Changed
+
+- The old `stores`/`schema` checks re-home under the `devin-cli` surface
+  (`checks/surfaces/`); the report groups remaining checks
+  (`health-of-data`, `config`, `hooks-windows`, `disk`, `updates`) under
+  `devin environment`. With no Devin stores at all these now report
+  not-detected/PASS rather than hard `FAIL`s, so the tool stays useful
+  on machines that only run other agents.
+- Devin schema verdicts soften: an out-of-range or unknown
+  `sessions.db` schema is `WARN schema-unknown` (counts still run)
+  instead of a `FAIL` verdict, matching the per-surface doctrine.
 
 - `disk` check: the data-dir walk is now bounded (250k files / 45s) and
   single-stat per file via `os.scandir` — multi-million-file data dirs

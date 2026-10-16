@@ -64,7 +64,7 @@ def test_check_scan_offline(ctx, capsys):
     ])
     out = capsys.readouterr().out
     assert rc == 0
-    for check_id in ("stores", "schema", "health-of-data", "config"):
+    for check_id in ("devin-cli", "devin-chat", "health-of-data", "config"):
         assert check_id in out
 
 

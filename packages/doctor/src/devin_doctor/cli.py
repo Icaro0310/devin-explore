@@ -1,8 +1,11 @@
 """Thin CLI wrapper — all logic lives in the library modules.
 
-- ``devin-doctor check [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--json]``
-- ``devin-doctor report [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--md|--json]``
+- ``devin-doctor check [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--surface NAME] [--json]``
+- ``devin-doctor report [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--surface NAME] [--md|--json]``
 - ``devin-doctor capabilities [--config-dir P] [--probe-network]``
+
+``--surface NAME`` (check/report/plan) scopes the agent-surface checks to
+one surface — the Devin-environment checks always run unscoped.
 
 ``--offline`` (check/report/plan) pins ``DEVIN_DOCTOR_OFFLINE=1`` for the
 run, so the updates check skips its manifest fetch and nothing touches
@@ -23,6 +26,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from devin_doctor import capabilities, doctor
+from devin_doctor.checks.surfaces import SURFACE_NAMES
 from devin_doctor.model import Context
 from devin_doctor.paths import default_config_dir, default_data_dir
 
@@ -60,6 +64,15 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="skip every check that needs the network — equivalent to "
         "DEVIN_DOCTOR_OFFLINE=1 (the updates check self-skips when the "
         "registry is unreachable either way)",
+    )
+    p.add_argument(
+        "--surface",
+        action="append",
+        choices=SURFACE_NAMES,
+        metavar="NAME",
+        help="scope the agent-surface checks to NAME (repeatable; one of "
+        + ", ".join(SURFACE_NAMES)
+        + "). Devin-environment checks always run unscoped.",
     )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
@@ -143,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else default_config_dir() if args.data_dir is None else None
         ),
     )
-    report = doctor.run_all(ctx)
+    report = doctor.run_all(ctx, surfaces=args.surface)
     if args.command == "plan":
         if args.json:
             print(json.dumps(

@@ -27,6 +27,7 @@ def do_check(
     config_dir: str | None = None,
     cwd: str | None = None,
     stale_days: int = 30,
+    surface: str = "",
     *,
     offline: bool = False,
     now_ms: int | None = None,
@@ -40,9 +41,11 @@ def do_check(
     call through ``Context.offline`` — it never touches
     ``DEVIN_DOCTOR_OFFLINE``/``os.environ``, so concurrent online calls
     are unaffected — and skips the updates check's network fetch and
-    PATH probes, which can stall an MCP call for seconds. ``now_ms``
-    is injectable so tests can pin "today"; unlike ``offline`` it is
-    not exposed through the MCP tool.
+    PATH probes, which can stall an MCP call for seconds. ``surface``
+    scopes the agent-surface checks the way ``--surface`` does (one name
+    or a comma-separated list); the Devin-environment checks always run
+    unscoped. ``now_ms`` is injectable so tests can pin "today"; unlike
+    ``offline`` it is not exposed through the MCP tool.
     """
     ctx = Context(
         data_dir=Path(data_dir) if data_dir else default_data_dir(),
@@ -56,7 +59,12 @@ def do_check(
         ),
         offline=offline,
     )
-    report = doctor.run_all(ctx)
+    surfaces = (
+        [s.strip() for s in surface.split(",") if s.strip()]
+        if surface
+        else None
+    )
+    report = doctor.run_all(ctx, surfaces=surfaces)
     return json.loads(doctor.render_json(report, ctx))
 
 
@@ -112,13 +120,18 @@ def build_server():
         config_dir: str = "",
         cwd: str = "",
         stale_days: int = 30,
+        surface: str = "",
         offline: bool = False,
     ) -> dict:
-        """Diagnose the local Devin installation — stores, schema versions,
-        data health, config sanity, disk usage — and return the same JSON
-        as ``devin-doctor check --json``. Read-only: never modifies state,
-        only reports findings with fix suggestions. ``offline=True`` skips
-        the updates check's network fetch and PATH probes.
+        """Diagnose the local agent environment — one health ladder per
+        session surface (devin-cli, devin-chat, copilot-cli, codex-cli,
+        vscode-chat) plus the Devin-environment checks — and return the
+        same JSON as ``devin-doctor check --json``. Read-only: never
+        modifies state, only reports findings with fix suggestions.
+        ``surface`` scopes the surface checks (one name or a
+        comma-separated list; the Devin checks always run).
+        ``offline=True`` skips the updates check's network fetch and PATH
+        probes.
         """
         try:
             return do_check(
@@ -126,6 +139,7 @@ def build_server():
                 config_dir=config_dir or None,
                 cwd=cwd or None,
                 stale_days=stale_days,
+                surface=surface,
                 offline=offline,
             )
         except Exception as error:  # noqa: BLE001 — tool boundary must not raise
