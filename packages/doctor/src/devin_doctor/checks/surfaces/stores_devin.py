@@ -3,17 +3,18 @@
 Re-home of the original ``stores`` + ``schema`` checks for the Devin CLI
 store — the same detection logic (``detect_schema_version`` /
 ``SessionsStore`` from devin-internals-spec), now expressed as the shared
-surface ladder: present → readable → schema → sane.
+surface ladder: present → readable → schema → sane (SURFACE-HEALTH §2).
+Every finding carries its ``rung`` plus the §5 ``code`` on WARN/FAIL.
 
 Absence is not failure: when the Devin data dir itself is missing the
-surface is simply not detected and the check emits no findings.
+surface emits a single ``present PASS / not-installed`` finding — the
+report groups those under 'not detected'.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 from devin_internals import detect_schema_version
 from devin_internals.parsers import SessionsStore
@@ -41,7 +42,7 @@ _UPDATE_FIX = (
 )
 
 
-def _readable(path: Path) -> str | None:
+def _readable_error(path: Path) -> str | None:
     """``None`` when the store opens read-only and looks like SQLite —
     else the error string a FAIL finding reports."""
     if not has_sqlite_magic(path):
@@ -59,44 +60,92 @@ def _readable(path: Path) -> str | None:
     return None
 
 
-def _schema_finding(path: Path) -> Finding:
+def _schema_finding(path: Path) -> tuple[Finding, bool]:
+    """The ``schema`` rung finding plus whether the spec store can parse
+    the db (drives the ``sane`` rung's count strategy)."""
     try:
-        info: dict[str, Any] = detect_schema_version(path)
+        info = detect_schema_version(path)
     except UnknownSchemaVersionError as exc:
-        return Finding(
-            CHECK_ID,
-            Status.WARN,
-            f"sessions.db schema v{exc.version} — unknown (known range "
-            f"{MIN_SUPPORTED_SCHEMA}..{LATEST_KNOWN_SCHEMA})",
-            fix=_UPDATE_FIX,
+        return (
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"sessions.db schema v{exc.version} — unknown (known range "
+                f"{MIN_SUPPORTED_SCHEMA}..{LATEST_KNOWN_SCHEMA})",
+                fix=_UPDATE_FIX,
+                rung="schema",
+                code="schema-unknown",
+            ),
+            False,
         )
     except SchemaError as exc:
-        return Finding(
-            CHECK_ID,
-            Status.FAIL,
-            f"sessions.db schema detection failed: {exc}",
-            fix="The file is missing the migration ledger — is it really a "
-            "Devin sessions.db?",
+        # §4.1: a missing/empty ledger is schema-unknown, never a FAIL —
+        # the file opened fine (readable passed) but carries no version
+        # marker we can classify.
+        return (
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"sessions.db has no readable schema version ({exc}) — "
+                "schema-unknown",
+                fix="The file is missing the migration ledger — is it "
+                "really a Devin sessions.db?",
+                rung="schema",
+                code="schema-unknown",
+            ),
+            False,
         )
     except (sqlite3.Error, OSError) as exc:
-        return Finding(
-            CHECK_ID,
-            Status.FAIL,
-            f"sessions.db is not a readable database: {exc}",
-            fix="File looks corrupt — restore from backup or reinstall Devin.",
+        # readable passed (file opened + table list) yet schema evaluation
+        # hit a sqlite error — corruption surfacing at this layer
+        return (
+            Finding(
+                CHECK_ID,
+                Status.FAIL,
+                f"sessions.db schema evaluation failed: {exc}",
+                fix="Store-corrupt — restore from backup or reinstall "
+                "Devin.",
+                rung="schema",
+                code="store-corrupt",
+            ),
+            False,
         )
     version = info["schema_version"]
     if not info["supported"]:
-        return Finding(
-            CHECK_ID,
-            Status.WARN,
-            f"sessions.db schema v{version} — known but unsupported "
-            f"(supported: {MIN_SUPPORTED_SCHEMA}..{LATEST_KNOWN_SCHEMA})",
-            fix=_UPDATE_FIX,
+        if version < MIN_SUPPORTED_SCHEMA:
+            return (
+                Finding(
+                    CHECK_ID,
+                    Status.WARN,
+                    f"sessions.db schema v{version} — below the supported "
+                    f"floor ({MIN_SUPPORTED_SCHEMA}); migrations pending",
+                    fix="Let Devin run its migrations once, then re-check.",
+                    rung="schema",
+                    code="schema-old",
+                ),
+                False,
+            )
+        return (
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"sessions.db schema v{version} — known but unsupported "
+                f"(supported: {MIN_SUPPORTED_SCHEMA}..{LATEST_KNOWN_SCHEMA})",
+                fix=_UPDATE_FIX,
+                rung="schema",
+                code="schema-unknown",
+            ),
+            False,
         )
     suffix = "latest known" if info["verified"] else "supported"
-    return Finding(
-        CHECK_ID, Status.PASS, f"sessions.db schema v{version} ({suffix})"
+    return (
+        Finding(
+            CHECK_ID,
+            Status.PASS,
+            f"sessions.db schema v{version} ({suffix})",
+            rung="schema",
+        ),
+        True,
     )
 
 
@@ -131,18 +180,30 @@ def _sane_finding(path: Path, supported: bool) -> Finding | None:
             "sessions.db contains 0 sessions — installed but unused",
             fix="Fresh install or wiped store — run a Devin session and "
             "re-check.",
+            rung="sane",
+            code="store-empty",
         )
     nodes = counts.get("message_nodes", 0)
     return Finding(
         CHECK_ID,
         Status.PASS,
         f"{n_sessions} sessions, {nodes} message_nodes",
+        rung="sane",
     )
 
 
 def run(ctx: Context) -> list[Finding]:
     if not ctx.data_dir.is_dir():
-        return []  # not detected — an uninstalled surface is valid
+        # not installed — an uninstalled surface is valid (§3.1)
+        return [
+            Finding(
+                CHECK_ID,
+                Status.PASS,
+                "no Devin data root — devin-cli not installed",
+                rung="present",
+                note="not-installed",
+            )
+        ]
     path = sessions_db_path(ctx.data_dir)
     if not path.is_file():
         return [
@@ -153,40 +214,59 @@ def run(ctx: Context) -> list[Finding]:
                 fix="The data dir exists but the CLI store was never created "
                 "— the CLI may not have run here; safe to ignore for "
                 "Desktop-only use.",
+                rung="present",
+                code="store-missing",
             )
         ]
     size = path.stat().st_size
+    findings = [
+        Finding(
+            CHECK_ID,
+            Status.PASS,
+            f"sessions.db present — {human_size(size)}",
+            rung="present",
+        )
+    ]
     if size == 0:
-        return [
+        findings.append(
             Finding(
                 CHECK_ID,
                 Status.WARN,
                 "sessions.db is empty (0 B) — installed but unused",
                 fix="A zero-byte store is not corrupt — the CLI just never "
                 "wrote to it.",
+                rung="sane",
+                code="empty-store",
             )
-        ]
-    error = _readable(path)
+        )
+        return findings
+    error = _readable_error(path)
     if error is not None:
-        return [
+        findings.append(
             Finding(
                 CHECK_ID,
                 Status.FAIL,
-                f"sessions.db present ({human_size(size)}) but unreadable: "
-                f"{error}",
-                fix="Store-corrupt — restore from backup or reinstall Devin.",
+                f"sessions.db unreadable: {error}",
+                fix="Store-corrupt — restore from backup or reinstall "
+                "Devin.",
+                rung="readable",
+                code="store-corrupt",
             )
-        ]
-    schema = _schema_finding(path)
-    findings = [
+        )
+        return findings
+    findings.append(
         Finding(
             CHECK_ID,
             Status.PASS,
-            f"sessions.db present — {human_size(size)}",
-        ),
-        schema,
-    ]
-    sane = _sane_finding(path, supported=schema.status is Status.PASS)
+            "sessions.db opens read-only (SQLite format ok)",
+            rung="readable",
+        )
+    )
+    schema_finding, supported = _schema_finding(path)
+    findings.append(schema_finding)
+    if schema_finding.status is Status.FAIL:
+        return findings  # ladder stops on FAIL
+    sane = _sane_finding(path, supported=supported)
     if sane is not None:
         findings.append(sane)
     return findings

@@ -57,7 +57,13 @@ def default_config_dir(
     if plat == "darwin":
         return Path.home() / "Library" / "Application Support" / "Devin"
     config_home = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    candidates = [config_home / "Devin", config_home / "devin"]
+    # §4.2 candidates: canonical ``Devin``, legacy lowercase ``devin``,
+    # legacy home root ``~/devin``.
+    candidates = [
+        config_home / "Devin",
+        config_home / "devin",
+        Path.home() / "devin",
+    ]
     return next((root for root in candidates if (root / "User").is_dir()), candidates[0])
 
 

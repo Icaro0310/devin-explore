@@ -27,14 +27,31 @@ class Finding:
     status: Status
     message: str
     fix: str | None = None
+    # SURFACE-HEALTH §2 metadata — set only by agent-surface checks:
+    # ``rung`` is the ladder rung that produced the finding
+    # (present|readable|schema|sane), ``code`` the §5 finding code on
+    # WARN/FAIL (store-missing, store-corrupt, schema-old, schema-unknown,
+    # empty-store, store-empty, unreadable), ``note`` the INFO annotation
+    # (not-installed). Non-surface checks leave them unset and the JSON
+    # contract stays four keys.
+    rung: str | None = None
+    code: str | None = None
+    note: str | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        out: dict[str, object] = {
             "check": self.check,
             "status": self.status.value,
             "message": self.message,
             "fix": self.fix,
         }
+        if self.rung is not None:
+            out["rung"] = self.rung
+        if self.code is not None:
+            out["code"] = self.code
+        if self.note is not None:
+            out["note"] = self.note
+        return out
 
 
 @dataclass
@@ -65,8 +82,9 @@ class Context:
 class Report:
     findings: list[Finding] = field(default_factory=list)
     # Surface check ids that ran, in registry order — a checked surface
-    # with no findings is 'not detected'. Empty when no surface check ran
-    # (legacy callers): renderers fall back to the flat report.
+    # whose findings are all ``not-installed`` is 'not detected'. Empty
+    # when no surface check ran (legacy callers): renderers fall back to
+    # the flat report.
     surfaces_checked: list[str] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:

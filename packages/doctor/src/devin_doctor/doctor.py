@@ -8,6 +8,10 @@ The report has two sections: 'surfaces' — one block per agent session
 surface that ran, undetected surfaces collapsed to a 'not detected' line —
 and 'devin environment' for the checks that diagnose the local Devin
 install itself.
+
+An undetected surface still emits its canonical ``present PASS /
+not-installed`` finding (SURFACE-HEALTH §3.1) — detection is read from
+the ``note`` field, not from an empty finding list.
 """
 
 from __future__ import annotations
@@ -73,18 +77,28 @@ def _finding_lines(report: Report, check_id: str, indent: str) -> list[str]:
     return lines
 
 
+def _surface_detected(report: Report, name: str) -> bool:
+    """``True`` when the surface emitted anything beyond the canonical
+    ``not-installed`` present finding (SURFACE-HEALTH §3.1)."""
+    return any(
+        f.check == name and f.note != "not-installed"
+        for f in report.findings
+    )
+
+
 def render_text(report: Report) -> str:
     lines: list[str] = []
     check_status = report.check_status()
     if report.surfaces_checked:
         surface_set = set(report.surfaces_checked)
         lines.append("surfaces")
+        missing: list[str] = []
         for name in report.surfaces_checked:
-            if name not in check_status:
+            if not _surface_detected(report, name):
+                missing.append(name)
                 continue
             lines.append(f"  {name} — {check_status[name]}")
             lines += _finding_lines(report, name, "    ")
-        missing = [n for n in report.surfaces_checked if n not in check_status]
         if missing:
             lines.append(f"  not detected: {', '.join(missing)}")
         lines.append("")
@@ -132,12 +146,12 @@ def render_json(report: Report, ctx: Context) -> str:
             "detected": {
                 name: check_status[name]
                 for name in report.surfaces_checked
-                if name in check_status
+                if _surface_detected(report, name)
             },
             "not_detected": [
                 name
                 for name in report.surfaces_checked
-                if name not in check_status
+                if not _surface_detected(report, name)
             ],
         }
     return json.dumps(payload, indent=2)
@@ -159,12 +173,12 @@ def render_markdown(report: Report, ctx: Context) -> str:
     ]
     if report.surfaces_checked:
         lines += ["", "## surfaces", ""]
+        missing = []
         for name in report.surfaces_checked:
-            if name in check_status:
+            if _surface_detected(report, name):
                 lines.append(f"- **{name}** — {check_status[name]}")
-        missing = [
-            n for n in report.surfaces_checked if n not in check_status
-        ]
+            else:
+                missing.append(name)
         if missing:
             lines.append(f"- not detected: {', '.join(missing)}")
     lines += [

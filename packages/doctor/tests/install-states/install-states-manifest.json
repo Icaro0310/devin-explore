@@ -1,0 +1,601 @@
+{
+  "version": 1,
+  "spec": "docs/SURFACE-HEALTH.md",
+  "unmodeled_states": {
+    "locked-or-unreadable": "not deterministically reproducible: POSIX mode bits are advisory on Windows runners and OS/SQLite locks are timing-dependent \u2014 no stable fixture exists (\u00a77)"
+  },
+  "fixtures": [
+    {
+      "surface": "codex-cli",
+      "state": "absent",
+      "store_path": "codex-cli/absent",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS",
+          "note": "not-installed"
+        }
+      ]
+    },
+    {
+      "surface": "codex-cli",
+      "state": "alt-root",
+      "store_path": "codex-cli/alt-root",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "codex-cli",
+      "state": "corrupt-store",
+      "store_path": "codex-cli/corrupt-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "FAIL",
+          "code": "store-corrupt"
+        }
+      ]
+    },
+    {
+      "surface": "codex-cli",
+      "state": "empty-store",
+      "store_path": "codex-cli/empty-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "empty-store"
+        }
+      ]
+    },
+    {
+      "surface": "codex-cli",
+      "state": "healthy",
+      "store_path": "codex-cli/healthy",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "codex-cli",
+      "state": "schema-unknown",
+      "store_path": "codex-cli/schema-unknown",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-unknown"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "absent",
+      "store_path": "copilot-cli/absent",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS",
+          "note": "not-installed"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "corrupt-store",
+      "store_path": "copilot-cli/corrupt-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "FAIL",
+          "code": "store-corrupt"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "empty-store",
+      "store_path": "copilot-cli/empty-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "store-empty"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "healthy",
+      "store_path": "copilot-cli/healthy",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "missing-store",
+      "store_path": "copilot-cli/missing-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "WARN",
+          "code": "store-missing"
+        }
+      ]
+    },
+    {
+      "surface": "copilot-cli",
+      "state": "schema-unknown",
+      "store_path": "copilot-cli/schema-unknown",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-unknown"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "absent",
+      "store_path": "devin-chat/absent",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS",
+          "note": "not-installed"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "corrupt-store",
+      "store_path": "devin-chat/corrupt-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "FAIL",
+          "code": "store-corrupt"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "empty-store",
+      "store_path": "devin-chat/empty-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "store-empty"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "healthy",
+      "store_path": "devin-chat/healthy",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "schema-unknown",
+      "store_path": "devin-chat/schema-unknown",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-unknown"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-chat",
+      "state": "zero-rows",
+      "store_path": "devin-chat/zero-rows",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "store-empty"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "absent",
+      "store_path": "devin-cli/absent",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS",
+          "note": "not-installed"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "alt-root",
+      "store_path": "devin-cli/alt-root",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "corrupt-store",
+      "store_path": "devin-cli/corrupt-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "FAIL",
+          "code": "store-corrupt"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "empty-store",
+      "store_path": "devin-cli/empty-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "empty-store"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "healthy",
+      "store_path": "devin-cli/healthy",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "missing-store",
+      "store_path": "devin-cli/missing-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "WARN",
+          "code": "store-missing"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "schema-old",
+      "store_path": "devin-cli/schema-old",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-old"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "devin-cli",
+      "state": "schema-unknown",
+      "store_path": "devin-cli/schema-unknown",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-unknown"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "absent",
+      "store_path": "vscode-chat/absent",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS",
+          "note": "not-installed"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "alt-root",
+      "store_path": "vscode-chat/alt-root",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "corrupt-store",
+      "store_path": "vscode-chat/corrupt-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "FAIL",
+          "code": "store-corrupt"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "empty-store",
+      "store_path": "vscode-chat/empty-store",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "WARN",
+          "code": "store-empty"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "healthy",
+      "store_path": "vscode-chat/healthy",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "PASS"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    },
+    {
+      "surface": "vscode-chat",
+      "state": "schema-unknown",
+      "store_path": "vscode-chat/schema-unknown",
+      "expected_findings": [
+        {
+          "check": "present",
+          "status": "PASS"
+        },
+        {
+          "check": "readable",
+          "status": "PASS"
+        },
+        {
+          "check": "schema",
+          "status": "WARN",
+          "code": "schema-unknown"
+        },
+        {
+          "check": "sane",
+          "status": "PASS"
+        }
+      ]
+    }
+  ]
+}

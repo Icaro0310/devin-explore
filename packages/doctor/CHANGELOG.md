@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `devin-doctor-mcp` keeps the traceback on `.run()` `ImportError`s; the
   missing-extra hint only covers failures while building the app.
 
+- Surface ladder verdicts now follow SURFACE-HEALTH.md exactly — diver-
+  gences fixed while closing the install-states corpus loop:
+  - A wrong-shaped but openable acp-messages `.db` (no `meta`+`messages`
+    tables) is `schema` `WARN schema-unknown`, not `readable` `FAIL` —
+    the file parsed, so it is not corrupt.
+  - A `sessions.db` with a missing/empty `refinery_schema_history`
+    ledger is `schema` `WARN schema-unknown`, not `FAIL` — only a
+    damaged file is corrupt.
+  - `devin-cli` schemas below the supported floor emit code
+    `schema-old`; above the known range `schema-unknown`.
+  - A `codex-cli` root holding a `state_*` db whose suffix is not
+    numeric is `schema-unknown`, not silently skipped.
+  - `copilot-cli`/`vscode-chat` roots without any store container are
+    `present` `WARN store-missing`; containers with no artifacts are
+    `sane` `WARN store-empty` — the two codes were previously collapsed
+    into one "installed but unused" WARN.
+  - Zero-byte artifacts report `sane` `WARN empty-store` on every
+    surface (the sane rung owns emptiness — `readable` does not run on
+    a zero-byte file).
+  - Absent surfaces emit the canonical `present PASS` /
+    `note: not-installed` finding instead of staying silent; the report
+    still groups them under `not detected`.
+
 
 ### Added
 
@@ -21,9 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`cli/sessions.db`), `devin-chat` (`acp-messages/*.db` +
   `state.vscdb`), `copilot-cli` (`session-state`/`history-session-state`
   event logs), `codex-cli` (`state_<N>.sqlite` + rollout JSONL) and
-  `vscode-chat` (`chatSessions/*.json{,l}`). An absent surface emits no
-  findings and groups under `not detected` — an uninstalled agent is a
-  valid environment, never a failure. Privacy doctrine is strict:
+  `vscode-chat` (`chatSessions/*.json{,l}`). An absent surface emits the
+  canonical `present PASS` / `not-installed` finding and groups under
+  `not detected` — an uninstalled agent is a valid environment, never a
+  failure. Privacy doctrine is strict:
   headers/metadata only — counts, sizes, paths, statuses; never message
   content.
 - `--surface NAME` (repeatable, `check`/`report`/`plan` and the MCP
@@ -35,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEVIN_DOCTOR_OFFLINE=1`: the `updates` check skips its manifest fetch
   and the run stays fully local. Backs the repo's new `devin-doctor-gate`
   pre-commit hook (`devin-doctor check --offline`).
+- Surface findings carry optional `rung` / `code` / `note` fields in
+  `--json` — the SURFACE-HEALTH §2 ladder metadata (`present` /
+  `readable` / `schema` / `sane` plus the §5 codebook). Non-surface
+  findings keep the four-key shape.
+- `tests/install-states/` vendors the install-states corpus verbatim
+  from devin-internals-spec (spec PR #46): 32 home-surrogate fixtures +
+  `install-states-manifest.json` declaring per-fixture
+  `expected_findings`. `tests/test_install_states.py` replays every one
+  through the real surface checks and diffs the produced
+  `{rung, status, code, note}` tuples against the manifest —
+  `unmodeled_states` (`locked-or-unreadable`) is honored and asserted.
 
 ### Changed
 

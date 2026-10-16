@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "sessionId": "dcf460c4-62df-511e-82b0-999b2cf363d5",
+  "creationDate": 1780000000000,
+  "requests": [
+    {
+      "requestId": "req-1",
+      "timestamp": 1780000005000
+    }
+  ]
+}

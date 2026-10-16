@@ -61,11 +61,20 @@ def test_check_json_schema(ctx, capsys):
     assert isinstance(payload["findings"], list)
     assert payload["findings"], "expected findings"
     for f in payload["findings"]:
-        assert set(f) == {"check", "status", "message", "fix"}
+        # base contract + optional SURFACE-HEALTH §2 fields on surface
+        # findings (rung/code/note — emitted only when set)
+        assert {"check", "status", "message", "fix"} <= set(f) <= {
+            "check", "status", "message", "fix", "rung", "code", "note",
+        }
         assert f["status"] in ("PASS", "WARN", "FAIL")
+    # every surface emits its canonical present finding — absent ones
+    # report PASS/not-installed instead of staying out of the map
     assert set(payload["checks"]) == {
         "devin-cli",
         "devin-chat",
+        "copilot-cli",
+        "codex-cli",
+        "vscode-chat",
         "health-of-data",
         "config",
         "hooks-windows",

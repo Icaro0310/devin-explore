@@ -5,7 +5,10 @@ Roots (all existing merged, spec §6.3): ``$COPILOT_DIR``, ``$COPILOT_HOME``,
 (primary) and ``<state>/<uuid>.jsonl`` (flat), under both ``session-state``
 and the legacy ``history-session-state``.
 
-Ladder: present → readable → schema → sane. Only headers/envelopes are
+Ladder (SURFACE-HEALTH §4.3): present → readable → schema → sane, findings
+tagged with their rung + §5 code. A root without a ``session-state`` /
+``history-session-state`` container is ``store-missing``; a container
+without session artifacts is ``store-empty``. Only headers/envelopes are
 read — event payload content is never inspected.
 """
 
@@ -15,7 +18,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from devin_doctor.checks.surfaces._common import scan_jsonl
+from devin_doctor.checks.surfaces._common import JsonlScan, scan_jsonl
 from devin_doctor.model import Context, Finding, Status
 from devin_doctor.paths import default_copilot_dirs, human_size
 
@@ -61,21 +64,60 @@ def run(ctx: Context) -> list[Finding]:
     del ctx  # surface roots are machine-global — the ctx dirs do not apply
     roots = default_copilot_dirs()
     if not roots:
-        return []  # not detected — copilot-cli is not installed here
-    files = _session_files(roots)
-    if not files:
+        return [
+            Finding(
+                CHECK_ID,
+                Status.PASS,
+                "no copilot roots — copilot-cli not installed",
+                rung="present",
+                note="not-installed",
+            )
+        ]
+    containers = [
+        root / state_dir
+        for root in roots
+        for state_dir in _STATE_DIRS
+        if (root / state_dir).is_dir()
+    ]
+    if not containers:
         return [
             Finding(
                 CHECK_ID,
                 Status.WARN,
-                f"{len(roots)} copilot root(s) present, no session logs — "
-                "installed but unused",
+                f"{len(roots)} copilot root(s) present, no session-state "
+                "container",
+                fix="The root holds config but no session store — the CLI "
+                "never wrote a session here.",
+                rung="present",
+                code="store-missing",
             )
         ]
+    files = _session_files(roots)
+    findings = [
+        Finding(
+            CHECK_ID,
+            Status.PASS,
+            f"{len(containers)} session container(s) — "
+            f"{len(files)} session log(s)",
+            rung="present",
+        )
+    ]
+    if not files:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                "session containers present, 0 session logs — installed "
+                "but unused",
+                rung="sane",
+                code="store-empty",
+            )
+        )
+        return findings
 
+    scans: dict[Path, JsonlScan] = {}
+    empty: list[str] = []
     unreadable: list[str] = []
-    unknown: list[str] = []
-    events = 0
     total = 0
     for path in files:
         try:
@@ -85,16 +127,14 @@ def run(ctx: Context) -> list[Finding]:
             continue
         total += size
         if size == 0:
-            continue  # empty file — the sane rung reports emptiness
+            empty.append(path.name)
+            continue
         scan = scan_jsonl(path)
         if not scan.ok:
             unreadable.append(path.name)
             continue
-        if not _envelope_ok(scan.first):
-            unknown.append(path.name)
-        events += scan.records
+        scans[path] = scan
 
-    findings: list[Finding] = []
     if unreadable:
         shown = ", ".join(unreadable[:3]) + (
             " …" if len(unreadable) > 3 else ""
@@ -103,21 +143,40 @@ def run(ctx: Context) -> list[Finding]:
             Finding(
                 CHECK_ID,
                 Status.FAIL,
-                f"{len(unreadable)}/{len(files)} session log(s) unreadable "
-                f"({shown})",
-                fix="Store-corrupt — first line is not JSON; the log was "
+                f"{len(unreadable)}/{len(files)} session log(s) "
+                f"unreadable ({shown})",
+                fix="Store-corrupt — a line is not JSON; the log was "
                 "truncated mid-write or damaged.",
+                rung="readable",
+                code="store-corrupt",
             )
         )
-    else:
+        return findings
+    if not scans:
+        # every artifact is a zero-byte shell — emptiness is sane's call
         findings.append(
             Finding(
                 CHECK_ID,
-                Status.PASS,
-                f"{len(files)} session log(s), {human_size(total)} — "
-                "all readable",
+                Status.WARN,
+                f"{len(empty)} zero-byte session log(s) — empty-store",
+                fix="Never-written session files — safe to delete or "
+                "ignore.",
+                rung="sane",
+                code="empty-store",
             )
         )
+        return findings
+    findings.append(
+        Finding(
+            CHECK_ID,
+            Status.PASS,
+            f"{len(scans)} session log(s), {human_size(total)} — all "
+            "readable",
+            rung="readable",
+        )
+    )
+
+    unknown = [p.name for p, s in scans.items() if not _envelope_ok(s.first)]
     if unknown:
         findings.append(
             Finding(
@@ -127,18 +186,45 @@ def run(ctx: Context) -> list[Finding]:
                 "(schema-unknown)",
                 fix="Expected {id,parentId,timestamp,type,data} — written "
                 "by a newer copilot-cli than the spec knows.",
+                rung="schema",
+                code="schema-unknown",
             )
         )
-    if events == 0:
+    else:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.PASS,
+                "all session logs carry the documented event envelope",
+                rung="schema",
+            )
+        )
+
+    events = sum(s.records for s in scans.values())
+    if empty:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"{len(empty)} zero-byte session log(s) — empty-store",
+                fix="Never-written session files — safe to delete or "
+                "ignore.",
+                rung="sane",
+                code="empty-store",
+            )
+        )
+    elif events == 0:
         findings.append(
             Finding(
                 CHECK_ID,
                 Status.WARN,
                 "0 events across all session logs — installed but unused",
+                rung="sane",
+                code="store-empty",
             )
         )
     else:
         findings.append(
-            Finding(CHECK_ID, Status.PASS, f"{events} events")
+            Finding(CHECK_ID, Status.PASS, f"{events} events", rung="sane")
         )
     return findings

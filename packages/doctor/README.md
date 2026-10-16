@@ -99,17 +99,29 @@ suggestion. Exit code is `0` unless something `FAIL`s (then `1`).
 
 The report has two sections. **surfaces** runs the same four-rung ladder —
 `present → readable → schema → sane` — once per agent session store found
-on the machine. A surface whose roots don't exist emits no findings and
-groups under `not detected`: an uninstalled agent is a valid environment,
-never a failure. `--surface NAME` (repeatable) scopes this section; the
+on the machine, following SURFACE-HEALTH.md: a `FAIL` stops the ladder, a
+`WARN` never does, and a rung with nothing to evaluate emits nothing. A
+surface whose roots don't exist emits the canonical `present PASS` /
+`note: not-installed` finding and groups under `not detected`: an
+uninstalled agent is a valid environment, never a failure.
+`--surface NAME` (repeatable) scopes this section; the
 **devin environment** checks always run unscoped.
+
+Surface findings carry three optional fields in `--json` — `rung` (the
+ladder rung that produced them), `code` (the §5 codebook on WARN/FAIL:
+`store-missing`, `store-corrupt`, `schema-old`, `schema-unknown`,
+`empty-store`, `store-empty`), and `note` (`not-installed`). Parity with
+the spec is enforced by `tests/test_install_states.py`, which replays all
+32 fixtures of the vendored `tests/install-states` corpus (from
+devin-internals-spec `fixtures/install-states`, spec PR #46) and diffs the
+produced `{rung, status, code, note}` tuples against the manifest.
 
 | surface | store | ladder specifics |
 |---|---|---|
-| `devin-cli` | `<data-dir>/cli/sessions.db` | SQLite `mode=ro` (+`immutable=1` retry); `refinery_schema_history` ledger v15–v17, newer → `schema-unknown` WARN; session/`message_nodes` counts |
-| `devin-chat` | `<config>/Devin/User/acp-messages/*.db` + `state.vscdb` | ACP schema v1/v6 (`meta` + `messages` tables); message-row counts, key counts — never message bodies |
+| `devin-cli` | `<data-dir>/cli/sessions.db` | SQLite `mode=ro` (+`immutable=1` retry); `refinery_schema_history` ledger v15–v17, newer/missing → `schema-unknown` WARN, older → `schema-old` WARN; session/`message_nodes` counts |
+| `devin-chat` | `<config>/Devin/User/acp-messages/*.db` + `state.vscdb` | `meta` + `messages` table shape; message-row counts, key counts — never message bodies |
 | `copilot-cli` | `$COPILOT_DIR`/`$COPILOT_HOME`/`~/.copilot` | `session-state/<uuid>/events.jsonl` and flat `<uuid>.jsonl`; first event must carry `{id, parentId, timestamp, type, data}` |
-| `codex-cli` | `$CODEX_HOME`/`~/.codex/state_<N>.sqlite` | largest `N` wins; requires `threads` table; rollout JSONL under `sessions/`/`archived_sessions/` counted |
+| `codex-cli` | `$CODEX_HOME`/`~/.codex/state_<N>.sqlite` | largest `N` wins; requires `threads` table; rollout JSONL under `sessions/`/`archived_sessions/`/`$CODEX_SESSIONS_DIR` can carry a state-db-less install |
 | `vscode-chat` | `Code`/`Code - Insiders` user dirs + `~/.vscode-server` | `chatSessions/*.jsonl` mutation logs (kinds 0–3) and `*.json` documents |
 
 **devin environment** — the checks that diagnose the local Devin install
