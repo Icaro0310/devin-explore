@@ -17,6 +17,7 @@ import tomllib
 
 from devin_doctor.model import Context, Finding, Status
 from devin_doctor.paths import (
+    cli_anchor_present,
     credentials_path,
     user_config_path,
     user_mcp_config_path,
@@ -311,9 +312,11 @@ def run(ctx: Context) -> list[Finding]:
         ctx.config_dir is not None and ctx.config_dir.is_dir()
     )
     findings: list[Finding] = []
-    if ctx.data_dir.is_dir():
+    if ctx.data_dir.is_dir() and cli_anchor_present(ctx.data_dir):
         # CLI credentials live under the CLI data root — a Desktop-only
-        # install has no business reporting them missing.
+        # install has no business reporting them missing. The bare root
+        # is not evidence: on case-insensitive filesystems it unifies
+        # with the Desktop config root.
         findings.append(_credentials_finding(credentials_path(ctx.data_dir)))
     if (ctx.config_dir or ctx.data_dir).is_dir():
         findings += _user_config_findings(ctx)

@@ -3,8 +3,9 @@
 Each module runs the same ladder (present → readable → schema → sane) and
 uses the canonical surface names from SESSION-SURFACES.md §1 as its
 ``CHECK_ID`` — that id is what ``--surface`` scopes and what the report
-groups under 'surfaces'. A surface whose roots are absent emits no
-findings: an uninstalled agent is a valid environment, never a failure.
+groups under 'surfaces'. A surface whose roots are absent emits the
+canonical ``present PASS / not-installed`` finding: an uninstalled agent
+is a valid environment, never a failure.
 """
 
 from devin_doctor.checks.surfaces import (

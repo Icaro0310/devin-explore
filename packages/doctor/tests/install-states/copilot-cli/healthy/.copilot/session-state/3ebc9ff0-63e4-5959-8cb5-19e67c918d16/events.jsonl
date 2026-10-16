@@ -1,0 +1,2 @@
+{"id": "evt-0001", "parentId": null, "timestamp": "2026-05-28T20:26:40.000Z", "type": "session.start", "data": {"id": "3ebc9ff0-63e4-5959-8cb5-19e67c918d16", "version": "0.0.0-fixture"}}
+{"id": "evt-0002", "parentId": "evt-0001", "timestamp": "2026-05-28T20:26:45.000Z", "type": "session.shutdown", "data": {"reason": "fixture-close"}}

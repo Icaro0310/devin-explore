@@ -164,6 +164,17 @@ def test_desktop_only_install_skips_credentials_check(tmp_path):
     assert all("credentials.toml" not in f.message for f in findings)
 
 
+def test_desktop_only_shared_root_skips_credentials(tmp_path):
+    """data_dir exists but holds only Desktop anchors (``User/``) — no
+    ``cli/`` or credentials file — so the credentials check must not
+    warn. Mirrors the case-insensitive unified-root situation."""
+    root = tmp_path / "shared"
+    (root / "User" / "acp-messages").mkdir(parents=True)
+    ctx = Context(data_dir=root, config_dir=root, cwd=tmp_path)
+    findings = config.run(ctx)
+    assert all("credentials.toml" not in f.message for f in findings)
+
+
 def test_cli_only_install_skips_ui_config(tmp_path, data_dir):
     """A CLI-only data root still checks credentials but does not force
     UI config findings on an absent config_dir."""

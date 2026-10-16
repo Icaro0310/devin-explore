@@ -57,7 +57,13 @@ def default_config_dir(
     if plat == "darwin":
         return Path.home() / "Library" / "Application Support" / "Devin"
     config_home = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    candidates = [config_home / "Devin", config_home / "devin"]
+    # §4.2 candidates: canonical ``Devin``, legacy lowercase ``devin``,
+    # legacy home root ``~/devin``.
+    candidates = [
+        config_home / "Devin",
+        config_home / "devin",
+        Path.home() / "devin",
+    ]
     return next((root for root in candidates if (root / "User").is_dir()), candidates[0])
 
 
@@ -136,6 +142,25 @@ def desktop_anchor_present(stores: StorePaths) -> bool:
         or bool(stores.acp_dbs)
         or stores.state_vscdb.is_file()
         or stores.acp_dir.parent.is_dir()
+    )
+
+
+def cli_anchor_present(data_dir: Path) -> bool:
+    """``True`` when a Devin *CLI*-specific artifact exists under the
+    data root — the ``cli/`` dir (sessions.db, session_locks) or
+    ``credentials.toml``.
+
+    The data root alone is NOT evidence of the CLI: on case-insensitive
+    filesystems (Windows, default APFS) the CLI data root ``devin`` and
+    the Desktop config root ``Devin`` resolve to the same directory, so
+    a Desktop-only install makes ``data_dir.is_dir()`` true.
+
+    ``os.path.lexists`` counts a malformed credentials path (dangling
+    symlink, stray directory) as a CLI anchor too — a broken install is
+    still an install.
+    """
+    return (data_dir / "cli").is_dir() or os.path.lexists(
+        credentials_path(data_dir)
     )
 
 

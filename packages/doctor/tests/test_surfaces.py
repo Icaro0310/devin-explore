@@ -1,6 +1,7 @@
 """Surface checks — one ladder (present → readable → schema → sane) per
 agent session surface: devin-cli, devin-chat, copilot-cli, codex-cli,
-vscode-chat. Absence is never a failure: a missing root emits no findings
+vscode-chat. Absence is never a failure: a missing root emits the
+canonical ``present PASS / not-installed`` finding (SURFACE-HEALTH §3.1)
 and the surface groups under 'not detected'."""
 
 import json
@@ -37,6 +38,17 @@ def _finding(findings, needle):
     return next(f for f in findings if needle in f.message)
 
 
+def _assert_not_installed(findings):
+    """The canonical absent-surface finding: present PASS +
+    ``note: not-installed`` (SURFACE-HEALTH §3.1)."""
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.status is Status.PASS
+    assert f.rung == "present"
+    assert f.note == "not-installed"
+    return f
+
+
 # --- registry ---------------------------------------------------------------
 
 
@@ -64,39 +76,54 @@ def test_devin_cli_healthy(ctx):
 
 def test_devin_cli_not_detected(tmp_path):
     ctx = Context(data_dir=tmp_path / "nope", cwd=tmp_path)
-    assert stores_devin.run(ctx) == []
+    _assert_not_installed(stores_devin.run(ctx))
 
 
 def test_devin_cli_missing_db_warns(tmp_path):
     root = tmp_path / "devin"
-    root.mkdir()  # data dir exists — the store was never created
+    (root / "cli").mkdir(parents=True)  # CLI ran once — the store was never created
     ctx = Context(data_dir=root, cwd=tmp_path)
     findings = stores_devin.run(ctx)
     assert len(findings) == 1
     assert findings[0].status is Status.WARN
     assert "missing" in findings[0].message
+    assert findings[0].rung == "present"
+    assert findings[0].code == "store-missing"
+
+
+def test_devin_cli_bare_root_not_detected(tmp_path):
+    """A bare data root has no CLI anchor — on case-insensitive
+    filesystems it may just be the unified Desktop config root."""
+    root = tmp_path / "devin"
+    (root / "User").mkdir(parents=True)  # Desktop-only anchors
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    _assert_not_installed(stores_devin.run(ctx))
 
 
 def test_devin_cli_zero_byte_warns(ctx):
     db = ctx.data_dir / "cli" / "sessions.db"
     db.write_bytes(b"")
-    f = stores_devin.run(ctx)[0]
+    f = _finding(stores_devin.run(ctx), "empty")
     assert f.status is Status.WARN
-    assert "empty" in f.message
+    assert f.rung == "sane"
+    assert f.code == "empty-store"
 
 
 def test_devin_cli_corrupt_fails(ctx):
     (ctx.data_dir / "cli" / "sessions.db").write_bytes(b"junk junk junk")
     findings = stores_devin.run(ctx)
-    assert findings[0].status is Status.FAIL
-    assert "unreadable" in findings[0].message
+    f = _finding(findings, "unreadable")
+    assert f.status is Status.FAIL
+    assert f.rung == "readable"
+    assert f.code == "store-corrupt"
 
 
 def test_devin_cli_schema_old_warns(ctx):
     create_sessions_db(ctx.data_dir / "cli" / "sessions.db", schema_version=14)
     f = _finding(stores_devin.run(ctx), "schema v14")
     assert f.status is Status.WARN
-    assert "unsupported" in f.message
+    assert "below the supported floor" in f.message
+    assert f.code == "schema-old"
 
 
 def test_devin_cli_schema_unknown_warns(ctx):
@@ -105,6 +132,7 @@ def test_devin_cli_schema_unknown_warns(ctx):
     f = _finding(findings, "schema v99")
     assert f.status is Status.WARN
     assert "unknown" in f.message
+    assert f.code == "schema-unknown"
     # counts still run — unknown schema is not a parse refusal for COUNT(*)
     assert _finding(findings, "3 sessions")
 
@@ -116,9 +144,12 @@ def test_devin_cli_zero_sessions_warns(tmp_path):
     f = _finding(stores_devin.run(ctx), "0 sessions")
     assert f.status is Status.WARN
     assert "installed but unused" in f.message
+    assert f.code == "store-empty"
 
 
-def test_devin_cli_missing_ledger_fails(tmp_path):
+def test_devin_cli_missing_ledger_warns_schema_unknown(tmp_path):
+    """§4.1: a store without the migration ledger is schema-unknown —
+    WARN, never a FAIL (the file opened fine)."""
     root = tmp_path / "devin"
     db = root / "cli" / "sessions.db"
     db.parent.mkdir(parents=True)
@@ -126,8 +157,12 @@ def test_devin_cli_missing_ledger_fails(tmp_path):
     con.execute("CREATE TABLE something_else (x INTEGER)")
     con.close()
     ctx = Context(data_dir=root, cwd=tmp_path)
-    f = _finding(stores_devin.run(ctx), "schema detection")
-    assert f.status is Status.FAIL
+    findings = stores_devin.run(ctx)
+    f = _finding(findings, "no readable schema version")
+    assert f.status is Status.WARN
+    assert f.rung == "schema"
+    assert f.code == "schema-unknown"
+    assert not any(f.status is Status.FAIL for f in findings)
 
 
 # --- devin-chat --------------------------------------------------------------
@@ -137,13 +172,13 @@ def test_devin_chat_healthy(ctx):
     findings = devin_chat.run(ctx)
     assert all(f.check == "devin-chat" for f in findings)
     assert all(f.status is Status.PASS for f in findings)
-    assert "2 db(s)" in _finding(findings, "acp-messages").message
+    assert "2 db file(s)" in _finding(findings, "acp-messages").message
     assert "state.vscdb" in _finding(findings, "state.vscdb").message
 
 
 def test_devin_chat_not_detected(tmp_path):
     ctx = Context(data_dir=tmp_path / "nope", cwd=tmp_path)
-    assert devin_chat.run(ctx) == []
+    _assert_not_installed(devin_chat.run(ctx))
 
 
 def test_devin_chat_empty_acp_dir_warns(ctx):
@@ -153,18 +188,28 @@ def test_devin_chat_empty_acp_dir_warns(ctx):
     f = _finding(devin_chat.run(ctx), "0 db files")
     assert f.status is Status.WARN
     assert "installed but unused" in f.message
+    assert f.code == "store-empty"
 
 
-def test_devin_chat_wrong_shape_fails(ctx):
+def test_devin_chat_wrong_shape_warns_schema_unknown(ctx):
+    """A db that opens but lacks the meta+messages shape is
+    schema-unknown WARN, not corrupt — it parsed fine (§4.2)."""
     bad = ctx.data_dir / "User" / "acp-messages" / "bogus.db"
     con = sqlite3.connect(bad)
     con.execute("CREATE TABLE something_else (x INTEGER)")
     con.close()
-    f = _finding(devin_chat.run(ctx), "bogus.db")
-    assert f.status is Status.FAIL
+    findings = devin_chat.run(ctx)
+    f = _finding(findings, "bogus.db")
+    assert f.status is Status.WARN
+    assert f.rung == "schema"
+    assert f.code == "schema-unknown"
+    assert not any(f.status is Status.FAIL for f in findings)
 
 
-def test_devin_chat_unknown_schema_version_warns(ctx):
+def test_devin_chat_unknown_schema_version_still_passes(ctx):
+    """§4.2's shape check is meta+messages presence only — an unknown
+    schema_version value does not WARN (no version marker is
+    known-good here; only the table shape is)."""
     db = create_acp_messages_db(
         ctx.data_dir / "User" / "acp-messages" / "future.db", seed=7
     )
@@ -174,9 +219,9 @@ def test_devin_chat_unknown_schema_version_warns(ctx):
     )
     con.commit()
     con.close()
-    f = _finding(devin_chat.run(ctx), "unknown")
-    assert f.status is Status.WARN
-    assert "schema_version" in f.message
+    findings = devin_chat.run(ctx)
+    assert not any(f.status is Status.FAIL for f in findings)
+    assert all(f.code != "schema-unknown" for f in findings)
 
 
 def test_devin_chat_cli_only_root_not_detected(tmp_path):
@@ -186,31 +231,62 @@ def test_devin_chat_cli_only_root_not_detected(tmp_path):
     root.mkdir()
     create_sessions_db(root / "cli" / "sessions.db")
     ctx = Context(data_dir=root, cwd=tmp_path)
-    assert devin_chat.run(ctx) == []
+    _assert_not_installed(devin_chat.run(ctx))
 
 
-def test_devin_chat_missing_both_warns(tmp_path):
-    """A Desktop ``User/`` marker with no stores inside → detected, and
-    each missing companion store is WARN."""
+def test_devin_chat_missing_stores_warns(tmp_path):
+    """A Desktop ``User/`` marker with no acp-messages container →
+    present WARN store-missing (§4.2 anchor = the container)."""
     root = tmp_path / "devin"
     (root / "User").mkdir(parents=True)
     ctx = Context(data_dir=root, cwd=tmp_path)
     findings = devin_chat.run(ctx)
     assert {f.status for f in findings} == {Status.WARN}
-    assert _finding(findings, "acp-messages dir missing")
-    assert _finding(findings, "state.vscdb missing")
+    f = _finding(findings, "acp-messages dir missing")
+    assert f.rung == "present"
+    assert f.code == "store-missing"
 
 
 def test_devin_chat_zero_byte_db_warns(ctx):
     """A 0 B acp db must not hide behind a healthy sibling's counts
-    (Devin Review #5 — WARN empty-store)."""
+    (Devin Review #5 — sane verdict is WARN empty-store)."""
     (ctx.data_dir / "User" / "acp-messages" / "empty.db").write_bytes(b"")
     findings = devin_chat.run(ctx)
     f = _finding(findings, "empty-store")
     assert f.status is Status.WARN
     assert "zero-byte" in f.message
-    # the healthy sibling still passes
-    assert _finding(findings, "message rows").status is Status.PASS
+    assert f.rung == "sane"
+    assert f.code == "empty-store"
+
+
+def test_devin_chat_corrupt_vscdb_fails(tmp_path):
+    """A state.vscdb whose pages can't be read is store-corrupt FAIL —
+    a damaged store, not a foreign shape (Devin Review). The file keeps
+    a readable sqlite_master (page 1 intact) so the failure surfaces
+    while the spec store reads its tables, exercising the
+    sqlite3.Error → corrupt reclassification."""
+    root = tmp_path / "devin"
+    root.mkdir()
+    donor = root / "donor.db"
+    con = sqlite3.connect(donor)
+    con.execute("CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value BLOB)")
+    con.executemany(
+        "INSERT INTO ItemTable VALUES (?, ?)",
+        [(f"k{i}", b"x" * 4000) for i in range(50)],
+    )
+    con.commit()
+    con.close()
+    data = bytearray(donor.read_bytes())
+    data[8192:12288] = b"\xde\xad" * 2048  # corrupt a mid-file page
+    path = root / "User" / "globalStorage" / "state.vscdb"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(bytes(data))
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    findings = devin_chat.run(ctx)
+    f = _finding(findings, "state.vscdb")
+    assert f.status is Status.FAIL
+    assert f.code == "store-corrupt"
+    assert f.rung == "readable"
 
 
 def test_devin_chat_detected_by_vscdb_alone(tmp_path):
@@ -231,7 +307,9 @@ def _copilot_root(home: Path) -> Path:
 
 
 def test_copilot_not_detected():
-    assert copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x"))) == []
+    _assert_not_installed(
+        copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    )
 
 
 def test_copilot_healthy(_hermetic_surfaces):
@@ -261,10 +339,13 @@ def test_copilot_env_var_root(_hermetic_surfaces, monkeypatch):
 
 
 def test_copilot_root_without_sessions_warns(_hermetic_surfaces):
+    """A root holding config but no session-state container is
+    store-missing at present — not 'empty' (§4.3)."""
     _copilot_root(_hermetic_surfaces).mkdir(parents=True)
     f = copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x")))[0]
     assert f.status is Status.WARN
-    assert "installed but unused" in f.message
+    assert f.rung == "present"
+    assert f.code == "store-missing"
 
 
 def test_copilot_corrupt_log_fails(_hermetic_surfaces):
@@ -363,7 +444,9 @@ def test_copilot_legacy_layout_seen(_hermetic_surfaces):
 
 
 def test_codex_not_detected():
-    assert codex.run(Context(data_dir=Path("/x"), cwd=Path("/x"))) == []
+    _assert_not_installed(
+        codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    )
 
 
 def test_codex_healthy(_hermetic_surfaces):
@@ -380,7 +463,7 @@ def test_codex_healthy(_hermetic_surfaces):
     )
     findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
     assert all(f.status is Status.PASS for f in findings)
-    assert "2 threads" in _finding(findings, "threads").message
+    assert "2 threads" in _finding(findings, "2 threads").message
     assert "1 rollout" in _finding(findings, "rollout").message
 
 
@@ -403,14 +486,17 @@ def test_codex_root_without_stores_warns(_hermetic_surfaces):
     f = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))[0]
     assert f.status is Status.WARN
     assert "installed but unused" in f.message
+    assert f.code == "store-missing"
 
 
 def test_codex_corrupt_state_fails(_hermetic_surfaces):
     root = _hermetic_surfaces / ".codex"
     root.mkdir()
     (root / "state_4.sqlite").write_bytes(b"garbage not sqlite")
-    f = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))[0]
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    f = _finding(findings, "state_4.sqlite")
     assert f.status is Status.FAIL
+    assert f.code == "store-corrupt"
     assert "magic" in f.message or "unreadable" in f.message
 
 
@@ -441,11 +527,30 @@ def test_codex_largest_n_wins(_hermetic_surfaces):
             con.execute("INSERT INTO threads VALUES (?, 0, 0, '', 0)", (f"t{i}",))
         con.commit()
         con.close()
-    f = _finding(
-        codex.run(Context(data_dir=Path("/x"), cwd=Path("/x"))),
-        "state_4.sqlite",
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    f = _finding(findings, "3 threads")
+    assert "state_4.sqlite" in f.message
+
+
+def test_codex_nonnumeric_state_warns_schema_unknown(_hermetic_surfaces):
+    """A ``state_*.sqlite`` without a numeric suffix is a foreign
+    artifact — schema-unknown WARN, even when a numeric db is selected
+    (Devin Review: precedence must not silence it)."""
+    root = add_codex_home(
+        _hermetic_surfaces / ".codex",
+        state_n=4,
+        threads=[{"id": "t-1"}],
     )
-    assert "3 threads" in f.message
+    con = sqlite3.connect(root / "state_foo.sqlite")
+    con.execute("CREATE TABLE threads (id TEXT PRIMARY KEY)")
+    con.close()
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    # the numeric db is still selected for the ladder
+    assert "state_4.sqlite" in _finding(findings, "opens read-only").message
+    f = _finding(findings, "state_foo")
+    assert f.status is Status.WARN
+    assert f.rung == "schema"
+    assert f.code == "schema-unknown"
 
 
 def test_codex_rollouts_without_state(_hermetic_surfaces):
@@ -472,6 +577,25 @@ def test_codex_zero_byte_rollout_warns(_hermetic_surfaces):
     assert f.status is Status.WARN
     # and it is not counted as a readable rollout
     assert all("readable" not in f.message for f in findings)
+
+
+def test_codex_zero_byte_rollout_with_state_warns(_hermetic_surfaces):
+    """A healthy state db must not silence an empty rollout — the sane
+    verdict is WARN empty-store, not PASS (Devin Review)."""
+    add_codex_home(
+        _hermetic_surfaces / ".codex",
+        state_n=4,
+        threads=[{"id": "t-1"}],
+        rollouts=[("sessions/rollout-dead.jsonl", [])],
+    )
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    f = _finding(findings, "empty-store")
+    assert f.status is Status.WARN
+    assert f.rung == "sane"
+    assert f.code == "empty-store"
+    # the sane rung emits exactly one verdict — no hidden PASS beside it
+    sane = [g for g in findings if g.rung == "sane"]
+    assert sane == [f]
 
 
 def test_codex_whitespace_rollout_warns(_hermetic_surfaces):
@@ -524,7 +648,9 @@ def _vscode_user_dir() -> Path:
 
 
 def test_vscode_chat_not_detected():
-    assert vscode_chat.run(Context(data_dir=Path("/x"), cwd=Path("/x"))) == []
+    _assert_not_installed(
+        vscode_chat.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    )
 
 
 def test_vscode_chat_healthy():

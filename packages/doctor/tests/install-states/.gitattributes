@@ -1,0 +1,6 @@
+# Corpus artifacts are LF-canonical: the drift test compares bytes across
+# platforms, so checkouts must never CRLF-ify text files even when the
+# runner sets core.autocrlf=true. The sqlite stores are binary.
+* text eol=lf
+*.sqlite -text
+*.db -text
