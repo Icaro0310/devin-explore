@@ -34,7 +34,7 @@ The extension is strictly read-only:
 ## CLI compatibility (schema contract)
 
 Pinned via the `devin-search-cli` field in `package.json`:
-`devin-search >=0.1,<0.2` (the released CLI is 0.1.x).
+`devin-search >=0.1,<0.3` (the released CLI is 0.2.x).
 
 The extension renders this `query --json` shape:
 

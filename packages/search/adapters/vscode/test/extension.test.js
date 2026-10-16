@@ -301,8 +301,9 @@ test("package.json devin-search-cli pin covers the package version", () => {
 test("cliCompatStatus classifies versions against the pin", async () => {
   const { cliCompatStatus } = __internals__;
   assert.strictEqual(cliCompatStatus("0.1.2"), "compatible");
+  assert.strictEqual(cliCompatStatus("0.2.0"), "compatible");
   assert.strictEqual(cliCompatStatus("0.0.9"), "too-old");
-  assert.strictEqual(cliCompatStatus("0.2.0"), "too-new");
+  assert.strictEqual(cliCompatStatus("0.3.0"), "too-new");
   assert.strictEqual(cliCompatStatus("garbage"), "unknown");
   assert.strictEqual(cliCompatStatus(undefined), "unknown");
 });
@@ -444,7 +445,7 @@ test("extraArgs error note reports too-old and too-new verdicts accurately", asy
   try {
     for (const [version, want] of [
       ["0.0.1", /also outside.*upgrade the CLI/s],
-      ["0.2.0", /also outside.*downgrade the CLI or update the extension/s],
+      ["0.3.0", /also outside.*downgrade the CLI or update the extension/s],
     ]) {
       __internals__.resetProbe();
       testExtras = ["--bogus"];

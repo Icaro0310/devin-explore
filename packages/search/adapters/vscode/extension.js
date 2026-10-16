@@ -18,8 +18,8 @@ let lastTerm = null;
 // Same bounds as the "devin-search-cli" pin in package.json —
 // test/cli-contract.test.js asserts the pin, these bounds and the real
 // CLI version agree.
-const COMPATIBLE_CLI = { min: [0, 1, 0], maxExclusive: [0, 2, 0] };
-const CLI_RANGE = ">=0.1,<0.2";
+const COMPATIBLE_CLI = { min: [0, 1, 0], maxExclusive: [0, 3, 0] };
+const CLI_RANGE = ">=0.1,<0.3";
 
 function parseVersion(version) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]*)?$/.exec(
