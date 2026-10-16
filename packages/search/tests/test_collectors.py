@@ -950,3 +950,100 @@ def test_vanished_source_root_drops_stale_docs(tmp_path):
     assert stats.removed == 1
     assert not search(idx, "ghostline")
     assert index_doc_count(idx) == 0
+
+
+_DEEP_JSON_LINE = "[" * 200_000 + "]" * 200_000
+
+
+def test_copilot_deep_json_line_skipped(tmp_path):
+    """A JSONL record too deep for json.loads raises RecursionError — it
+    must skip, not abort the run (devin-review #83)."""
+    root = tmp_path / "copilot"
+    add_copilot_session(
+        root,
+        "cp-deepjson",
+        [
+            copilot_event("user.message", {"text": "copilot predeep"}),
+            _DEEP_JSON_LINE,
+            copilot_event(
+                "user.message", {"text": "copilot postdeep"}, idx=1
+            ),
+        ],
+        workspace={"git_root": "/fixture/workspace/copilot"},
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, copilot_dirs=[root])
+
+    assert stats.copilot_messages == 2
+    assert stats.skipped_records >= 1
+    assert search(idx, "postdeep")
+
+
+def test_codex_deep_rollout_line_skipped(tmp_path):
+    """Same RecursionError recovery for codex rollout JSONL
+    (devin-review #83)."""
+    root = add_codex_home(
+        tmp_path / "codex",
+        rollouts=[
+            (
+                "sessions/2026/05/rollout-deep.jsonl",
+                [
+                    codex_record(
+                        "session_meta",
+                        {"id": "codex-deep", "timestamp": BASE_ISO, "cwd": "/w"},
+                    ),
+                    _DEEP_JSON_LINE,
+                    codex_record(
+                        "response_item",
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": "codex deepok ask",
+                                }
+                            ],
+                        },
+                    ),
+                ],
+            )
+        ],
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, codex_dir=root)
+
+    assert stats.skipped_records >= 1
+    assert search(idx, "deepok")
+
+
+def test_vscode_deep_json_files_skipped(tmp_path):
+    """A snapshot .json or mutations .jsonl too deep for json.loads is
+    skipped while sibling sessions still index (devin-review #83)."""
+    user_dir = tmp_path / "Code" / "User"
+    base = (
+        user_dir / "workspaceStorage" / "wshash-deep" / "chatSessions"
+    )
+    base.mkdir(parents=True)
+    (base / "deep-snap.json").write_text(_DEEP_JSON_LINE)
+    (base / "deep-mut.jsonl").write_text(_DEEP_JSON_LINE + "\n")
+    doc = {
+        "version": 3,
+        "sessionId": "vs-shallow",
+        "creationDate": BASE_MS,
+        "lastMessageDate": BASE_MS + 5_000,
+        "requests": [
+            {
+                "message": {"text": "vscode shallow ask"},
+                "response": [{"value": "vscode shallow reply"}],
+                "timestamp": BASE_MS,
+                "responseTimestamp": BASE_MS + 5_000,
+            }
+        ],
+    }
+    add_vscode_chat(user_dir, "vs-shallow", doc=doc, ws_dir="wshash-ok")
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, vscode_chat_dirs=[user_dir])
+
+    assert stats.vscode_chat_messages == 2
+    assert search(idx, "shallow")

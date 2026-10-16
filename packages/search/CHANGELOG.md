@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string are skipped instead of raising `TypeError`; codex `threads`
   docs re-index when only `cwd`/`created_at` metadata changes; and a
   configured source whose roots all vanished has its stale docs and
-  markers removed even though its collector is skipped.
+  markers removed even though its collector is skipped. Regression
+  fixtures now exercise the `RecursionError` recovery paths directly
+  (copilot JSONL, codex rollout, vscode snapshot + mutations log).
 
 
 ### Added
