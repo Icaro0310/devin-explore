@@ -16,6 +16,7 @@ from conftest import (
     add_vscode_chat,
     codex_record,
     copilot_event,
+    lock_db_exclusively,
 )
 from devin_doctor import paths
 from devin_doctor.checks.surfaces import (
@@ -116,6 +117,23 @@ def test_devin_cli_corrupt_fails(ctx):
     assert f.status is Status.FAIL
     assert f.rung == "readable"
     assert f.code == "store-corrupt"
+
+
+def test_devin_cli_locked_db_warns_not_corrupt(ctx):
+    """SQLITE_BUSY is a transient lock — Devin is running — not corruption.
+    The surface ladder must agree with health-of-data's WARN, not FAIL the
+    run with ``store-corrupt``."""
+    holder = lock_db_exclusively(ctx.data_dir / "cli" / "sessions.db")
+    try:
+        findings = stores_devin.run(ctx)
+    finally:
+        holder.rollback()
+        holder.close()
+    assert not any(f.status is Status.FAIL for f in findings)
+    f = _finding(findings, "locked")
+    assert f.status is Status.WARN
+    assert f.code == "unreadable"
+    assert "closed" in (f.fix or "")
 
 
 def test_devin_cli_schema_old_warns(ctx):
@@ -297,6 +315,28 @@ def test_devin_chat_detected_by_vscdb_alone(tmp_path):
     assert _finding(findings, "state.vscdb present").status is Status.PASS
     # the install is detected — the missing acp dir is WARN, not absent
     assert _finding(findings, "acp-messages").status is Status.WARN
+
+
+def test_devin_chat_locked_state_vscdb_warns_not_corrupt(tmp_path):
+    """A locked state.vscdb means the Desktop app is running — WARN, not a
+    corruption FAIL."""
+    root = tmp_path / "devin"
+    path = root / "User" / "globalStorage" / "state.vscdb"
+    create_state_vscdb(path)
+    holder = sqlite3.connect(path)
+    holder.execute("PRAGMA journal_mode=DELETE")
+    holder.execute("BEGIN EXCLUSIVE")
+    holder.execute("INSERT INTO ItemTable(key, value) VALUES ('qa.lock', '1')")
+    try:
+        findings = devin_chat.run(Context(data_dir=root, cwd=tmp_path))
+    finally:
+        holder.rollback()
+        holder.close()
+    assert not any(f.status is Status.FAIL for f in findings)
+    f = _finding(findings, "state.vscdb")
+    assert f.status is Status.WARN
+    assert "locked" in f.message
+    assert f.code == "unreadable"
 
 
 # --- copilot-cli -------------------------------------------------------------

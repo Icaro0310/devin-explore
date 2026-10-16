@@ -36,6 +36,12 @@ def connect_readonly(path: Path) -> sqlite3.Connection:
     raise exc if exc is not None else sqlite3.Error(f"{path}: unreadable")
 
 
+def is_lock_error(exc: BaseException) -> bool:
+    """``True`` for SQLITE_BUSY — a live writer holds the store (the
+    agent is running), a transient state, not corruption."""
+    return isinstance(exc, sqlite3.Error) and "locked" in str(exc).lower()
+
+
 def has_sqlite_magic(path: Path) -> bool:
     """The 16-byte SQLite header — the cheapest corruption gate."""
     try:
