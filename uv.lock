@@ -384,7 +384,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-search"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "packages/search" }
 dependencies = [
     { name = "devin-internals-spec" },
