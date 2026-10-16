@@ -34,7 +34,7 @@ or set `devinDoctor.executable` to an absolute path.
 The extension and the CLI version independently; the JSON emitted by
 `devin-doctor check --json` is the contract between them. The extension
 declares the CLI range it understands in `package.json`
-(`"devin-doctor-cli": ">=0.1,<0.2"`) and enforces it at runtime:
+(`"devin-doctor-cli": ">=0.1,<0.4"`) and enforces it at runtime:
 
 - A payload missing a contracted field fails loudly with a version-drift
   error instead of rendering a blank badge.
