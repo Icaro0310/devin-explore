@@ -24,6 +24,7 @@ from devin_internals.schema import SchemaError
 from devin_doctor.checks.surfaces._common import (
     connect_readonly,
     has_sqlite_magic,
+    is_lock_error,
     row_count,
     table_names,
 )
@@ -37,16 +38,29 @@ from devin_doctor.paths import (
 CHECK_ID = "devin-chat"
 
 
-def _sqlite_error(path: Path) -> str | None:
+def _sqlite_error(path: Path) -> sqlite3.Error | None:
     """``None`` when ``path`` opens read-only as SQLite; else the error."""
     if not has_sqlite_magic(path):
-        return "not a SQLite database (bad magic)"
+        return sqlite3.DatabaseError("not a SQLite database (bad magic)")
     try:
         con = connect_readonly(path)
     except sqlite3.Error as exc:
-        return str(exc)
+        return exc
     con.close()
     return None
+
+
+def _locked_finding(subject: str, size: int | None = None) -> Finding:
+    """SQLITE_BUSY — the app holds the store: transient, not corrupt."""
+    detail = f" present ({human_size(size)})" if size is not None else ""
+    return Finding(
+        CHECK_ID,
+        Status.WARN,
+        f"{subject}{detail} is locked — Devin is probably running",
+        fix="Re-run when Devin is closed.",
+        rung="readable",
+        code="unreadable",
+    )
 
 
 def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
@@ -87,13 +101,15 @@ def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
 
     empty: list[str] = []
     corrupt: list[str] = []
+    locked: list[str] = []
     healthy: list[Path] = []
     for p in acp_dbs:
         if p.stat().st_size == 0:
             empty.append(p.name)
             continue
-        if _sqlite_error(p) is not None:
-            corrupt.append(p.name)
+        err = _sqlite_error(p)
+        if err is not None:
+            (locked if is_lock_error(err) else corrupt).append(p.name)
             continue
         healthy.append(p)
     if corrupt:
@@ -111,6 +127,21 @@ def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
             )
         )
         return findings
+    if locked:
+        shown = ", ".join(locked[:3]) + (" …" if len(locked) > 3 else "")
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"acp-messages: {len(locked)}/{len(acp_dbs)} db(s) locked "
+                f"({shown}) — Devin is probably running",
+                fix="Re-run when Devin is closed.",
+                rung="readable",
+                code="unreadable",
+            )
+        )
+        if not healthy:
+            return findings
     if not healthy:
         # every .db is zero-byte — sane owns emptiness, not readable
         findings.append(
@@ -247,7 +278,10 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
                 code="empty-store",
             )
         ]
-    if _sqlite_error(path) is not None:
+    err = _sqlite_error(path)
+    if err is not None:
+        if is_lock_error(err):
+            return [_locked_finding("state.vscdb", size)]
         return [
             Finding(
                 CHECK_ID,
@@ -277,6 +311,8 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
             )
         ]
     except (sqlite3.Error, OSError) as exc:
+        if is_lock_error(exc):
+            return [_locked_finding("state.vscdb", size)]
         # the file opened but its pages can't be read — that is a
         # damaged store, not a foreign shape: FAIL store-corrupt
         return [

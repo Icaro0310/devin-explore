@@ -154,9 +154,13 @@ plus `sessions/`/`archived_sessions/` rollouts); **vscode-chat** merges the
   JSONL lines are skipped, never fatal.
 - **Keyword search only (M1).** BM25 over tokens — no synonyms or
   embeddings; semantic search is an opt-in M2 candidate.
-- **Deletion lag.** New rows are picked up incrementally, but rows
-  deleted mid-table upstream can stay in the index until `--rebuild`
-  (tail-pruned sources are detected and re-indexed automatically).
+- **Deletion detection.** Devin-cli stores keep a content digest over
+  the covered rows, so mid-table deletes and in-place row updates are
+  re-indexed on the next `index` run; copilot files do the same via a
+  covered-prefix fingerprint. Tail-pruned sources are re-indexed
+  automatically. The digest only covers sources as they existed on the
+  last run — a source deleted *and* recreated between runs is picked
+  up, but a store modified while `devin-search` is running is not.
 - **Read-only by design** — the tool never writes to Devin's stores; the
   only file it creates is `search.db`.
 

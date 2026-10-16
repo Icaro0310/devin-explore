@@ -28,6 +28,7 @@ from devin_internals.schema import (
 from devin_doctor.checks.surfaces._common import (
     connect_readonly,
     has_sqlite_magic,
+    is_lock_error,
     row_count,
     table_names,
 )
@@ -42,22 +43,35 @@ _UPDATE_FIX = (
 )
 
 
-def _readable_error(path: Path) -> str | None:
+def _readable_error(path: Path) -> sqlite3.Error | None:
     """``None`` when the store opens read-only and looks like SQLite —
-    else the error string a FAIL finding reports."""
+    else the exception a finding reports."""
     if not has_sqlite_magic(path):
-        return "not a SQLite database (bad magic)"
+        return sqlite3.DatabaseError("not a SQLite database (bad magic)")
     try:
         con = connect_readonly(path)
     except sqlite3.Error as exc:
-        return str(exc)
+        return exc
     try:
         table_names(con)
     except sqlite3.Error as exc:
-        return str(exc)
+        return exc
     finally:
         con.close()
     return None
+
+
+def _locked_finding(rung: str) -> Finding:
+    """SQLITE_BUSY — Devin is running and holds the store: a transient
+    state, not corruption (health-of-data reports the same shape)."""
+    return Finding(
+        CHECK_ID,
+        Status.WARN,
+        "sessions.db is locked — Devin is probably running",
+        fix="Re-run when Devin is closed.",
+        rung=rung,
+        code="unreadable",
+    )
 
 
 def _schema_finding(path: Path) -> tuple[Finding, bool]:
@@ -96,6 +110,8 @@ def _schema_finding(path: Path) -> tuple[Finding, bool]:
             False,
         )
     except (sqlite3.Error, OSError) as exc:
+        if is_lock_error(exc):
+            return _locked_finding("schema"), False
         # readable passed (file opened + table list) yet schema evaluation
         # hit a sqlite error — corruption surfacing at this layer
         return (
@@ -244,6 +260,9 @@ def run(ctx: Context) -> list[Finding]:
         return findings
     error = _readable_error(path)
     if error is not None:
+        if is_lock_error(error):
+            findings.append(_locked_finding("readable"))
+            return findings
         findings.append(
             Finding(
                 CHECK_ID,

@@ -1,8 +1,20 @@
 import hashlib
+import json
+import shutil
 import sqlite3
 
 import pytest
-from conftest import add_acp_db, add_session, msg
+from conftest import (
+    add_acp_db,
+    add_codex_home,
+    add_copilot_session,
+    add_session,
+    add_vscode_chat,
+    codex_record,
+    copilot_event,
+    msg,
+    vscode_request,
+)
 from devin_internals.fixtures import create_acp_messages_db
 from devin_search.index import build_index, index_doc_count
 from devin_search.query import search
@@ -192,6 +204,278 @@ def test_query_rejects_stale_schema_index(db_path, tmp_path):
 
     with pytest.raises(RuntimeError, match="stale"):
         search(idx, "kubectl")
+
+
+# --- vanished sources --------------------------------------------------------
+#
+# A managed store that disappeared since the last run must sweep its docs
+# from the index — otherwise deleted sessions keep surfacing as stale hits
+# forever.  ``None`` still means "not managed this run" (``--no-*``) and
+# preserves docs.
+
+
+def test_inplace_row_update_reindexes(db_path, tmp_path):
+    """Row ids are positions, not immutability: an UPDATE under an
+    unchanged row_id must re-index — the watermark alone cannot see it."""
+    add_session(
+        db_path,
+        "edit-me",
+        messages=[msg("user", "walrus before the edit")],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    con = sqlite3.connect(db_path)
+    with con:
+        con.execute(
+            "UPDATE message_nodes SET chat_message = ?"
+            " WHERE session_id = 'edit-me'",
+            ('{"role": "user", "text": "capybara after the edit"}',),
+        )
+    con.close()
+
+    stats = build_index(idx, sessions_db=db_path)
+    texts = "\n".join(_doc_texts(idx))
+    assert "capybara" in texts
+    assert "walrus" not in texts
+    assert stats.removed > 0
+
+
+def test_copilot_midfile_edit_reindexes(tmp_path):
+    """An in-place events.jsonl edit (same length or longer) must not
+    hide behind the line-count watermark."""
+    root = tmp_path / "copilot"
+    add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "alpha zebra"})]
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root])
+    assert index_doc_count(idx) == 1
+
+    add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "marmot"})]
+    )
+    stats = build_index(idx, copilot_dirs=[root])
+    texts = "\n".join(_doc_texts(idx))
+    assert "marmot" in texts
+    assert "alpha zebra" not in texts
+    assert index_doc_count(idx) == 1
+    assert stats.removed == 1
+
+
+def test_copilot_append_still_incremental(tmp_path):
+    """Pure appends keep the watermark fast path — no re-index."""
+    root = tmp_path / "copilot"
+    path = add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "first"})]
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root])
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                copilot_event(
+                    "user.message", {"content": "pangolin"}, idx=1
+                )
+            )
+            + "\n"
+        )
+    stats = build_index(idx, copilot_dirs=[root])
+    assert stats.indexed == 1
+    assert stats.removed == 0
+    assert index_doc_count(idx) == 2
+
+
+def test_predigest_devin_index_rebuilds_once(db_path, tmp_path):
+    """An index built before the content digest existed has watermarks but
+    no fingerprint: covered content cannot be vouched for, so the first
+    run under this code must rebuild it — otherwise pre-upgrade stale
+    rows persist forever behind a freshly recorded digest."""
+    add_session(
+        db_path,
+        "s1",
+        messages=[msg("user", "walrus before the edit")],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    # Simulate the pre-upgrade index: watermarks survive, digest absent.
+    con = sqlite3.connect(idx)
+    with con:
+        con.execute("DELETE FROM index_meta WHERE key = 'wm:devin-cli:content'")
+    con.close()
+
+    # What an old release would silently miss — an in-place row UPDATE.
+    con = sqlite3.connect(db_path)
+    with con:
+        con.execute(
+            "UPDATE message_nodes SET chat_message = ?"
+            " WHERE session_id = 's1'",
+            ('{"role": "user", "text": "capybara after the edit"}',),
+        )
+    con.close()
+
+    stats = build_index(idx, sessions_db=db_path)
+    texts = "\n".join(_doc_texts(idx))
+    assert stats.removed > 0
+    assert "capybara" in texts
+    assert "walrus" not in texts
+
+    # The rebuilt state is trusted afterwards — no reset loop.
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+
+
+def test_predigest_copilot_index_reindexes(tmp_path):
+    """A copilot file indexed before the head fingerprint existed (wm > 0,
+    head key absent) must be re-indexed once — in-place edits predating
+    the upgrade cannot hide behind the line watermark."""
+    root = tmp_path / "copilot"
+    path = add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "alpha zebra"})]
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root])
+
+    con = sqlite3.connect(idx)
+    with con:
+        con.execute(
+            "DELETE FROM index_meta WHERE key LIKE 'copilot-cli:head:%'"
+        )
+    con.close()
+
+    path.write_text(
+        json.dumps(
+            copilot_event("user.message", {"content": "marmot"})
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stats = build_index(idx, copilot_dirs=[root])
+    texts = "\n".join(_doc_texts(idx))
+    assert "marmot" in texts
+    assert "alpha zebra" not in texts
+    assert stats.removed == 1
+
+
+def test_textless_tool_call_no_reset_loop(db_path, tmp_path):
+    """A tool call with no extractable text is skipped at insert time; it
+    must not enter the coverage digest either — otherwise every run sees
+    a mismatch and rebuilds the whole devin-cli slice forever."""
+    add_session(db_path, "s1", messages=[msg("user", "baseline")])
+    add_session(
+        db_path,
+        "s2",
+        tool_calls=[(None, None)],  # no payload → never indexed
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+
+
+def test_vanished_sessions_db_drops_devin_cli_docs(db_path, tmp_path):
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+    assert index_doc_count(idx) > 0
+
+    db_path.unlink()
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed > 0
+    assert index_doc_count(idx) == 0
+    assert search(idx, "fixture") == []
+
+
+def test_vanished_acp_dir_drops_devin_chat_docs(acp_dir, tmp_path):
+    add_acp_db(acp_dir, "gone", "s-gone", [("user", {"text": "depart"})])
+    idx = tmp_path / "search.db"
+    build_index(idx, acp_dir=acp_dir)
+    assert index_doc_count(idx) == 1
+
+    shutil.rmtree(acp_dir)
+    stats = build_index(idx, acp_dir=acp_dir)
+    assert stats.removed == 1
+    assert index_doc_count(idx) == 0
+
+
+def test_vanished_copilot_root_drops_docs(tmp_path):
+    root = tmp_path / "copilot"
+    add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "numbat"})]
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root])
+    assert index_doc_count(idx) == 1
+
+    shutil.rmtree(root)
+    stats = build_index(idx, copilot_dirs=[root])
+    assert stats.removed == 1
+    assert index_doc_count(idx) == 0
+
+
+def test_vanished_codex_root_drops_docs(tmp_path):
+    root = tmp_path / "codex"
+    add_codex_home(
+        root,
+        rollouts=[
+            (
+                "sessions/x/rollout-r1.jsonl",
+                [
+                    codex_record(
+                        "session_meta",
+                        {"id": "cx-1", "timestamp": "2026-05-28T20:26:40Z",
+                         "cwd": "/w"},
+                    ),
+                    codex_record(
+                        "event_msg",
+                        {"type": "user_message", "message": "quoll"},
+                    ),
+                ],
+            )
+        ],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, codex_dir=root)
+    assert index_doc_count(idx) == 1
+
+    shutil.rmtree(root)
+    stats = build_index(idx, codex_dir=root)
+    assert stats.removed == 1
+    assert index_doc_count(idx) == 0
+
+
+def test_vanished_vscode_chat_dir_drops_docs(tmp_path):
+    user = tmp_path / "Code" / "User"
+    add_vscode_chat(
+        user, "vs-1",
+        doc={"version": 3,
+             "requests": [vscode_request("quokka", "resp")]},
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, vscode_chat_dirs=[user])
+    assert index_doc_count(idx) >= 1
+
+    shutil.rmtree(tmp_path / "Code")
+    stats = build_index(idx, vscode_chat_dirs=[user])
+    assert stats.removed >= 1
+    assert index_doc_count(idx) == 0
+
+
+def test_unpassed_source_preserves_docs(acp_dir, tmp_path):
+    """``--no-*`` (``None``) means the source is not managed this run —
+    existing docs stay.  Only an *absent* managed path sweeps."""
+    add_acp_db(acp_dir, "keep", "s-keep", [("user", {"text": "stay"})])
+    idx = tmp_path / "search.db"
+    build_index(idx, acp_dir=acp_dir)
+    assert index_doc_count(idx) == 1
+
+    stats = build_index(idx)
+    assert stats.removed == 0
+    assert index_doc_count(idx) == 1
 
 
 def test_devin_cli_epoch_seconds_normalize_to_ms(db_path, tmp_path):

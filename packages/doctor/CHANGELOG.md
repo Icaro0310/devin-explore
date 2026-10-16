@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A locked (`SQLITE_BUSY`) `sessions.db` now reports `WARN unreadable`
+  at the `readable` rung instead of `FAIL store-corrupt` — a busy file
+  is not a damaged file, and the rung contract reserves `corrupt` for
+  content damage.
+
 ## [0.3.0] - 2026-10-16
 
 ### Fixed

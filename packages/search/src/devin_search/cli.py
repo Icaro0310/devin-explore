@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -19,12 +21,15 @@ from devin_search.fmt import (
 from devin_search.history import attach_history_notes
 from devin_search.index import build_index
 from devin_search.paths import (
+    acp_dir_candidates,
+    codex_root_candidates,
     default_acp_dir,
     default_codex_dir,
     default_copilot_dirs,
     default_index_path,
     default_sessions_db,
     default_vscode_chat_dirs,
+    sessions_db_candidates,
 )
 from devin_search.query import StaleIndexError, parse_since, search
 
@@ -33,20 +38,39 @@ def _resolve_index(arg: str | None) -> Path:
     return Path(arg).expanduser() if arg else default_index_path()
 
 
+def _detected_or_candidate(
+    found: Path | None, candidates: list[Path]
+) -> Path | None:
+    """Auto-detected store, else the canonical candidate location.
+
+    "Not found" is not "not requested": a managed source whose store
+    vanished since the last run must still sweep its stale docs —
+    ``build_index`` treats a given-but-absent path as a drop. Passing the
+    canonical candidate keeps auto-detected sweeps working; explicit
+    flags are validated separately below."""
+    return found if found is not None else (
+        candidates[0] if candidates else None
+    )
+
+
 def _cmd_index(args: argparse.Namespace) -> int:
     sessions_db = (
         Path(args.sessions_db).expanduser()
         if args.sessions_db
-        else default_sessions_db()
+        else _detected_or_candidate(
+            default_sessions_db(), sessions_db_candidates()
+        )
     )
     acp_dir = (
         None
         if args.no_acp
         else Path(args.acp_dir).expanduser()
         if args.acp_dir
-        else default_acp_dir()
+        else _detected_or_candidate(
+            default_acp_dir(), acp_dir_candidates()
+        )
     )
-    copilot_dirs = (
+    copilot_dirs = (  # [] already means "scanned, absent" for build_index
         None
         if args.no_copilot
         else [Path(args.copilot_dir).expanduser()]
@@ -58,22 +82,41 @@ def _cmd_index(args: argparse.Namespace) -> int:
         if args.no_codex
         else Path(args.codex_dir).expanduser()
         if args.codex_dir
-        else default_codex_dir()
+        else _detected_or_candidate(
+            default_codex_dir(), codex_root_candidates()
+        )
     )
-    vscode_chat_dirs = (
+    vscode_chat_dirs = (  # [] already means "scanned, absent"
         None
         if args.no_vscode_chat
         else [Path(args.vscode_chat_dir).expanduser()]
         if args.vscode_chat_dir
         else default_vscode_chat_dirs()
     )
-    if (
-        sessions_db is None
-        and acp_dir is None
-        and not copilot_dirs
-        and codex_dir is None
-        and not vscode_chat_dirs
+    # Explicitly named stores must exist — a typo'd path is a user error,
+    # not a vanished source sweeping its docs. A --no-* flag wins: the
+    # supplied path is then unused, so it must not be validated.
+    for raw, disabled in (
+        (args.sessions_db, False),
+        (args.acp_dir, args.no_acp),
+        (args.copilot_dir, args.no_copilot),
+        (args.codex_dir, args.no_codex),
+        (args.vscode_chat_dir, args.no_vscode_chat),
     ):
+        if not disabled and raw and not Path(raw).expanduser().exists():
+            print(f"devin-search: {raw}: no such file", file=sys.stderr)
+            return 2
+    index_path = _resolve_index(args.index)
+    codex_sessions = os.environ.get("CODEX_SESSIONS_DIR", "").strip()
+    have_store = (
+        (sessions_db is not None and sessions_db.is_file())
+        or (acp_dir is not None and acp_dir.is_dir())
+        or any(Path(d).is_dir() for d in copilot_dirs or [])
+        or (codex_dir is not None and Path(codex_dir).is_dir())
+        or bool(codex_sessions and Path(codex_sessions).is_dir())
+        or any(Path(d).is_dir() for d in vscode_chat_dirs or [])
+    )
+    if not have_store and not index_path.exists():
         print(
             "devin-search: no session stores found in the default "
             "locations; pass --sessions-db, --acp-dir, --copilot-dir, "
@@ -81,14 +124,9 @@ def _cmd_index(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    if sessions_db is not None and not sessions_db.exists():
-        print(
-            f"devin-search: {sessions_db}: no such file", file=sys.stderr
-        )
-        return 2
     try:
         stats = build_index(
-            _resolve_index(args.index),
+            index_path,
             sessions_db=sessions_db,
             acp_dir=acp_dir,
             copilot_dirs=copilot_dirs,
@@ -96,7 +134,9 @@ def _cmd_index(args: argparse.Namespace) -> int:
             vscode_chat_dirs=vscode_chat_dirs,
             rebuild=args.rebuild,
         )
-    except SchemaError as exc:
+    except (SchemaError, sqlite3.Error, OSError) as exc:
+        # Corrupt/locked stores (and a corrupt index file) are input
+        # errors — report them, never traceback.
         print(f"devin-search: {exc}", file=sys.stderr)
         return 2
     if args.json:
@@ -125,7 +165,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
             since=since,
             limit=args.limit,
         )
-    except (FileNotFoundError, StaleIndexError) as exc:
+    except (FileNotFoundError, StaleIndexError, sqlite3.Error, OSError) as exc:
         print(f"devin-search: {exc}", file=sys.stderr)
         return 2
     if not args.no_log:
