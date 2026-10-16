@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_vscode_field_text` walks containers iteratively, so a chat doc with
   deeply nested `content` fields no longer RecursionErrors the whole
   index run.
+- More multi-source collector hardening (re-review): `json.loads`
+  `RecursionError`s are treated like `JSONDecodeError` so a pathological
+  record is skipped instead of aborting the run (vscode snapshot,
+  mutations log, copilot, codex); copilot records whose `type` is not a
+  string are skipped instead of raising `TypeError`; codex `threads`
+  docs re-index when only `cwd`/`created_at` metadata changes; and a
+  configured source whose roots all vanished has its stale docs and
+  markers removed even though its collector is skipped.
 
 
 ### Added

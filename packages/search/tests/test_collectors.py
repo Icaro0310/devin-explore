@@ -863,3 +863,90 @@ def test_vscode_deep_content_nesting_indexes(tmp_path):
 
     assert stats.vscode_chat_messages == 2
     assert search(idx, "deepnest")
+
+
+def test_copilot_unhashable_event_type_skipped(tmp_path):
+    """``{"type": []}`` is valid JSONL but unhashable — it must skip, not
+    TypeError the whole index run (devin-review on #83)."""
+    root = tmp_path / "copilot"
+    add_copilot_session(
+        root,
+        "cp-badtype",
+        [
+            copilot_event("user.message", {"text": "copilot prebad marker"}),
+            '{"type": [], "data": {"text": "unhashable"}}',
+            copilot_event(
+                "user.message", {"text": "copilot postbad marker"}, idx=1
+            ),
+        ],
+        workspace={"git_root": "/fixture/workspace/copilot"},
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, copilot_dirs=[root])
+
+    assert stats.copilot_messages == 2
+    assert stats.skipped_records >= 1
+    assert search(idx, "postbad")
+
+
+def test_codex_thread_metadata_change_reindexes(tmp_path):
+    """A cwd/created_at change with unchanged text must still update the
+    indexed doc — filters read the stored project/ts (devin-review #83)."""
+    root = tmp_path / "codex"
+    add_codex_home(
+        root,
+        state_n=1,
+        threads=[
+            {
+                "id": "t-meta",
+                "created_at": BASE_MS,
+                "cwd": "/old",
+                "title": "codex metachange",
+            }
+        ],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, codex_dir=root)
+    rows = _docs(idx, "codex-cli")
+    assert rows and all(r[3] == "/old" for r in rows)
+
+    add_codex_home(
+        root,
+        state_n=1,
+        threads=[
+            {
+                "id": "t-meta",
+                "created_at": BASE_MS,
+                "cwd": "/new",
+                "title": "codex metachange",
+            }
+        ],
+    )
+    stats = build_index(idx, codex_dir=root)
+    rows = _docs(idx, "codex-cli")
+    assert stats.removed >= 1
+    assert rows and all(r[3] == "/new" for r in rows)
+
+
+def test_vanished_source_root_drops_stale_docs(tmp_path):
+    """When every root of a source disappears, its docs/markers must be
+    dropped — not linger as phantom hits (devin-review #83)."""
+    root = tmp_path / "copilot"
+    add_copilot_session(
+        root,
+        "cp-gone",
+        [copilot_event("user.message", {"text": "copilot ghostline"})],
+        workspace={"git_root": "/w"},
+    )
+    idx = tmp_path / "search.db"
+    stats = build_index(idx, copilot_dirs=[root])
+    assert stats.copilot_messages == 1
+    assert search(idx, "ghostline")
+
+    import shutil
+
+    shutil.rmtree(root)
+    stats = build_index(idx, copilot_dirs=[root])
+    assert stats.removed == 1
+    assert not search(idx, "ghostline")
+    assert index_doc_count(idx) == 0
