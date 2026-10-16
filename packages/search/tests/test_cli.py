@@ -188,6 +188,41 @@ def test_index_locked_sessions_db_exit_2(db_path, tmp_path, capsys):
     assert "Traceback" not in err
 
 
+def test_disabled_source_skips_explicit_path_check(
+    db_path, tmp_path, capsys
+):
+    """``--no-acp --acp-dir /gone``: the disabled source never reads the
+    path, so a stale explicit value must not reject the whole run."""
+    rc = main(
+        [
+            "index",
+            "--sessions-db", str(db_path),
+            "--no-acp",
+            "--acp-dir", str(tmp_path / "gone"),
+            "--index", str(tmp_path / "s.db"),
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+
+def test_enabled_source_still_checks_explicit_path(
+    db_path, tmp_path, capsys
+):
+    """The same flag without ``--no-*`` remains a typo error."""
+    rc = main(
+        [
+            "index",
+            "--sessions-db", str(db_path),
+            "--acp-dir", str(tmp_path / "gone"),
+            "--index", str(tmp_path / "s.db"),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no such file" in err
+
+
 def test_auto_detected_vanished_source_sweeps_stale_docs(
     db_path, tmp_path, capsys
 ):

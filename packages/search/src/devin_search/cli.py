@@ -94,15 +94,16 @@ def _cmd_index(args: argparse.Namespace) -> int:
         else default_vscode_chat_dirs()
     )
     # Explicitly named stores must exist — a typo'd path is a user error,
-    # not a vanished source sweeping its docs.
-    for raw in (
-        args.sessions_db,
-        args.acp_dir,
-        args.copilot_dir,
-        args.codex_dir,
-        args.vscode_chat_dir,
+    # not a vanished source sweeping its docs. A --no-* flag wins: the
+    # supplied path is then unused, so it must not be validated.
+    for raw, disabled in (
+        (args.sessions_db, False),
+        (args.acp_dir, args.no_acp),
+        (args.copilot_dir, args.no_copilot),
+        (args.codex_dir, args.no_codex),
+        (args.vscode_chat_dir, args.no_vscode_chat),
     ):
-        if raw and not Path(raw).expanduser().exists():
+        if not disabled and raw and not Path(raw).expanduser().exists():
             print(f"devin-search: {raw}: no such file", file=sys.stderr)
             return 2
     index_path = _resolve_index(args.index)

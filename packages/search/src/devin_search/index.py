@@ -255,7 +255,15 @@ def _index_sessions_db(
         sessions, nodes, prompts, tool_calls,
         wm_nodes, wm_prompts, indexed_tool_refs,
     )
-    changed = stored_digest is not None and stored_digest != pre_digest
+    if stored_digest is None:
+        # Index built by a pre-digest release: the watermarks say docs
+        # exist but the covered content was never fingerprinted, so a
+        # stale row could persist forever once the digest is recorded.
+        # Reset once to rebuild from a known-good state. A fresh index
+        # (watermarks still 0) has nothing covered and is exempt.
+        changed = bool(wm_nodes or wm_prompts)
+    else:
+        changed = stored_digest != pre_digest
     shrunk = (wm_nodes and max_node < wm_nodes) or (
         wm_prompts and max_prompt < wm_prompts
     )
@@ -307,6 +315,10 @@ def _index_sessions_db(
     _meta_set(con, WM_PROMPTS, max(wm_prompts, max_prompt))
 
     # tool_call_state has no auto-increment id — dedup on the ref instead.
+    # Only refs that actually received a doc go into `covered_tool_refs`:
+    # hashing skipped calls (no extractable text → never indexed) would
+    # diverge from the indexed refs every run and force a reset loop.
+    inserted_tool_refs = set()
     for tc in tool_calls:
         ref = f"tool:{tc.session_id}/{tc.tool_call_id}"
         if ref in indexed_tool_refs:
@@ -330,14 +342,13 @@ def _index_sessions_db(
             source=SOURCE_DEVIN_CLI,
             ref=ref,
         )
+        inserted_tool_refs.add(ref)
         stats.tool_calls += 1
 
     # Record the digest over everything now covered — computed at the
     # *new* watermarks so a run that both reset and picked up fresh rows
     # does not trigger a second spurious reset next time.
-    all_tool_refs = {
-        f"tool:{tc.session_id}/{tc.tool_call_id}" for tc in tool_calls
-    }
+    covered_tool_refs = indexed_tool_refs | inserted_tool_refs
     _meta_set(
         con,
         WM_CONTENT,
@@ -348,7 +359,7 @@ def _index_sessions_db(
             tool_calls,
             max(wm_nodes, max_node),
             max(wm_prompts, max_prompt),
-            all_tool_refs,
+            covered_tool_refs,
         ),
     )
     return sessions
@@ -756,9 +767,10 @@ def _index_copilot_dirs(
         head_now = hashlib.sha256(
             "\n".join(lines[:wm]).encode("utf-8")
         ).hexdigest()
-        if wm and (
-            len(lines) < wm or (head is not None and head != head_now)
-        ):
+        # head is None for files indexed by a pre-digest release — the
+        # covered prefix was never fingerprinted, so re-index once rather
+        # than trusting docs we cannot vouch for.
+        if wm and (len(lines) < wm or head != head_now):
             # Lines below the watermark were lost or edited in place —
             # docs derived from them are stale; re-index the whole file.
             stats.removed += _drop_source_file_docs(con, SOURCE_COPILOT, file_key)

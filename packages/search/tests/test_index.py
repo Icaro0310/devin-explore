@@ -287,6 +287,97 @@ def test_copilot_append_still_incremental(tmp_path):
     assert index_doc_count(idx) == 2
 
 
+def test_predigest_devin_index_rebuilds_once(db_path, tmp_path):
+    """An index built before the content digest existed has watermarks but
+    no fingerprint: covered content cannot be vouched for, so the first
+    run under this code must rebuild it — otherwise pre-upgrade stale
+    rows persist forever behind a freshly recorded digest."""
+    add_session(
+        db_path,
+        "s1",
+        messages=[msg("user", "walrus before the edit")],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    # Simulate the pre-upgrade index: watermarks survive, digest absent.
+    con = sqlite3.connect(idx)
+    with con:
+        con.execute("DELETE FROM index_meta WHERE key = 'wm:devin-cli:content'")
+    con.close()
+
+    # What an old release would silently miss — an in-place row UPDATE.
+    con = sqlite3.connect(db_path)
+    with con:
+        con.execute(
+            "UPDATE message_nodes SET chat_message = ?"
+            " WHERE session_id = 's1'",
+            ('{"role": "user", "text": "capybara after the edit"}',),
+        )
+    con.close()
+
+    stats = build_index(idx, sessions_db=db_path)
+    texts = "\n".join(_doc_texts(idx))
+    assert stats.removed > 0
+    assert "capybara" in texts
+    assert "walrus" not in texts
+
+    # The rebuilt state is trusted afterwards — no reset loop.
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+
+
+def test_predigest_copilot_index_reindexes(tmp_path):
+    """A copilot file indexed before the head fingerprint existed (wm > 0,
+    head key absent) must be re-indexed once — in-place edits predating
+    the upgrade cannot hide behind the line watermark."""
+    root = tmp_path / "copilot"
+    path = add_copilot_session(
+        root, "cs1", [copilot_event("user.message", {"content": "alpha zebra"})]
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, copilot_dirs=[root])
+
+    con = sqlite3.connect(idx)
+    with con:
+        con.execute(
+            "DELETE FROM index_meta WHERE key LIKE 'copilot-cli:head:%'"
+        )
+    con.close()
+
+    path.write_text(
+        json.dumps(
+            copilot_event("user.message", {"content": "marmot"})
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stats = build_index(idx, copilot_dirs=[root])
+    texts = "\n".join(_doc_texts(idx))
+    assert "marmot" in texts
+    assert "alpha zebra" not in texts
+    assert stats.removed == 1
+
+
+def test_textless_tool_call_no_reset_loop(db_path, tmp_path):
+    """A tool call with no extractable text is skipped at insert time; it
+    must not enter the coverage digest either — otherwise every run sees
+    a mismatch and rebuilds the whole devin-cli slice forever."""
+    add_session(db_path, "s1", messages=[msg("user", "baseline")])
+    add_session(
+        db_path,
+        "s2",
+        tool_calls=[(None, None)],  # no payload → never indexed
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+    stats = build_index(idx, sessions_db=db_path)
+    assert stats.removed == 0
+
+
 def test_vanished_sessions_db_drops_devin_cli_docs(db_path, tmp_path):
     idx = tmp_path / "search.db"
     build_index(idx, sessions_db=db_path)

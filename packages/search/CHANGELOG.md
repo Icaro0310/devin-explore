@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Incremental indexing could serve stale content or drop corrections:
+  - `devin-cli`: in-place row `UPDATE`s under unchanged row ids and
+    mid-table deletes were invisible to the watermarks; a persisted
+    content digest now detects covered-content drift and resets the
+    source slice. Indexes built before the digest existed (watermarks
+    set, no fingerprint) are rebuilt once rather than trusted blindly.
+  - `copilot-cli`: in-place `events.jsonl` edits of equal or greater
+    length hid behind the line watermark; a covered-prefix fingerprint
+    now re-indexes the file. Files indexed before the fingerprint
+    existed are re-indexed once on upgrade.
+  - Vanished managed sources (`sessions.db` deleted, ACP dir removed,
+    copilot/codex roots gone, a specific `--vscode-chat-dir` now absent)
+    sweep their docs on the next run instead of resurfacing them forever.
+  - Tool calls with no extractable text no longer enter the coverage
+    digest — hashing them caused a spurious reset on every run.
+- CLI: `index --no-*` for a source no longer validates that source's
+  explicit `--*-dir` path — a disabled source never reads it.
+- CLI: unreadable or locked `--sessions-db` / index files report a
+  controlled `devin-search:` error (exit 2), not a raw traceback.
+
 ## [0.2.0] - 2026-10-16
 
 ### Fixed
