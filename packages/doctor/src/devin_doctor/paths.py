@@ -145,6 +145,19 @@ def desktop_anchor_present(stores: StorePaths) -> bool:
     )
 
 
+def cli_anchor_present(data_dir: Path) -> bool:
+    """``True`` when a Devin *CLI*-specific artifact exists under the
+    data root — the ``cli/`` dir (sessions.db, session_locks) or
+    ``credentials.toml``.
+
+    The data root alone is NOT evidence of the CLI: on case-insensitive
+    filesystems (Windows, default APFS) the CLI data root ``devin`` and
+    the Desktop config root ``Devin`` resolve to the same directory, so
+    a Desktop-only install makes ``data_dir.is_dir()`` true.
+    """
+    return (data_dir / "cli").is_dir() or credentials_path(data_dir).is_file()
+
+
 # --- non-Devin surfaces (SESSION-SURFACES.md §6.3–§6.5) --------------------
 # Same candidates devin-search/paths.py scans — keep the two in sync.
 

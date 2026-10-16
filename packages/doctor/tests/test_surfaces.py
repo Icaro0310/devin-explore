@@ -81,7 +81,7 @@ def test_devin_cli_not_detected(tmp_path):
 
 def test_devin_cli_missing_db_warns(tmp_path):
     root = tmp_path / "devin"
-    root.mkdir()  # data dir exists — the store was never created
+    (root / "cli").mkdir(parents=True)  # CLI ran once — the store was never created
     ctx = Context(data_dir=root, cwd=tmp_path)
     findings = stores_devin.run(ctx)
     assert len(findings) == 1
@@ -89,6 +89,15 @@ def test_devin_cli_missing_db_warns(tmp_path):
     assert "missing" in findings[0].message
     assert findings[0].rung == "present"
     assert findings[0].code == "store-missing"
+
+
+def test_devin_cli_bare_root_not_detected(tmp_path):
+    """A bare data root has no CLI anchor — on case-insensitive
+    filesystems it may just be the unified Desktop config root."""
+    root = tmp_path / "devin"
+    (root / "User").mkdir(parents=True)  # Desktop-only anchors
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    _assert_not_installed(stores_devin.run(ctx))
 
 
 def test_devin_cli_zero_byte_warns(ctx):

@@ -32,7 +32,7 @@ from devin_doctor.checks.surfaces._common import (
     table_names,
 )
 from devin_doctor.model import Context, Finding, Status
-from devin_doctor.paths import human_size, sessions_db_path
+from devin_doctor.paths import cli_anchor_present, human_size, sessions_db_path
 
 CHECK_ID = "devin-cli"
 
@@ -193,8 +193,10 @@ def _sane_finding(path: Path, supported: bool) -> Finding | None:
 
 
 def run(ctx: Context) -> list[Finding]:
-    if not ctx.data_dir.is_dir():
-        # not installed — an uninstalled surface is valid (§3.1)
+    if not ctx.data_dir.is_dir() or not cli_anchor_present(ctx.data_dir):
+        # not installed — an uninstalled surface is valid (§3.1). The
+        # bare data root is not CLI evidence: on case-insensitive
+        # filesystems it unifies with the Desktop config root.
         return [
             Finding(
                 CHECK_ID,
