@@ -154,8 +154,14 @@ def cli_anchor_present(data_dir: Path) -> bool:
     filesystems (Windows, default APFS) the CLI data root ``devin`` and
     the Desktop config root ``Devin`` resolve to the same directory, so
     a Desktop-only install makes ``data_dir.is_dir()`` true.
+
+    ``os.path.lexists`` counts a malformed credentials path (dangling
+    symlink, stray directory) as a CLI anchor too — a broken install is
+    still an install.
     """
-    return (data_dir / "cli").is_dir() or credentials_path(data_dir).is_file()
+    return (data_dir / "cli").is_dir() or os.path.lexists(
+        credentials_path(data_dir)
+    )
 
 
 # --- non-Devin surfaces (SESSION-SURFACES.md §6.3–§6.5) --------------------
