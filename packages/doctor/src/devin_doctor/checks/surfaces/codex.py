@@ -17,9 +17,9 @@ from pathlib import Path
 
 from devin_doctor.checks.surfaces._common import (
     connect_readonly,
-    first_json_line,
     has_sqlite_magic,
     row_count,
+    scan_jsonl,
     table_names,
 )
 from devin_doctor.model import Context, Finding, Status
@@ -151,34 +151,55 @@ def _state_findings(state: Path) -> list[Finding]:
     ]
 
 
-def _rollout_finding(rollouts: list[Path]) -> Finding | None:
+def _rollout_findings(rollouts: list[Path]) -> list[Finding]:
     if not rollouts:
-        return None
+        return []
     unreadable: list[str] = []
+    empty = 0
     for path in rollouts:
         try:
-            if path.stat().st_size == 0:
-                continue
+            size = path.stat().st_size
         except OSError:
             unreadable.append(path.name)
             continue
-        if first_json_line(path) is None:
+        if size == 0:
+            empty += 1
+            continue
+        if not scan_jsonl(path).ok:
             unreadable.append(path.name)
+    readable = len(rollouts) - empty - len(unreadable)
+    findings: list[Finding] = []
     if unreadable:
         shown = ", ".join(unreadable[:3]) + (
             " …" if len(unreadable) > 3 else ""
         )
-        return Finding(
-            CHECK_ID,
-            Status.FAIL,
-            f"{len(unreadable)}/{len(rollouts)} rollout file(s) unreadable "
-            f"({shown})",
-            fix="Store-corrupt — first line is not JSON; the log was "
-            "truncated mid-write or damaged.",
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.FAIL,
+                f"{len(unreadable)}/{len(rollouts)} rollout file(s) "
+                f"unreadable ({shown})",
+                fix="Store-corrupt — a log line is not JSON; the file was "
+                "truncated mid-write or damaged.",
+            )
         )
-    return Finding(
-        CHECK_ID, Status.PASS, f"{len(rollouts)} rollout file(s) readable"
-    )
+    elif readable:
+        findings.append(
+            Finding(
+                CHECK_ID, Status.PASS, f"{readable} rollout file(s) readable"
+            )
+        )
+    if empty:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"{empty} zero-byte rollout file(s) — empty-store",
+                fix="A 0 B rollout was never written — safe to delete or "
+                "ignore.",
+            )
+        )
+    return findings
 
 
 def run(ctx: Context) -> list[Finding]:
@@ -200,7 +221,5 @@ def run(ctx: Context) -> list[Finding]:
     findings: list[Finding] = []
     if state is not None:
         findings += _state_findings(state)
-    rollout = _rollout_finding(rollouts)
-    if rollout is not None:
-        findings.append(rollout)
+    findings += _rollout_findings(rollouts)
     return findings

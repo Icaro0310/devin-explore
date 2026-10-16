@@ -31,6 +31,35 @@ def test_invalid_credentials_fails(ctx):
     assert f.status is Status.FAIL
 
 
+def test_desktop_only_skips_cli_credentials(tmp_path):
+    """UI config root without a CLI data dir → no false 'sign in'
+    warning; user-level UI config is still checked (Devin Review #4)."""
+    ui_root = tmp_path / "Devin"
+    (ui_root / "User").mkdir(parents=True)
+    ctx = Context(
+        data_dir=tmp_path / "no-cli-data",
+        cwd=tmp_path,
+        config_dir=ui_root,
+    )
+    findings = config.run(ctx)
+    assert all("credentials.toml" not in f.message for f in findings)
+    f = _finding(findings, "config.json")
+    assert f.status is Status.PASS
+
+
+def test_cli_only_skips_ui_config_but_checks_credentials(tmp_path):
+    """CLI data dir without a UI config root → credentials checked, no
+    Desktop config expectation."""
+    root = tmp_path / "devin"
+    root.mkdir()
+    (root / "credentials.toml").write_text('[auth]\ntoken = "x"\n')
+    ctx = Context(
+        data_dir=root, cwd=tmp_path, config_dir=tmp_path / "no-ui"
+    )
+    findings = config.run(ctx)
+    assert _finding(findings, "credentials.toml").status is Status.PASS
+
+
 def test_no_devin_dir_passes(ctx):
     f = _finding(config.run(ctx), ".devin")
     assert f.status is Status.PASS
@@ -119,3 +148,25 @@ def test_child_repo_devin_dir_checked(tmp_path, data_dir):
     ctx = Context(data_dir=data_dir, cwd=tmp_path)
     f = _finding(config.run(ctx), "child-repo")
     assert f.status is Status.FAIL
+
+
+def test_desktop_only_install_skips_credentials_check(tmp_path):
+    """Only the UI config dir present → no CLI data root, so the
+    credentials check must not warn about a missing credentials.toml
+    (devin-review on #85)."""
+    (tmp_path / "Devin" / "User").mkdir(parents=True)
+    ctx = Context(
+        data_dir=tmp_path / "devin",  # absent CLI data root
+        config_dir=tmp_path / "Devin",
+        cwd=tmp_path,
+    )
+    findings = config.run(ctx)
+    assert all("credentials.toml" not in f.message for f in findings)
+
+
+def test_cli_only_install_skips_ui_config(tmp_path, data_dir):
+    """A CLI-only data root still checks credentials but does not force
+    UI config findings on an absent config_dir."""
+    ctx = Context(data_dir=data_dir, cwd=tmp_path)  # config_dir=None
+    findings = config.run(ctx)
+    assert any("credentials.toml" in f.message for f in findings)

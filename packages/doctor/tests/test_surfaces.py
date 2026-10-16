@@ -179,14 +179,38 @@ def test_devin_chat_unknown_schema_version_warns(ctx):
     assert "schema_version" in f.message
 
 
-def test_devin_chat_missing_both_warns(tmp_path):
+def test_devin_chat_cli_only_root_not_detected(tmp_path):
+    """A bare Devin data root is shared by CLI and Desktop — it is NOT
+    evidence of a Desktop install (Devin Review #2)."""
     root = tmp_path / "devin"
     root.mkdir()
+    create_sessions_db(root / "cli" / "sessions.db")
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    assert devin_chat.run(ctx) == []
+
+
+def test_devin_chat_missing_both_warns(tmp_path):
+    """A Desktop ``User/`` marker with no stores inside → detected, and
+    each missing companion store is WARN."""
+    root = tmp_path / "devin"
+    (root / "User").mkdir(parents=True)
     ctx = Context(data_dir=root, cwd=tmp_path)
     findings = devin_chat.run(ctx)
     assert {f.status for f in findings} == {Status.WARN}
     assert _finding(findings, "acp-messages dir missing")
     assert _finding(findings, "state.vscdb missing")
+
+
+def test_devin_chat_zero_byte_db_warns(ctx):
+    """A 0 B acp db must not hide behind a healthy sibling's counts
+    (Devin Review #5 — WARN empty-store)."""
+    (ctx.data_dir / "User" / "acp-messages" / "empty.db").write_bytes(b"")
+    findings = devin_chat.run(ctx)
+    f = _finding(findings, "empty-store")
+    assert f.status is Status.WARN
+    assert "zero-byte" in f.message
+    # the healthy sibling still passes
+    assert _finding(findings, "message rows").status is Status.PASS
 
 
 def test_devin_chat_detected_by_vscdb_alone(tmp_path):
@@ -256,6 +280,39 @@ def test_copilot_corrupt_log_fails(_hermetic_surfaces):
                  "unreadable")
     assert f.status is Status.FAIL
     assert "events.jsonl" in f.message
+
+
+def test_copilot_malformed_tail_fails(_hermetic_surfaces):
+    """Valid head + malformed later record → store-corrupt FAIL — the
+    readable rung scans every line, not just the first (Devin Review #1)."""
+    log = add_copilot_session(
+        _copilot_root(_hermetic_surfaces),
+        "damaged",
+        [copilot_event("session.start", {}, idx=0)],
+    )
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write("{broken line\n")
+    f = _finding(
+        copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x"))),
+        "unreadable",
+    )
+    assert f.status is Status.FAIL
+    assert "events.jsonl" in f.message
+
+
+def test_copilot_unterminated_tail_is_not_corrupt(_hermetic_surfaces):
+    """A final line without a trailing newline that fails to parse is a
+    transient in-progress append — excluded, not corruption."""
+    log = add_copilot_session(
+        _copilot_root(_hermetic_surfaces),
+        "live",
+        [copilot_event("session.start", {}, idx=0)],
+    )
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write('{"id": "partial')  # writer mid-append — no newline
+    findings = copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    assert all(f.status is Status.PASS for f in findings)
+    assert "1 events" in _finding(findings, "events").message
 
 
 def test_copilot_unknown_envelope_warns(_hermetic_surfaces):
@@ -388,6 +445,37 @@ def test_codex_rollouts_without_state(_hermetic_surfaces):
     assert "1 rollout" in _finding(findings, "rollout").message
 
 
+def test_codex_zero_byte_rollout_warns(_hermetic_surfaces):
+    """A 0 B rollout is empty-store, not 'readable' (Devin Review #6)."""
+    root = _hermetic_surfaces / ".codex"
+    (root / "sessions").mkdir(parents=True)
+    (root / "sessions" / "rollout-empty.jsonl").write_bytes(b"")
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    f = _finding(findings, "empty-store")
+    assert f.status is Status.WARN
+    assert "zero-byte" in f.message
+    # and it is not counted as a readable rollout
+    assert all("readable" not in f.message for f in findings)
+
+
+def test_codex_malformed_rollout_tail_fails(_hermetic_surfaces):
+    """Valid head + malformed terminated line → FAIL (Devin Review #1)."""
+    add_codex_home(
+        _hermetic_surfaces / ".codex",
+        rollouts=[
+            (
+                "sessions/rollout-bad.jsonl",
+                [codex_record("session_meta", {"id": "r"}), "{nope"],
+            )
+        ],
+    )
+    f = _finding(
+        codex.run(Context(data_dir=Path("/x"), cwd=Path("/x"))),
+        "unreadable",
+    )
+    assert f.status is Status.FAIL
+
+
 # --- vscode-chat -------------------------------------------------------------
 
 
@@ -476,6 +564,36 @@ def test_vscode_chat_unknown_mutation_kind_warns():
         "schema-unknown",
     )
     assert f.status is Status.WARN
+
+
+def test_vscode_chat_non_int_kind_warns_not_crashes():
+    """``kind`` as array/object used to crash the membership test —
+    now WARN schema-unknown, never FAIL (Devin Review #7)."""
+    add_vscode_chat(
+        _vscode_user_dir(),
+        "weird2",
+        mutations=[{"kind": [1, 2], "k": [], "v": {}}],
+    )
+    findings = vscode_chat.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    assert all(f.status is not Status.FAIL for f in findings)
+    assert _finding(findings, "schema-unknown").status is Status.WARN
+
+
+def test_vscode_chat_malformed_tail_fails():
+    """Valid head + malformed terminated mutation line → FAIL
+    (Devin Review #1)."""
+    path = add_vscode_chat(
+        _vscode_user_dir(),
+        "damaged",
+        mutations=[{"kind": 0, "k": [], "v": {}}],
+    )
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{oops\n")
+    f = _finding(
+        vscode_chat.run(Context(data_dir=Path("/x"), cwd=Path("/x"))),
+        "unreadable",
+    )
+    assert f.status is Status.FAIL
 
 
 # --- runner scoping + grouping ------------------------------------------------

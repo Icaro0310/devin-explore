@@ -94,3 +94,31 @@ def test_unreadable_sessions_db_skips(ctx):
     f = _finding(findings, "sessions.db")
     assert f.status is Status.WARN
     assert "skipped" in f.message.lower() or "unreadable" in f.message.lower()
+
+
+def test_desktop_only_no_sessions_db_not_detected(tmp_path):
+    """A data root without cli/sessions.db (Desktop-only install) has no
+    CLI data to inspect — the check emits nothing, no false unreadable
+    warning (Devin Review #3)."""
+    root = tmp_path / "devin"
+    (root / "User").mkdir(parents=True)  # Desktop marker, no CLI store
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    assert health.run(ctx) == []
+
+
+def test_empty_data_dir_not_detected(tmp_path):
+    """Bare shared data root — no CLI store, nothing to warn about."""
+    root = tmp_path / "devin"
+    root.mkdir()
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    assert health.run(ctx) == []
+
+
+def test_desktop_only_data_dir_is_not_detected(tmp_path):
+    """A data root without ``cli/sessions.db`` is a Desktop-only install —
+    the check must report not-detected (no findings), not a spurious
+    'sessions.db unreadable' warning (devin-review on #85)."""
+    root = tmp_path / "devin"
+    (root / "User" / "globalStorage").mkdir(parents=True)
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    assert health.run(ctx) == []

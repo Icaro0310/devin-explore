@@ -53,6 +53,8 @@ def run(ctx: Context) -> list[Finding]:
     if not ctx.data_dir.is_dir():
         return []  # no Devin store — the check reports 'not detected'
     sessions_db = ctx.data_dir / "cli" / "sessions.db"
+    if not sessions_db.is_file():
+        return []  # Desktop-only layout — no CLI store to inspect
     findings: list[Finding] = []
 
     try:

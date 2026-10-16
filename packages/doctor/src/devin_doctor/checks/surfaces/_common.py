@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 
@@ -59,22 +59,43 @@ def row_count(con: sqlite3.Connection, table: str) -> int:
     return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
-def first_json_line(path: Path) -> Any | None:
-    """Parse the first non-blank line of a JSONL file.
+class JsonlScan(NamedTuple):
+    """Result of streaming a JSONL log through ``json.loads``."""
 
-    Returns the decoded value, or ``None`` when the file is unreadable,
-    empty or the line is not JSON — callers cannot distinguish the three,
-    which is fine: all of them fail the readable rung the same way.
+    first: Any | None  # first decoded non-blank record (None if none parsed)
+    records: int  # decoded non-blank record count
+    ok: bool  # False when a terminated line failed to parse
+
+
+def scan_jsonl(path: Path) -> JsonlScan:
+    """Validate every non-blank line of a JSONL log — not just the head.
+
+    A log is only 'readable' when every terminated line parses; the scan
+    bails on the first malformed one (``ok=False`` → store-corrupt FAIL
+    upstream). One exception: a final *unterminated* line that fails to
+    parse is treated as a transient in-progress append — it is excluded
+    from ``records`` but does not fail the scan.
     """
+    first: Any | None = None
+    n = 0
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 stripped = line.strip()
-                if stripped:
-                    return json.loads(stripped)
-    except (OSError, json.JSONDecodeError):
-        return None
-    return None
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except (json.JSONDecodeError, RecursionError):
+                    if not line.endswith("\n"):
+                        break  # unterminated tail — writer mid-append
+                    return JsonlScan(first, n, False)
+                if first is None:
+                    first = record
+                n += 1
+    except OSError:
+        return JsonlScan(first, n, False)
+    return JsonlScan(first, n, True)
 
 
 def json_document(path: Path) -> Any | None:
@@ -83,12 +104,3 @@ def json_document(path: Path) -> Any | None:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError):
         return None
-
-
-def line_count(path: Path) -> int:
-    """Non-blank line count of a JSONL file — the cheap event count."""
-    try:
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            return sum(1 for line in fh if line.strip())
-    except OSError:
-        return 0

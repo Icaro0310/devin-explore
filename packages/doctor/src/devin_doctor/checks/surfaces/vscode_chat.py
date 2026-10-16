@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from devin_doctor.checks.surfaces._common import (
-    first_json_line,
     json_document,
+    scan_jsonl,
 )
 from devin_doctor.model import Context, Finding, Status
 from devin_doctor.paths import default_vscode_chat_dirs, human_size
@@ -96,10 +96,10 @@ def _chat_files(user_dirs: Iterable[Path]) -> list[tuple[Path, int]]:
 
 def _readable(path: Path) -> tuple[Any | None, bool]:
     """``(doc-or-first-record, ok)`` — ``.json`` snapshots parse whole,
-    ``.jsonl`` logs gate on the first line."""
+    ``.jsonl`` logs must have every terminated line parse."""
     if path.name.endswith(".jsonl"):
-        head = first_json_line(path)
-        return head, head is not None
+        scan = scan_jsonl(path)
+        return scan.first, scan.ok
     doc = json_document(path)
     return doc, doc is not None
 
@@ -137,9 +137,9 @@ def run(ctx: Context) -> list[Finding]:
             unreadable.append(path.name)
             continue
         if path.name.endswith(".jsonl"):
-            if not isinstance(head, dict) or (
-                head.get("kind") not in _MUTATION_KINDS
-            ):
+            if not isinstance(head, dict) or not isinstance(
+                head.get("kind"), int
+            ) or head["kind"] not in _MUTATION_KINDS:
                 unknown.append(path.name)
         elif not isinstance(head, dict) or not (_KNOWN_KEYS & set(head)):
             unknown.append(path.name)

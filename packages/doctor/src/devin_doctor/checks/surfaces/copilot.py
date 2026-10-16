@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from devin_doctor.checks.surfaces._common import first_json_line, line_count
+from devin_doctor.checks.surfaces._common import scan_jsonl
 from devin_doctor.model import Context, Finding, Status
 from devin_doctor.paths import default_copilot_dirs, human_size
 
@@ -86,13 +86,13 @@ def run(ctx: Context) -> list[Finding]:
         total += size
         if size == 0:
             continue  # empty file — the sane rung reports emptiness
-        first = first_json_line(path)
-        if first is None:
+        scan = scan_jsonl(path)
+        if not scan.ok:
             unreadable.append(path.name)
             continue
-        if not _envelope_ok(first):
+        if not _envelope_ok(scan.first):
             unknown.append(path.name)
-        events += line_count(path)
+        events += scan.records
 
     findings: list[Finding] = []
     if unreadable:

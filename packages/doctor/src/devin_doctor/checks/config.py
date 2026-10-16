@@ -311,11 +311,12 @@ def run(ctx: Context) -> list[Finding]:
         ctx.config_dir is not None and ctx.config_dir.is_dir()
     )
     findings: list[Finding] = []
-    if devin_present:
-        findings += [
-            _credentials_finding(credentials_path(ctx.data_dir)),
-            *_user_config_findings(ctx),
-        ]
+    if ctx.data_dir.is_dir():
+        # CLI credentials live under the CLI data root — a Desktop-only
+        # install has no business reporting them missing.
+        findings.append(_credentials_finding(credentials_path(ctx.data_dir)))
+    if (ctx.config_dir or ctx.data_dir).is_dir():
+        findings += _user_config_findings(ctx)
     project, seen_devin = _project_config_findings(ctx.cwd)
     findings += project
     if not seen_devin and devin_present:

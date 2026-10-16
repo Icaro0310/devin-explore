@@ -64,10 +64,12 @@ def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
     unreadable: list[str] = []
     bad_shape: list[str] = []
     unknown_version: list[str] = []
+    empty = 0
     messages = 0
     for p in acp_dbs:
         if p.stat().st_size == 0:
-            continue  # empty file — counted by the sane rung below
+            empty += 1  # tracked — reported as empty-store below
+            continue
         if _sqlite_error(p) is not None:
             unreadable.append(p.name)
             continue
@@ -82,7 +84,7 @@ def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
     if unreadable or bad_shape:
         bad = unreadable + bad_shape
         shown = ", ".join(bad[:3]) + (" …" if len(bad) > 3 else "")
-        return [
+        findings.append(
             Finding(
                 CHECK_ID,
                 Status.FAIL,
@@ -91,38 +93,52 @@ def _acp_findings(acp_dir: Path, acp_dbs: tuple[Path, ...]) -> list[Finding]:
                 fix="Store-corrupt — files lack the meta+messages tables; "
                 "possibly written by a newer Devin or damaged.",
             )
-        ]
-    findings.append(
-        Finding(
-            CHECK_ID,
-            Status.PASS,
-            f"acp-messages: {len(acp_dbs)} db(s), {human_size(total)} total",
-        )
-    )
-    if unknown_version:
-        findings.append(
-            Finding(
-                CHECK_ID,
-                Status.WARN,
-                f"acp-messages: {len(unknown_version)} db(s) with unknown "
-                "schema_version (known: 1, 6)",
-                fix="Written by a newer Devin than the spec knows — upgrade "
-                "devin-doctor / devin-internals-spec.",
-            )
-        )
-    if messages == 0:
-        findings.append(
-            Finding(
-                CHECK_ID,
-                Status.WARN,
-                "acp-messages: 0 message rows across all db files — "
-                "installed but unused",
-            )
         )
     else:
         findings.append(
             Finding(
-                CHECK_ID, Status.PASS, f"acp-messages: {messages} message rows"
+                CHECK_ID,
+                Status.PASS,
+                f"acp-messages: {len(acp_dbs)} db(s), "
+                f"{human_size(total)} total",
+            )
+        )
+        if unknown_version:
+            findings.append(
+                Finding(
+                    CHECK_ID,
+                    Status.WARN,
+                    f"acp-messages: {len(unknown_version)} db(s) with "
+                    "unknown schema_version (known: 1, 6)",
+                    fix="Written by a newer Devin than the spec knows — "
+                    "upgrade devin-doctor / devin-internals-spec.",
+                )
+            )
+        if messages == 0:
+            findings.append(
+                Finding(
+                    CHECK_ID,
+                    Status.WARN,
+                    "acp-messages: 0 message rows across all db files — "
+                    "installed but unused",
+                )
+            )
+        else:
+            findings.append(
+                Finding(
+                    CHECK_ID,
+                    Status.PASS,
+                    f"acp-messages: {messages} message rows",
+                )
+            )
+    if empty:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.WARN,
+                f"acp-messages: {empty} zero-byte db file(s) — empty-store",
+                fix="A 0 B store was never written — safe to delete or "
+                "ignore.",
             )
         )
     return findings
@@ -185,10 +201,16 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
 
 def run(ctx: Context) -> list[Finding]:
     stores = locate_stores(ctx.data_dir, config_dir=ctx.config_dir)
+    # The shared Devin data root is NOT evidence of Desktop — CLI and
+    # Desktop can share it. Detection needs a Desktop-specific anchor:
+    # the acp-messages dir/dbs, state.vscdb, or the ``User`` UI profile
+    # dir itself (``acp_dir.parent`` — the CLI never creates ``User/``).
+    user_dir = stores.acp_dir.parent
     detected = (
-        ctx.data_dir.is_dir()
-        or stores.acp_dir.is_dir()
+        stores.acp_dir.is_dir()
+        or bool(stores.acp_dbs)
         or stores.state_vscdb.is_file()
+        or user_dir.is_dir()
     )
     if not detected:
         return []  # not detected — the Desktop surface simply is not there
