@@ -252,9 +252,10 @@ def _kind_for(filename: str) -> str:
     return "config"
 
 
-def _project_config_findings(cwd: Path) -> list[Finding]:
+def _project_config_findings(cwd: Path) -> tuple[list[Finding], bool]:
     """Check ``.devin/`` config in ``cwd`` and each immediate child dir that
-    has one (the 'repos under cwd' layout)."""
+    has one (the 'repos under cwd' layout). Returns the findings plus
+    whether any ``.devin/`` dir was seen at all."""
     candidates = [cwd]
     try:
         children = sorted(
@@ -280,15 +281,7 @@ def _project_config_findings(cwd: Path) -> list[Finding]:
                         f"{prefix}/{name}", path, _kind_for(name)
                     )
                 )
-    if not seen_devin:
-        findings.append(
-            Finding(
-                CHECK_ID,
-                Status.PASS,
-                f"no .devin/ config to check under {cwd}",
-            )
-        )
-    return findings
+    return findings, seen_devin
 
 
 def _user_config_findings(ctx: Context) -> list[Finding]:
@@ -311,9 +304,27 @@ def _user_config_findings(ctx: Context) -> list[Finding]:
 
 
 def run(ctx: Context) -> list[Finding]:
-    findings = [
-        _credentials_finding(credentials_path(ctx.data_dir)),
-        *_user_config_findings(ctx),
-    ]
-    findings += _project_config_findings(ctx.cwd)
+    # User-level config belongs to the Devin install — skip it entirely on
+    # a machine without one. Project ``.devin/`` files are checked
+    # regardless: a no-Devin user can still share repos with Devin users.
+    devin_present = ctx.data_dir.is_dir() or (
+        ctx.config_dir is not None and ctx.config_dir.is_dir()
+    )
+    findings: list[Finding] = []
+    if ctx.data_dir.is_dir():
+        # CLI credentials live under the CLI data root — a Desktop-only
+        # install has no business reporting them missing.
+        findings.append(_credentials_finding(credentials_path(ctx.data_dir)))
+    if (ctx.config_dir or ctx.data_dir).is_dir():
+        findings += _user_config_findings(ctx)
+    project, seen_devin = _project_config_findings(ctx.cwd)
+    findings += project
+    if not seen_devin and devin_present:
+        findings.append(
+            Finding(
+                CHECK_ID,
+                Status.PASS,
+                f"no .devin/ config to check under {ctx.cwd}",
+            )
+        )
     return findings

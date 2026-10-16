@@ -201,14 +201,9 @@ def _acp_finding(ctx: Context, capped: bool) -> Finding:
 
 def run(ctx: Context) -> list[Finding]:
     if not ctx.data_dir.is_dir():
-        return [
-            Finding(
-                CHECK_ID,
-                Status.FAIL,
-                f"Devin data dir not found: {ctx.data_dir}",
-                fix="Pass --data-dir pointing at the Devin data directory.",
-            )
-        ]
+        # No Devin data — absence is a valid environment, not a failure:
+        # the check reports 'not detected' in the devin environment section.
+        return []
     files, capped = _walk_files(ctx.data_dir)
     total = sum(f.size for f in files)
     return [

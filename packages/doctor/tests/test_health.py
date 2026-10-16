@@ -94,3 +94,61 @@ def test_unreadable_sessions_db_skips(ctx):
     f = _finding(findings, "sessions.db")
     assert f.status is Status.WARN
     assert "skipped" in f.message.lower() or "unreadable" in f.message.lower()
+
+
+def test_desktop_only_no_sessions_db_not_detected(tmp_path):
+    """A data root without cli/sessions.db has no CLI data to inspect —
+    no false unreadable warning (Devin Review #3). But a Desktop ``User/``
+    anchor means the lock check still runs over Desktop stores."""
+    root = tmp_path / "devin"
+    (root / "User").mkdir(parents=True)  # Desktop marker, no CLI store
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    findings = health.run(ctx)
+    assert [f.status for f in findings] == [Status.PASS]
+    assert "no locked database files" in findings[0].message
+
+
+def test_desktop_only_locked_db_warns(tmp_path):
+    """Desktop-only install (no cli/sessions.db) still gets the lock
+    check over its own stores — a locked acp db warns (re-review
+    b2dc8f0f)."""
+    root = tmp_path / "devin"
+    acp = root / "User" / "acp-messages"
+    acp.mkdir(parents=True)
+    db = acp / "s.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE app_state(key TEXT, value TEXT)")
+    con.commit()
+    con.close()
+    holder = lock_db_exclusively(db)
+    try:
+        findings = health.run(Context(data_dir=root, cwd=tmp_path))
+        f = _finding(findings, "locked")
+        assert f.status is Status.WARN
+        assert "s.db" in f.message
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_empty_data_dir_not_detected(tmp_path):
+    """Bare shared data root — no CLI store, no Desktop anchors, nothing
+    to warn about (still 'not detected')."""
+    root = tmp_path / "devin"
+    root.mkdir()
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    assert health.run(ctx) == []
+
+
+def test_desktop_only_data_dir_is_not_detected(tmp_path):
+    """A data root without ``cli/sessions.db`` is a Desktop-only install —
+    no spurious 'sessions.db unreadable' warning (devin-review on #85).
+    Desktop anchors (``User/globalStorage``) mean the lock check still
+    runs over Desktop stores — so the verdict is the lock-check PASS,
+    not silence."""
+    root = tmp_path / "devin"
+    (root / "User" / "globalStorage").mkdir(parents=True)
+    ctx = Context(data_dir=root, cwd=tmp_path)
+    findings = health.run(ctx)
+    assert [f.status for f in findings] == [Status.PASS]
+    assert "no locked database files" in findings[0].message

@@ -15,8 +15,8 @@ def test_check_healthy_exit_0(ctx, capsys):
     assert rc == 0
     assert "PASS" in out
     for check_id in (
-        "stores",
-        "schema",
+        "devin-cli",
+        "devin-chat",
         "health-of-data",
         "config",
         "hooks-windows",
@@ -64,8 +64,8 @@ def test_check_json_schema(ctx, capsys):
         assert set(f) == {"check", "status", "message", "fix"}
         assert f["status"] in ("PASS", "WARN", "FAIL")
     assert set(payload["checks"]) == {
-        "stores",
-        "schema",
+        "devin-cli",
+        "devin-chat",
         "health-of-data",
         "config",
         "hooks-windows",
@@ -117,11 +117,57 @@ def test_report_md(ctx, capsys):
     assert "fixture-token" not in out  # masked, always
 
 
-def test_missing_data_dir_exit_1(tmp_path, capsys):
+def test_missing_data_dir_is_not_detected(tmp_path, capsys):
+    """A missing data dir means 'no Devin detected' — absence is a valid
+    environment, not a failure (exit 0)."""
     rc = main(
         ["check", "--data-dir", str(tmp_path / "nope"), "--cwd", str(tmp_path)]
     )
-    assert rc == 1
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "not detected" in out
+
+
+def test_surface_scope_filters_surface_checks(ctx, capsys):
+    """--surface keeps one surface's ladder plus the devin-environment
+    checks; other surfaces never run (not even 'not detected')."""
+    rc = main(
+        [
+            "check",
+            "--data-dir",
+            str(ctx.data_dir),
+            "--cwd",
+            str(ctx.cwd),
+            "--surface",
+            "devin-cli",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "devin-cli — PASS" in out
+    assert "devin-chat" not in out
+    assert "not detected" not in out  # only the scoped surface ran
+    for check_id in ("health-of-data", "config", "disk", "updates"):
+        assert check_id in out  # devin checks always run
+
+
+def test_surface_scope_rejects_unknown_name(ctx, capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "check",
+                "--data-dir",
+                str(ctx.data_dir),
+                "--cwd",
+                str(ctx.cwd),
+                "--surface",
+                "not-a-surface",
+            ]
+        )
+    assert exc.value.code == 2  # argparse choices rejection
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_a_crashing_check_becomes_fail_finding(ctx, monkeypatch):

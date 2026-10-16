@@ -89,6 +89,7 @@ devin-doctor check --data-dir D:\devin-backup
 # Use a separate Devin UI config root (e.g. Linux)
 devin-doctor check --data-dir ~/.local/share/devin --config-dir ~/.config/Devin
 devin-doctor check --json             # machine-readable output
+devin-doctor check --surface codex-cli  # scope surface checks (repeatable)
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
 ```
@@ -96,17 +97,39 @@ devin-doctor capabilities             # machine capability profile, JSON
 Each check prints `PASS`/`WARN`/`FAIL`, a one-line finding and a `fix:`
 suggestion. Exit code is `0` unless something `FAIL`s (then `1`).
 
-The seven checks:
+The report has two sections. **surfaces** runs the same four-rung ladder —
+`present → readable → schema → sane` — once per agent session store found
+on the machine. A surface whose roots don't exist emits no findings and
+groups under `not detected`: an uninstalled agent is a valid environment,
+never a failure. `--surface NAME` (repeatable) scopes this section; the
+**devin environment** checks always run unscoped.
+
+| surface | store | ladder specifics |
+|---|---|---|
+| `devin-cli` | `<data-dir>/cli/sessions.db` | SQLite `mode=ro` (+`immutable=1` retry); `refinery_schema_history` ledger v15–v17, newer → `schema-unknown` WARN; session/`message_nodes` counts |
+| `devin-chat` | `<config>/Devin/User/acp-messages/*.db` + `state.vscdb` | ACP schema v1/v6 (`meta` + `messages` tables); message-row counts, key counts — never message bodies |
+| `copilot-cli` | `$COPILOT_DIR`/`$COPILOT_HOME`/`~/.copilot` | `session-state/<uuid>/events.jsonl` and flat `<uuid>.jsonl`; first event must carry `{id, parentId, timestamp, type, data}` |
+| `codex-cli` | `$CODEX_HOME`/`~/.codex/state_<N>.sqlite` | largest `N` wins; requires `threads` table; rollout JSONL under `sessions/`/`archived_sessions/` counted |
+| `vscode-chat` | `Code`/`Code - Insiders` user dirs + `~/.vscode-server` | `chatSessions/*.jsonl` mutation logs (kinds 0–3) and `*.json` documents |
+
+**devin environment** — the checks that diagnose the local Devin install
+itself. With no Devin stores at all they report not-detected/PASS rather
+than hard failures, so the tool is still useful on agent-only machines:
 
 | check | reports |
 |---|---|
-| `stores` | present/missing, sizes and row counts for `sessions.db`, `acp-messages/*.db`, `state.vscdb` |
-| `schema` | schema version vs the supported range (15–17); layout recognition for the ledger-less stores |
 | `health-of-data` | empty sessions, orphan `message_nodes`, sessions idle > `--stale-days`, `SQLITE_BUSY` locks |
 | `config` | `credentials.toml` presence + validity (**values masked**); `.devin/` hooks/MCP config sanity |
 | `hooks-windows` | hooks/MCP commands that would pop a visible console window on Windows (`cmd /c` without a hidden wrapper, `powershell` without `-WindowStyle Hidden`, direct `.bat`/`.ps1`, `python.exe` vs `pythonw.exe`) — each with file, hook event and a wrapper fix |
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
 | `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
+
+Privacy doctrine is strict across all checks: headers and metadata only —
+counts, sizes, paths and statuses, never message content. SQLite stores
+open read-only (`mode=ro`, `immutable=1` retry); corrupt files are
+`FAIL store-corrupt`, empty ones `WARN empty-store` (installed but
+unused), old layouts `WARN schema-old`, unrecognized ones
+`WARN schema-unknown`.
 
 ### Pre-commit gate
 
@@ -171,8 +194,9 @@ This replaced the original `--fix` idea so doctor can keep its
 ## Limitations
 
 - **Version-bound.** Store parsing follows `devin-internals-spec` (schema
-  v15–v17). A newer Devin schema reports FAIL — "unknown version" — by
-  design, rather than silently misreading.
+  v15–v17). A newer Devin schema reports `schema-unknown` WARN — counts
+  still run where the layout is readable, but exact column semantics are
+  unverified.
 - **Read-only.** It suggests fixes but never touches the data dir. `--fix`
   for the safe items is planned (see `STATUS.md`).
 - **Locked stores.** If Devin is running, DBs may report `SQLITE_BUSY` —
@@ -235,23 +259,23 @@ Same stdio server in other hosts — server name `devin-doctor`:
 ## When to use this
 
 - Devin misbehaves — missing history, auth errors, disk pressure — and you want one command to localize the cause.
-- You want a health check before debugging: seven checks (stores, schema, data health, config, hooks-windows, disk, updates), each with a `fix:` suggestion.
+- You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates), each with a `fix:` suggestion.
 - You need a paste-able report for a bug report: `devin-doctor report --md`.
 - You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (otherwise only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable).
 
 ## When NOT to use this
 
 - You want it to repair things — it is read-only; `--fix` for safe items is planned.
-- Your Devin schema is newer than v17 — it reports "unknown version" FAIL rather than misread.
+- You need deep parsing of a schema newer than v17 — it reports `schema-unknown` WARN and keeps counting, but layout details are unverified.
 - Devin is running and DBs are locked — close Devin and re-run to clear `SQLITE_BUSY`.
 
 ## FAQ
 
-**How do I check if my Devin installation's local data is healthy?** Run `devin-doctor check`. It inspects `sessions.db`, `acp-messages/*.db`, `state.vscdb`, `credentials.toml` and disk usage, printing `PASS`/`WARN`/`FAIL` per check with a `fix:` suggestion. Exit code is `0` unless something FAILs.
+**How do I check if my Devin installation's local data is healthy?** Run `devin-doctor check`. It inspects `sessions.db`, `acp-messages/*.db`, `state.vscdb`, `credentials.toml` and disk usage, printing `PASS`/`WARN`/`FAIL` per check with a `fix:` suggestion. Exit code is `0` unless something FAILs. It also diagnoses the other agent session surfaces on the machine (Copilot, Codex, VS Code chat) in the same run — `--surface NAME` scopes that section.
 
 **Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and writes nothing to the data dir. The only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`). Config check masks credential values in output. Fixes are suggested as text, never applied.
 
-**What does "unknown schema version" mean?** Devin's `sessions.db` schema is versioned; devin-doctor understands v15–v17 via devin-internals-spec. A newer version produces a deliberate FAIL instead of a silent misread — update the tool or devin-internals-spec.
+**What does "unknown schema version" mean?** Devin's `sessions.db` schema is versioned; devin-doctor understands v15–v17 via devin-internals-spec. A newer version produces a `schema-unknown` WARN: counts still run, but the layout isn't verified — update the tool or devin-internals-spec.
 
 ## License
 

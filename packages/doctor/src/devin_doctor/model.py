@@ -64,6 +64,10 @@ class Context:
 @dataclass
 class Report:
     findings: list[Finding] = field(default_factory=list)
+    # Surface check ids that ran, in registry order — a checked surface
+    # with no findings is 'not detected'. Empty when no surface check ran
+    # (legacy callers): renderers fall back to the flat report.
+    surfaces_checked: list[str] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
         return {

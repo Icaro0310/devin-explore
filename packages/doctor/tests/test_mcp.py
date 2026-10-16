@@ -41,6 +41,19 @@ def test_do_check_missing_dir_is_report_not_crash(tmp_path):
     assert "error" not in out or out["overall"] in {"PASS", "WARN", "FAIL"}
 
 
+def test_do_check_surface_scope(ctx):
+    """surface= mirrors --surface: only the named surface runs, the
+    devin-environment checks are unaffected."""
+    out = do_check(
+        data_dir=str(ctx.data_dir), cwd=str(ctx.cwd),
+        surface="devin-cli", now_ms=ctx.now_ms,
+    )
+    assert out["surfaces"]["detected"] == {"devin-cli": "PASS"}
+    assert out["surfaces"]["not_detected"] == []
+    assert "devin-chat" not in out["checks"]
+    assert "config" in out["checks"]
+
+
 def test_do_check_offline_is_per_call_not_global(ctx, monkeypatch):
     """offline=True must not leak through the process env: a concurrent
     online call and any later call keep full probing."""

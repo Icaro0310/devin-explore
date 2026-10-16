@@ -235,6 +235,11 @@ def run(ctx: Context) -> list[Finding]:
         )
     if findings:
         return findings
+    devin_present = ctx.data_dir.is_dir() or (
+        ctx.config_dir is not None and ctx.config_dir.is_dir()
+    )
+    if not devin_present and not entries:
+        return []  # nothing Devin-shaped anywhere — 'not detected'
     return [
         Finding(
             CHECK_ID,
