@@ -123,6 +123,22 @@ def locate_stores(root: Path, config_dir: Path | None = None) -> StorePaths:
     )
 
 
+def desktop_anchor_present(stores: StorePaths) -> bool:
+    """``True`` when a Devin *Desktop*-specific path exists — the
+    ``acp-messages`` dir/dbs, ``state.vscdb``, or the ``User`` UI profile
+    dir (``acp_dir.parent``; the CLI never creates ``User/``).
+
+    The shared Devin data root alone is NOT evidence of Desktop: CLI and
+    Desktop installs can share it.
+    """
+    return (
+        stores.acp_dir.is_dir()
+        or bool(stores.acp_dbs)
+        or stores.state_vscdb.is_file()
+        or stores.acp_dir.parent.is_dir()
+    )
+
+
 # --- non-Devin surfaces (SESSION-SURFACES.md §6.3–§6.5) --------------------
 # Same candidates devin-search/paths.py scans — keep the two in sync.
 

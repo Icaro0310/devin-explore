@@ -70,11 +70,16 @@ class JsonlScan(NamedTuple):
 def scan_jsonl(path: Path) -> JsonlScan:
     """Validate every non-blank line of a JSONL log — not just the head.
 
-    A log is only 'readable' when every terminated line parses; the scan
-    bails on the first malformed one (``ok=False`` → store-corrupt FAIL
-    upstream). One exception: a final *unterminated* line that fails to
-    parse is treated as a transient in-progress append — it is excluded
-    from ``records`` but does not fail the scan.
+    A log is only 'readable' when every terminated line parses to a real
+    record; the scan bails on the first failure (``ok=False`` →
+    store-corrupt FAIL upstream). Two nuances:
+
+    - ``null`` lines: ``null`` is valid JSON but never a valid record —
+      no real writer emits it — so it counts as malformed (``ok=False``),
+      not as an absent head.
+    - Unterminated tail: a final line without ``\\n`` that fails to parse
+      is treated as a transient in-progress append — excluded from
+      ``records``, not flagged.
     """
     first: Any | None = None
     n = 0
@@ -90,7 +95,10 @@ def scan_jsonl(path: Path) -> JsonlScan:
                     if not line.endswith("\n"):
                         break  # unterminated tail — writer mid-append
                     return JsonlScan(first, n, False)
-                if first is None:
+                if record is None:
+                    # `null` record — foreign content, not a valid record.
+                    return JsonlScan(first, n, False)
+                if n == 0:  # record-position gate: `first` may BE null-free
                     first = record
                 n += 1
     except OSError:

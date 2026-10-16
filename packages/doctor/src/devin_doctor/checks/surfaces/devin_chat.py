@@ -23,7 +23,11 @@ from devin_doctor.checks.surfaces._common import (
     has_sqlite_magic,
 )
 from devin_doctor.model import Context, Finding, Status
-from devin_doctor.paths import human_size, locate_stores
+from devin_doctor.paths import (
+    desktop_anchor_present,
+    human_size,
+    locate_stores,
+)
 
 CHECK_ID = "devin-chat"
 
@@ -202,17 +206,10 @@ def _state_vscdb_findings(path: Path) -> list[Finding]:
 def run(ctx: Context) -> list[Finding]:
     stores = locate_stores(ctx.data_dir, config_dir=ctx.config_dir)
     # The shared Devin data root is NOT evidence of Desktop — CLI and
-    # Desktop can share it. Detection needs a Desktop-specific anchor:
-    # the acp-messages dir/dbs, state.vscdb, or the ``User`` UI profile
-    # dir itself (``acp_dir.parent`` — the CLI never creates ``User/``).
-    user_dir = stores.acp_dir.parent
-    detected = (
-        stores.acp_dir.is_dir()
-        or bool(stores.acp_dbs)
-        or stores.state_vscdb.is_file()
-        or user_dir.is_dir()
-    )
-    if not detected:
+    # Desktop can share it. Detection needs a Desktop-specific anchor
+    # (see paths.desktop_anchor_present): the acp-messages dir/dbs,
+    # state.vscdb, or the ``User`` UI profile dir itself.
+    if not desktop_anchor_present(stores):
         return []  # not detected — the Desktop surface simply is not there
     return [
         *_acp_findings(stores.acp_dir, stores.acp_dbs),

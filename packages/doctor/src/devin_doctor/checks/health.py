@@ -12,7 +12,7 @@ from devin_internals.parsers import SessionsStore
 from devin_internals.schema import SchemaError
 
 from devin_doctor.model import Context, Finding, Status
-from devin_doctor.paths import locate_stores
+from devin_doctor.paths import desktop_anchor_present, locate_stores
 
 CHECK_ID = "health-of-data"
 
@@ -36,7 +36,7 @@ def _is_locked(path: Path) -> bool:
 
 
 def _lock_finding(ctx: Context) -> Finding:
-    stores = locate_stores(ctx.data_dir)
+    stores = locate_stores(ctx.data_dir, config_dir=ctx.config_dir)
     locked = [p for p in stores.all_db_files() if _is_locked(p)]
     if not locked:
         return Finding(CHECK_ID, Status.PASS, "no locked database files")
@@ -50,11 +50,16 @@ def _lock_finding(ctx: Context) -> Finding:
 
 
 def run(ctx: Context) -> list[Finding]:
-    if not ctx.data_dir.is_dir():
-        return []  # no Devin store — the check reports 'not detected'
     sessions_db = ctx.data_dir / "cli" / "sessions.db"
     if not sessions_db.is_file():
-        return []  # Desktop-only layout — no CLI store to inspect
+        # No CLI store — nothing session-level to inspect. A Desktop-only
+        # install still gets the lock check over its own stores
+        # (acp-messages/*.db, state.vscdb); without Desktop anchors the
+        # check reports 'not detected'.
+        stores = locate_stores(ctx.data_dir, config_dir=ctx.config_dir)
+        if not desktop_anchor_present(stores):
+            return []
+        return [_lock_finding(ctx)]
     findings: list[Finding] = []
 
     try:

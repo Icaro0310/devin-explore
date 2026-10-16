@@ -165,8 +165,15 @@ def _rollout_findings(rollouts: list[Path]) -> list[Finding]:
         if size == 0:
             empty += 1
             continue
-        if not scan_jsonl(path).ok:
+        scan = scan_jsonl(path)
+        if not scan.ok:
             unreadable.append(path.name)
+        elif scan.records == 0:
+            # Whitespace-only or a single unterminated partial line —
+            # nothing computable ⇒ empty-store, not 'readable'. An
+            # unterminated-only file can't be told apart from a writer
+            # mid-append of its first record, so it is not FAIL.
+            empty += 1
     readable = len(rollouts) - empty - len(unreadable)
     findings: list[Finding] = []
     if unreadable:
@@ -194,9 +201,11 @@ def _rollout_findings(rollouts: list[Path]) -> list[Finding]:
             Finding(
                 CHECK_ID,
                 Status.WARN,
-                f"{empty} zero-byte rollout file(s) — empty-store",
-                fix="A 0 B rollout was never written — safe to delete or "
-                "ignore.",
+                f"{empty} rollout file(s) with no usable records — "
+                "empty-store",
+                fix="Zero-byte, whitespace-only or mid-append partial "
+                "files were never written to completion — safe to delete "
+                "or ignore.",
             )
         )
     return findings

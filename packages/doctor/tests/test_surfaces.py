@@ -315,6 +315,23 @@ def test_copilot_unterminated_tail_is_not_corrupt(_hermetic_surfaces):
     assert "1 events" in _finding(findings, "events").message
 
 
+def test_copilot_null_record_fails(_hermetic_surfaces):
+    """``null`` is valid JSON but never a valid record — a leading null
+    must not let a later record become 'first' (re-review b2dc8f0f);
+    null records anywhere are malformed → store-corrupt FAIL."""
+    add_copilot_session(
+        _copilot_root(_hermetic_surfaces),
+        "nulled",
+        ["null", copilot_event("session.start", {}, idx=1)],
+    )
+    f = _finding(
+        copilot.run(Context(data_dir=Path("/x"), cwd=Path("/x"))),
+        "unreadable",
+    )
+    assert f.status is Status.FAIL
+    assert "events.jsonl" in f.message
+
+
 def test_copilot_unknown_envelope_warns(_hermetic_surfaces):
     add_copilot_session(
         _copilot_root(_hermetic_surfaces),
@@ -453,9 +470,31 @@ def test_codex_zero_byte_rollout_warns(_hermetic_surfaces):
     findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
     f = _finding(findings, "empty-store")
     assert f.status is Status.WARN
-    assert "zero-byte" in f.message
     # and it is not counted as a readable rollout
     assert all("readable" not in f.message for f in findings)
+
+
+def test_codex_whitespace_rollout_warns(_hermetic_surfaces):
+    """A nonzero rollout with only whitespace decodes zero records —
+    not 'readable': WARN empty-store (re-review b2dc8f0f)."""
+    root = _hermetic_surfaces / ".codex"
+    (root / "sessions").mkdir(parents=True)
+    (root / "sessions" / "rollout-blank.jsonl").write_text("   \n\n  \n")
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    assert _finding(findings, "empty-store").status is Status.WARN
+    assert all("readable" not in f.message for f in findings)
+
+
+def test_codex_unterminated_only_rollout_warns(_hermetic_surfaces):
+    """A rollout whose whole content is one unterminated unparseable
+    line — indistinguishable from a writer mid-append — is WARN
+    empty-store, not FAIL (re-review b2dc8f0f)."""
+    root = _hermetic_surfaces / ".codex"
+    (root / "sessions").mkdir(parents=True)
+    (root / "sessions" / "rollout-part.jsonl").write_text("{partial")
+    findings = codex.run(Context(data_dir=Path("/x"), cwd=Path("/x")))
+    assert _finding(findings, "empty-store").status is Status.WARN
+    assert all(f.status is not Status.FAIL for f in findings)
 
 
 def test_codex_malformed_rollout_tail_fails(_hermetic_surfaces):
