@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devin-doctor"
-version = "0.3.0"
+version = "0.3.1"
 description = "Diagnose a Devin Desktop installation: stores, schema versions, hooks, MCP servers, disk usage — with fix suggestions."
 readme = "README.md"
 license = { text = "MIT" }

@@ -250,7 +250,7 @@ wheels = [
 
 [[package]]
 name = "devin-doctor"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/doctor" }
 dependencies = [
     { name = "devin-internals-spec" },
