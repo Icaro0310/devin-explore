@@ -2,7 +2,7 @@
   "name": "devin-search",
   "displayName": "devin-search",
   "description": "Full-text search across past Devin sessions, inside the editor. Thin adapter: the extension shells out to the devin-search CLI and renders the result — no search logic is reimplemented here.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "icaro0310",
   "license": "MIT",
   "devin-search-cli": ">=0.1,<0.3",
