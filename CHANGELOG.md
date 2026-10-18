@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **CI** — `auto-approve` now calls the shared `pr-approve` reusable
+  workflow at v1.3 (was v1.1), keeping the Devin Review gate on the
+  current head commit.
 - **Release** — `devin-search` bumped to 0.2.0 across pyproject,
   `__version__`, `package.json` and `plugin.json` (multi-source
   collectors + index format v2). The extension's `devin-search-cli`
