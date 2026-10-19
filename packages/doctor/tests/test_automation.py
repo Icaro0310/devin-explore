@@ -9,6 +9,7 @@ runs.
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -125,10 +126,18 @@ def test_removed_task_is_fail(ctx):
     assert len(removed) == 1
     assert removed[0].status is Status.FAIL
     assert "office-freshness-check" in removed[0].message
-    # the snapshot was rewritten without the removed entry
+    # the removed entry stays in the baseline — a removal keeps
+    # alerting until the task returns or the entry is deleted
     written = json.loads(_snapshot(ctx).read_text())
-    names = [t["name"] for t in written["tasks"]]
-    assert names == ["/home/u/bin/daily.sh"]
+    names = sorted(t["name"] for t in written["tasks"])
+    assert names == [
+        "/home/u/bin/daily.sh",
+        "/home/u/scripts/office-freshness-check.sh",
+    ]
+    # second run: still missing -> still FAIL, not a pass
+    findings2 = automation.run(ctx, runner=make_runner(table))
+    again = _find(findings2, "removed since last check", surface="cron")
+    assert len(again) == 1 and again[0].status is Status.FAIL
 
 
 def test_first_run_records_baseline(ctx):
@@ -383,3 +392,197 @@ def test_load_snapshot_rejects_malformed(tmp_path, bad):
     path = tmp_path / "snap.json"
     path.write_text(bad)
     assert automation._load_snapshot(path) is None
+
+
+# ---- review regressions (PR #98 r1) -----------------------------------------
+
+
+def test_crontab_query_failure_preserves_baseline(ctx, tmp_path):
+    """`crontab -l` failing (not 'no crontab') is unavailable, not
+    empty — saved tasks must not be flagged removed nor dropped."""
+    _seed_snapshot(
+        ctx,
+        [("cron", "/home/u/bin/daily.sh", "/home/u/bin/daily.sh")],
+    )
+    table = {
+        ("crontab", "-l"): (1, "permission denied"),  # stderr-less fake
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert _find(findings, "surface unavailable", surface="cron")
+    assert not _find(findings, "removed since last check")
+    # baseline kept the cron task
+    written = json.loads(_snapshot(ctx).read_text())
+    assert [t["name"] for t in written["tasks"]] == [
+        "/home/u/bin/daily.sh"
+    ]
+
+
+def test_unavailable_surface_keeps_its_snapshot_entries(ctx):
+    """One scheduler answering does not erase another's history."""
+    _seed_snapshot(
+        ctx,
+        [
+            ("cron", "/home/u/cronjob.sh", "/home/u/cronjob.sh"),
+            ("systemd-user", "devin-scout.timer", "/bin/true"),
+        ],
+    )
+    table = {
+        ("crontab", "-l"): (0, "0 8 * * * /home/u/cronjob.sh\n"),
+        # systemd surface does not answer this run
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert not [
+        f for f in _find(findings, "scheduled task removed")
+        if f.status is Status.FAIL
+    ]
+    written = json.loads(_snapshot(ctx).read_text())
+    surfaces = {t["surface"] for t in written["tasks"]}
+    assert "systemd-user" in surfaces  # survived the unanswered probe
+
+
+def test_bare_relative_script_arg_checked(tmp_path):
+    """`python3 backup.py` — no slash, still a real file reference."""
+    missing = tmp_path / "backup.py"
+    targets, commands = automation._task_targets(
+        "python3 backup.py", posix=True, home=tmp_path
+    )
+    assert missing in {t.path for t in targets}
+    assert commands == ["python3"]
+
+
+def test_working_directory_scopes_relative_exec(ctx, tmp_path):
+    """WorkingDirectory=/srv/jobs + ExecStart=... ./backup.py resolves
+    under the unit's working dir, not home."""
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    (jobs / "backup.py").write_text("# fixture\n")
+    units_out = "jobs.service loaded active exited jobs.service\n"
+    unit = (
+        "[Service]\n"
+        f"WorkingDirectory={jobs.as_posix()}\n"
+        "ExecStart=/usr/bin/python3 ./backup.py\n"
+    )
+    table = {
+        ("crontab", "-l"): (1, "no crontab for u"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (0, units_out),
+        ("systemctl", "--user", "cat", "jobs.service"): (0, unit),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert not _find(findings, "missing path", surface="systemd-user")
+
+
+def test_glued_separator_still_checks_script(tmp_path):
+    """`python3 /x/missing.py; echo done` — the glued ';' cannot hide
+    the missing script behind one token."""
+    targets, _ = automation._task_targets(
+        "python3 /srv/missing.py; echo done", posix=True, home=tmp_path
+    )
+    assert any(t.path == Path("/srv/missing.py") for t in targets)
+
+
+def test_redirect_input_file_must_exist(tmp_path):
+    """`reporter < /srv/missing.txt` — input redirects check the file
+    itself, not just its parent dir."""
+    targets, _ = automation._task_targets(
+        "reporter < /srv/missing.txt", posix=True, home=tmp_path
+    )
+    assert any(
+        t.path == Path("/srv/missing.txt") and t.kind == "exists"
+        for t in targets
+    )
+
+
+def test_heredoc_delimiter_is_not_a_path(tmp_path):
+    """`cmd <<EOF` — EOF is a delimiter, not a file to check."""
+    targets, _ = automation._task_targets(
+        "python3 - <<EOF\nprint(1)\nEOF", posix=True, home=tmp_path
+    )
+    assert not any(t.path.name == "EOF" for t in targets)
+
+
+def test_cron_secret_redacted_from_name_and_snapshot(ctx, tmp_path):
+    """A credential arg in a cron line never lands in findings or the
+    on-disk baseline."""
+    script = tmp_path / "job.sh"
+    script.write_text("#!/bin/sh\n")
+    line = (
+        f"0 8 * * * {script.as_posix()} --api-key sk-live-1234 "
+        "TOKEN=hunter2"
+    )
+    table = {
+        ("crontab", "-l"): (0, line + "\n"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    blob = "\n".join(f.message for f in findings)
+    blob += _snapshot(ctx).read_text()
+    assert "sk-live-1234" not in blob
+    assert "hunter2" not in blob
+    assert "***" in blob
+
+
+def test_schtasks_unreadable_warns(ctx, tmp_path):
+    """A task whose /xml query fails is counted, not silently healthy."""
+    script = tmp_path / "task.py"
+    script.write_text("# fixture\n")
+    csv_out = (
+        '"\\Devin Scout","10/18/2026 8:00:00 AM","Ready"\r\n'
+        '"\\Broken Task","10/18/2026 8:00:00 AM","Ready"\r\n'
+    )
+    table = {
+        ("crontab", "-l"): (1, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (0, csv_out),
+        ("schtasks", "/query", "/tn", "Devin Scout", "/xml"): (
+            0,
+            (
+                "<Task><Actions><Exec><Command>"
+                f"{script.as_posix()}</Command></Exec></Actions></Task>"
+            ),
+        ),
+        ("schtasks", "/query", "/tn", "Broken Task", "/xml"): (1, ""),
+    }
+    findings = automation.run(
+        ctx, runner=make_runner(table), plat="windows"
+    )
+    warn = _find(findings, "unreadable", surface="task-scheduler")
+    assert warn and warn[0].status is Status.WARN
+    assert "1 task(s)" in warn[0].message
+
+
+def test_unloaded_unit_file_still_inventoried(ctx, tmp_path):
+    """An installed-but-unloaded timer appears via list-unit-files —
+    list-units alone would miss it and call it removed."""
+    timer_unit = (
+        "[Timer]\nOnCalendar=daily\nUnit=devin-nightly.service\n"
+    )
+    service = tmp_path / "nightly.sh"
+    service.write_text("#!/bin/sh\n")
+    service_unit = (
+        "[Service]\nType=oneshot\n"
+        f"ExecStart={service.as_posix()}\n"
+    )
+    table = {
+        ("crontab", "-l"): (1, "no crontab for u"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (0, ""),
+        ("systemctl", "--user", "list-unit-files",
+         "--type=service,timer", "--no-legend", "--no-pager"): (
+            0, "devin-nightly.timer enabled -\n"
+        ),
+        ("systemctl", "--user", "cat", "devin-nightly.timer"): (
+            0, timer_unit
+        ),
+        ("systemctl", "--user", "cat", "devin-nightly.service"): (
+            0, service_unit
+        ),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert _find(
+        findings, "1 scheduled task(s)", surface="systemd-user"
+    )
