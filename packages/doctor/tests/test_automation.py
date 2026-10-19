@@ -9,7 +9,6 @@ runs.
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -888,10 +887,11 @@ def test_fd_dup_with_split_target_consumed(tmp_path):
 
 
 def test_combined_redirect_checks_parent_not_file(tmp_path):
-    """`cmd &> /tmp/new.log` — the file may be created at run time;
+    """`cmd &> out.log` — the file may be created at run time;
     only its parent dir is verifiable."""
+    log = tmp_path / "new.log"
     targets, _ = automation._task_targets(
-        "echo done &> /tmp/new.log", posix=True, home=tmp_path
+        f"echo done &> {log.as_posix()}", posix=True, home=tmp_path
     )
     by_path = {t.path: t.kind for t in targets}
-    assert by_path.get(Path("/tmp/new.log")) == "parent"
+    assert by_path.get(log) == "parent"
