@@ -958,9 +958,9 @@ def test_digits_glued_or_spaced_vs_word_suffix(tmp_path):
         f"python3 >{log.as_posix()}", posix=True, home=tmp_path
     )
     assert commands == ["python3"]
-    # '/tmp/job2 >out' — the '2' belongs to the path
+    # '/tmp/job2>out' — the '2' belongs to the path (glued, no space)
     targets, _ = automation._task_targets(
-        f"{job.as_posix()} >{log.as_posix()}", posix=True, home=tmp_path
+        f"{job.as_posix()}>{log.as_posix()}", posix=True, home=tmp_path
     )
     assert job in {t.path for t in targets}
     assert any(t.path == log and t.kind == "parent" for t in targets)
