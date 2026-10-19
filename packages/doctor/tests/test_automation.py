@@ -9,6 +9,7 @@ runs.
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -774,3 +775,123 @@ def test_unloaded_unit_file_still_inventoried(ctx, tmp_path):
     assert _find(
         findings, "1 scheduled task(s)", surface="systemd-user"
     )
+
+
+# ---- review regressions (PR #98 r3) -----------------------------------------
+
+
+def test_restored_cron_job_clears_its_removal(ctx):
+    """A legacy name-keyed row that is carried while missing must not
+    gain an 'id' — the restored job has to re-key to its digest."""
+    job = "/home/u/bin/nightly.sh"
+    _seed_snapshot(ctx, [("cron", job, job)])
+    table = {
+        ("crontab", "-l"): (1, "no crontab for u"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert _find(findings, "scheduled task removed", surface="cron")
+    # the job comes back — the sticky removal must clear
+    table[("crontab", "-l")] = (0, f"0 8 * * * {job}\n")
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert not [
+        f for f in _find(findings, "scheduled task removed")
+        if f.status is Status.FAIL
+    ]
+
+
+def test_cron_credential_rotation_is_not_a_removal(ctx, tmp_path):
+    """`--token alice` -> `--token bob`: same scheduled job, no
+    false removal — identity digests the REDACTED command."""
+    script = tmp_path / "job.sh"
+    script.write_text("# fixture\n")
+    table = {
+        ("crontab", "-l"): (
+            0, f"0 8 * * * {script.as_posix()} --token alice\n"
+        ),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    automation.run(ctx, runner=make_runner(table))
+    table[("crontab", "-l")] = (
+        0, f"0 8 * * * {script.as_posix()} --token bob\n"
+    )
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert not [
+        f for f in _find(findings, "scheduled task removed")
+        if f.status is Status.FAIL
+    ]
+    # and the baseline still tracks exactly one cron job
+    cron_rows = [
+        t for t in json.loads(_snapshot(ctx).read_text())["tasks"]
+        if t["surface"] == "cron"
+    ]
+    assert len(cron_rows) == 1
+
+
+def test_node_require_preload_file_checked(tmp_path):
+    """`node --require missing.js app.js` — the preload file must be
+    inspected, not swallowed as an option value."""
+    targets, _ = automation._task_targets(
+        "node --require missing.js app.js",
+        posix=True,
+        home=tmp_path,
+    )
+    paths = {t.path for t in targets}
+    assert tmp_path / "missing.js" in paths
+    assert tmp_path / "app.js" in paths
+
+
+def test_node_import_equals_form_checked(tmp_path):
+    """`--import=x.js` carries the preload path inline."""
+    targets, _ = automation._task_targets(
+        "node --import=inline.js app.js",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "inline.js" in {t.path for t in targets}
+
+
+def test_node_require_module_name_not_checked(tmp_path):
+    """`-r dotenv/config` is a node module, not a cwd-relative file —
+    it must not produce a bogus path target."""
+    targets, _ = automation._task_targets(
+        "node -r dotenv/config app.js",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "dotenv" / "config" not in {
+        t.path for t in targets
+    }
+
+
+def test_leading_fd_redirect_does_not_hide_command(tmp_path):
+    """`2>log missing-tool` — the fd number is part of the redirect,
+    not the command word."""
+    targets, commands = automation._task_targets(
+        "2>/tmp/err.log python3 missing.py",
+        posix=True,
+        home=tmp_path,
+    )
+    assert "python3" in commands
+    assert "2" not in commands
+    assert tmp_path / "missing.py" in {t.path for t in targets}
+
+
+def test_fd_dup_with_split_target_consumed(tmp_path):
+    """`cmd 2>& 1` — a bare fd number after '>&' is not a path."""
+    targets, _ = automation._task_targets(
+        "echo hi 2>& 1", posix=True, home=tmp_path
+    )
+    assert tmp_path / "1" not in {t.path for t in targets}
+
+
+def test_combined_redirect_checks_parent_not_file(tmp_path):
+    """`cmd &> /tmp/new.log` — the file may be created at run time;
+    only its parent dir is verifiable."""
+    targets, _ = automation._task_targets(
+        "echo done &> /tmp/new.log", posix=True, home=tmp_path
+    )
+    by_path = {t.path: t.kind for t in targets}
+    assert by_path.get(Path("/tmp/new.log")) == "parent"

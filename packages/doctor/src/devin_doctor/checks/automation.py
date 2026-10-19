@@ -117,7 +117,11 @@ _POSIX_SHELL = re.compile(r"^(?:a|ba|da|k|z)?sh(?:\.exe)?$", re.IGNORECASE)
 # value.
 _PAYLOAD_FLAGS = frozenset({"-m", "-e", "-X", "-W"})
 
-_REDIRECT = re.compile(r"\d*[<>]+&?\d*")
+# Interpreter flags whose next token is a preload FILE (node/deno) —
+# deliberately NOT in _PAYLOAD_FLAGS so the fileish check sees it.
+_PRELOAD_FLAGS = frozenset({"-r", "--require", "--import"})
+
+_REDIRECT = re.compile(r"\d*[<>]+&?\d*|&>>?")
 
 # Credential-looking fragments are scrubbed before a command is stored
 # or printed: ``KEY=value`` env assignments and ``--flag value`` /
@@ -230,18 +234,27 @@ def _cron_tasks(
             f"exit {res.returncode}"
         )
         return None, f"crontab -l failed: {detail}", []
-    return [
-        _Task(
-            "cron",
-            _redact(command),
-            command,
-            # redacted names can collide when two jobs differ only in a
-            # credential — the digest of the raw command keeps them
-            # distinct while staying non-reversible.
-            identity=hashlib.sha256(command.encode()).hexdigest()[:16],
-        )
-        for command in _parse_crontab(res.stdout or "")
-    ], None, []
+    # Identity: digest of the REDACTED command plus a rank among jobs
+    # sharing that redacted text. A credential rotation leaves the
+    # scrubbed text (and so the identity) unchanged — no false removal —
+    # while two jobs differing only in a scrubbed secret still get
+    # distinct keys, so removing one of the pair is detectable.
+    groups: dict[str, list[str]] = {}
+    for command in _parse_crontab(res.stdout or ""):
+        groups.setdefault(_redact(command), []).append(command)
+    tasks: list[_Task] = []
+    for redacted, members in groups.items():
+        digest = hashlib.sha256(redacted.encode()).hexdigest()[:16]
+        for rank, command in enumerate(members):
+            tasks.append(
+                _Task(
+                    "cron",
+                    redacted,
+                    command,
+                    identity=f"{digest}-{rank}",
+                )
+            )
+    return tasks, None, []
 
 
 def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
@@ -455,6 +468,19 @@ def _task_targets(
         tokens = _lex(command, posix)
     except ValueError:
         tokens = command.split()
+    # A bare descriptor number glues onto the following redirect —
+    # '2>log' and '1>&2' lex as '2','>' / '1','>&','2', so the digit
+    # would otherwise be eaten as the command word and the real
+    # executable behind the redirect missed.
+    tokens = [
+        tok
+        for i, tok in enumerate(tokens)
+        if not (
+            re.fullmatch(r"\d+", tok)
+            and i + 1 < len(tokens)
+            and tokens[i + 1].startswith(("<", ">"))
+        )
+    ]
     targets: list[_Target] = []
     commands: list[str] = []
     cwd = cwd or home
@@ -501,9 +527,16 @@ def _task_targets(
                 # both consume-states before classifying it.
                 payload_next = False
                 shell_next = False
+                if piece.startswith("&"):
+                    # '&>' / '&>>' — combined stdout+stderr to a file
+                    # the job may create; check the parent dir.
+                    redirect_next = "parent"
+                    continue
                 if "&" in piece:
-                    # fd duplication ('2>&1') is self-contained — the
-                    # target fd is in-token and no next word is consumed.
+                    # fd duplication — '2>&1' is self-contained, but
+                    # '>&'/'<&' can be followed by a bare fd number
+                    # ('>& 2') or, in bash, a file ('>& out.log').
+                    redirect_next = "fd"
                     continue
                 if "<<" in piece:
                     # heredoc ('<<EOF') — the next word is the delimiter,
@@ -571,6 +604,25 @@ def _task_targets(
                                 shell_next = True
                             else:
                                 payload_next = True
+                        elif piece in _PRELOAD_FLAGS:
+                            # '-r'/'--require'/'--import' take a preload
+                            # FILE — fall through so the fileish rule
+                            # checks it (module names without an
+                            # extension are skipped there anyway).
+                            pass
+                        elif (
+                            "=" in piece
+                            and piece.partition("=")[0] in _PRELOAD_FLAGS
+                        ):
+                            # '--require=x.js' — the path is inline.
+                            value = piece.partition("=")[2]
+                            if _FILEISH.search(value):
+                                targets.append(
+                                    _Target(
+                                        _resolve_path(value, cwd),
+                                        "exists",
+                                    )
+                                )
                         elif piece in _PAYLOAD_FLAGS or piece.startswith(
                             "--"
                         ):
@@ -585,13 +637,23 @@ def _task_targets(
             if redirect_next:
                 # >/path checks the parent dir (file may not exist
                 # yet); </path checks the input file itself; 'skip'
-                # consumed a heredoc delimiter or fd number.
+                # consumed a heredoc delimiter; 'fd' consumes a bare
+                # descriptor number or '>& file' treats the file as an
+                # output (parent dir). A redirect target never occupies
+                # command position — 'cmd' may still follow ('2>log
+                # python3 x.py' runs python3, not '2').
                 mode = redirect_next
                 redirect_next = None
+                if mode == "fd" and re.fullmatch(r"[\d-]+", piece):
+                    continue
                 if mode != "skip":
                     targets.append(
-                        _Target(_resolve_path(piece, cwd), mode)
+                        _Target(
+                            _resolve_path(piece, cwd),
+                            "parent" if mode == "fd" else mode,
+                        )
                     )
+                continue
             elif _is_path_token(piece) or cd_next:
                 resolved = _resolve_path(piece, cwd)
                 if cd_next:
@@ -712,6 +774,7 @@ def _load_snapshot(
     if not isinstance(tasks, list):
         return None
     out: dict[tuple[str, str], tuple[str, str, bool]] = {}
+    cron_rows: list[tuple[str, str]] = []
     for task in tasks:
         if (
             isinstance(task, dict)
@@ -722,13 +785,28 @@ def _load_snapshot(
             # existed still diffs cleanly against redacted identities.
             surface = str(task["surface"])
             name = _redact(str(task["name"]))
+            command = _redact(str(task.get("command") or ""))
             task_id = task.get("id")
+            if surface == "cron" and command:
+                # Cron identities are recomputed from the stored
+                # (redacted) command — never trusted from the row's
+                # 'id'. This migrates raw-command digests AND rows a
+                # carried legacy entry wrote with id=<name>, so a
+                # restored job always re-keys to the same identity the
+                # enumerator produces.
+                cron_rows.append((name, command))
+                continue
             key = (surface, str(task_id)) if task_id else (surface, name)
-            out[key] = (
-                name,
-                _redact(str(task.get("command") or "")),
-                bool(task_id),
-            )
+            out[key] = (name, command, bool(task_id))
+    # Rank cron rows sharing a redacted command the same way the
+    # enumerator does — only the key SET must be reproducible.
+    cron_groups: dict[str, list[tuple[str, str]]] = {}
+    for name, command in cron_rows:
+        digest = hashlib.sha256(command.encode()).hexdigest()[:16]
+        cron_groups.setdefault(digest, []).append((name, command))
+    for digest, members in cron_groups.items():
+        for rank, (name, command) in enumerate(members):
+            out[("cron", f"{digest}-{rank}")] = (name, command, True)
     return out
 
 
