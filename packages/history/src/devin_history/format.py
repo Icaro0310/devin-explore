@@ -106,7 +106,7 @@ def render_session_md(
     messages: list[ChatMessage],
     prov: dict[str, str] | None = None,
     *,
-    ephemeral_index: int = 0,
+    ref: str | None = None,
 ) -> str:
     """One Obsidian-ready note for a CLI session."""
     counts = Counter(m.role for m in messages)
@@ -114,9 +114,8 @@ def render_session_md(
     prov_fm = "" if prov is None else (
         f"\nmachine_id: {prov['machine_id']}\nprofile: {prov['profile']}"
     )
-    ref = evidence_ref(
-        SURFACE_DEVIN_CLI, session.id, session.working_directory,
-        ephemeral_index=ephemeral_index,
+    ref = ref or evidence_ref(
+        SURFACE_DEVIN_CLI, session.id, session.working_directory
     )
     project = project_name(session.working_directory)
     title = (session.title or "Untitled").strip()
@@ -159,7 +158,7 @@ def session_to_dict(
     tool_calls: list[ToolCallState],
     prov: dict[str, str] | None = None,
     *,
-    ephemeral_index: int = 0,
+    ref: str | None = None,
 ) -> dict[str, Any]:
     """Searchable JSON shape for one session (full text, no clipping)."""
     return {
@@ -168,9 +167,8 @@ def session_to_dict(
         "session_id": session.id,
         "surface": SURFACE_DEVIN_CLI,
         "native_id": session.id,
-        "ref": evidence_ref(
-            SURFACE_DEVIN_CLI, session.id, session.working_directory,
-            ephemeral_index=ephemeral_index,
+        "ref": ref or evidence_ref(
+            SURFACE_DEVIN_CLI, session.id, session.working_directory
         ),
         "title": (session.title or "Untitled").strip(),
         "project": project_name(session.working_directory),
@@ -285,6 +283,7 @@ def render_index_json(
          "sessions": [
             {"date": e.date, "file": e.filename, "title": e.title,
              "project": e.project, "session_id": e.session_id,
+             "surface": e.surface, "native_id": e.native_id, "ref": e.ref,
              "user_msgs": e.user_msgs, "assistant_msgs": e.assistant_msgs,
              "tool_msgs": e.tool_msgs}
             for e in entries
@@ -298,7 +297,7 @@ def render_gui_session_md(
     session: GuiSession,
     prov: dict[str, str] | None = None,
     *,
-    ephemeral_index: int = 0,
+    ref: str | None = None,
 ) -> str:
     """One Obsidian-ready note for a GUI session (metadata only).
 
@@ -311,9 +310,8 @@ def render_gui_session_md(
     accessed_fm = "" if session.last_accessed is None else (
         f"\nlast_accessed: {int(session.last_accessed)}"
     )
-    ref = evidence_ref(
-        SURFACE_DEVIN_CHAT, session.slug, session.workspace_id,
-        ephemeral_index=ephemeral_index,
+    ref = ref or evidence_ref(
+        SURFACE_DEVIN_CHAT, session.slug, session.workspace_id
     )
     project = project_name(session.workspace_id)
     title = (session.label or session.slug).strip()
@@ -390,6 +388,7 @@ def render_gui_index_json(
          "sessions": [
              {"date": e.date, "file": e.filename, "slug": e.slug,
               "title": e.title, "backend": e.backend, "project": e.project,
+              "surface": e.surface, "native_id": e.native_id, "ref": e.ref,
               "workspace_id": e.workspace_id,
               "last_updated": e.last_updated,
               "last_accessed": e.last_accessed}
