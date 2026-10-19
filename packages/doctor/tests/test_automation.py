@@ -895,3 +895,45 @@ def test_combined_redirect_checks_parent_not_file(tmp_path):
     )
     by_path = {t.path: t.kind for t in targets}
     assert by_path.get(log) == "parent"
+
+
+# ---- review regressions (PR #98 r4) -----------------------------------------
+
+
+def test_inline_preload_env_var_expands(tmp_path, monkeypatch):
+    """`node --require=$VAR/pre.js` — env vars inside inline preload
+    values are expanded before the existence check."""
+    monkeypatch.setenv("DJAEV_TEST_PRE", str(tmp_path))
+    targets, _ = automation._task_targets(
+        "node --require=$DJAEV_TEST_PRE/pre.js app.js",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "pre.js" in {t.path for t in targets}
+    assert tmp_path / "app.js" in {t.path for t in targets}
+
+
+def test_inline_preload_unresolved_var_is_not_a_path(
+    tmp_path, monkeypatch
+):
+    """`--require=$UNSET/pre.js` — an env var that cannot expand is
+    environment-dependent, not a missing literal path."""
+    monkeypatch.delenv("DJAEV_TEST_UNSET_XQ", raising=False)
+    targets, _ = automation._task_targets(
+        "node --require=$DJAEV_TEST_UNSET_XQ/pre.js app.js",
+        posix=True,
+        home=tmp_path,
+    )
+    assert all("$" not in str(t.path) for t in targets)
+    assert tmp_path / "app.js" in {t.path for t in targets}
+
+
+def test_spaced_digit_before_redirect_is_a_word(tmp_path):
+    """`123 >out` — a digit separated from the operator by whitespace
+    is a command word, not an fd prefix; only '2>out' (glued) is."""
+    log = tmp_path / "out.log"
+    targets, commands = automation._task_targets(
+        f"123 >{log.as_posix()}", posix=True, home=tmp_path
+    )
+    assert commands == ["123"]
+    assert any(t.path == log and t.kind == "parent" for t in targets)

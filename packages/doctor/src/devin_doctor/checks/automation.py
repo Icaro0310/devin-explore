@@ -464,23 +464,16 @@ def _task_targets(
     ``cd dir &&`` prefixes are understood, so crontab idioms like
     ``cd $HOME/repo && python3 scripts/job.py`` resolve correctly.
     """
+    # A descriptor number GLUED to a redirect operator ('2>log',
+    # '1>&2') is part of the operator — strip it before lexing so the
+    # digit cannot steal command position and hide the real command.
+    # A spaced digit ('123 >out') is a real word — a command or
+    # argument — and survives.
+    command = re.sub(r"\d+(?=[<>])", "", command)
     try:
         tokens = _lex(command, posix)
     except ValueError:
         tokens = command.split()
-    # A bare descriptor number glues onto the following redirect —
-    # '2>log' and '1>&2' lex as '2','>' / '1','>&','2', so the digit
-    # would otherwise be eaten as the command word and the real
-    # executable behind the redirect missed.
-    tokens = [
-        tok
-        for i, tok in enumerate(tokens)
-        if not (
-            re.fullmatch(r"\d+", tok)
-            and i + 1 < len(tokens)
-            and tokens[i + 1].startswith(("<", ">"))
-        )
-    ]
     targets: list[_Target] = []
     commands: list[str] = []
     cwd = cwd or home
@@ -614,9 +607,17 @@ def _task_targets(
                             "=" in piece
                             and piece.partition("=")[0] in _PRELOAD_FLAGS
                         ):
-                            # '--require=x.js' — the path is inline.
-                            value = piece.partition("=")[2]
-                            if _FILEISH.search(value):
+                            # '--require=x.js' — the path is inline;
+                            # env vars are expanded first and an
+                            # unresolvable one makes the preload
+                            # environment-dependent — uncheckable, not
+                            # a missing path.
+                            value = os.path.expandvars(
+                                piece.partition("=")[2]
+                            )
+                            if not _UNRESOLVABLE.search(
+                                value
+                            ) and _FILEISH.search(value):
                                 targets.append(
                                     _Target(
                                         _resolve_path(value, cwd),
