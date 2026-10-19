@@ -29,6 +29,8 @@ def do_query(
     project: str | None = None,
     since: str | None = None,
     limit: int = 20,
+    *,
+    tool: str | None = None,
 ) -> dict:
     """Return the ``devin-search query --json`` payload as a dict.
 
@@ -53,6 +55,7 @@ def do_query(
             role=role,
             project=project,
             since=since_ms,
+            tool=tool,
             limit=limit,
         )
     except FileNotFoundError:
@@ -100,6 +103,7 @@ def build_server():
         role: str = "",
         project: str = "",
         since: str = "",
+        tool: str = "",
         limit: int = 20,
         no_log: bool = False,
     ) -> dict:
@@ -107,7 +111,9 @@ def build_server():
         ``devin-search query --json``. Read-only: never modifies the index
         or the source stores. ``term`` tokens are ANDed; ``role`` filters
         user/assistant/tool/system/shell, ``project`` is a substring match
-        on the working directory, ``since`` is YYYY-MM-DD or epoch ms.
+        on the working directory, ``since`` is YYYY-MM-DD or epoch ms,
+        ``tool`` is an exact match on the indexed tool-call name (empty
+        = no filter).
         ``no_log`` is accepted for CLI parity — the adapter never writes
         the local query log regardless."""
         try:
@@ -117,6 +123,7 @@ def build_server():
                 role=role or None,
                 project=project or None,
                 since=since or None,
+                tool=tool or None,
                 limit=limit,
             )
         except Exception as error:  # noqa: BLE001 — tool boundary must not raise

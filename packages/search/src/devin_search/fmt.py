@@ -62,6 +62,7 @@ def hit_to_dict(h: Hit) -> dict:
         "ref": h.ref,
         "snippet": h.snippet,
         "rank": h.rank,
+        "tool": h.tool,
         "history_note": h.history_note,
     }
 

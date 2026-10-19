@@ -502,3 +502,48 @@ def test_devin_cli_epoch_seconds_normalize_to_ms(db_path, tmp_path):
     # message derives ts from created_at+10_000 (still <1e12 → seconds);
     # the tool-call row derives from the session's created_at.
     assert all(ts >= 1_700_000_000_000 for (ts,) in rows), rows
+
+
+def test_tool_call_name_indexed_to_docs_tool(db_path, tmp_path):
+    """Tool-call payloads lift their tool name into ``docs.tool`` — the
+    ``query --tool`` filter's ground truth. Extraction ports
+    devin-graph's heuristic: top-level name keys first, then one level
+    into ``rawInput``/``input``-style nests; the call payload wins over
+    the update payload; nameless calls keep NULL."""
+    add_session(
+        db_path,
+        "tools-sess",
+        tool_calls=[
+            ({"name": "shell", "command": "ls"}, {"output": "ok"}),
+            # name only on the update payload — still found.
+            ({"command": "ls"}, {"tool_name": "file_editor"}),
+            # call wins over update on conflicting names.
+            ({"name": "call_wins"}, {"name": "update_loses"}),
+            # nested one level down (ACP rawInput shape).
+            ({"rawInput": {"name": "nested_tool"}}, None),
+            # no name anywhere → NULL, but the doc is still indexed.
+            ({"command": "ls"}, {"output": "ok"}),
+            # no payload at all → never indexed, no row.
+            (None, None),
+        ],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    con = sqlite3.connect(idx)
+    try:
+        rows = {
+            r[0]: r[1]
+            for r in con.execute(
+                "SELECT ref, tool FROM docs WHERE session_id = 'tools-sess'"
+            )
+        }
+    finally:
+        con.close()
+    assert rows == {
+        "tool:tools-sess/tools-sess-tc0": "shell",
+        "tool:tools-sess/tools-sess-tc1": "file_editor",
+        "tool:tools-sess/tools-sess-tc2": "call_wins",
+        "tool:tools-sess/tools-sess-tc3": "nested_tool",
+        "tool:tools-sess/tools-sess-tc4": None,
+    }
