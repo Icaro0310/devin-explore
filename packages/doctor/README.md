@@ -135,6 +135,14 @@ than hard failures, so the tool is still useful on agent-only machines:
 | `hooks-windows` | hooks/MCP commands that would pop a visible console window on Windows (`cmd /c` without a hidden wrapper, `powershell` without `-WindowStyle Hidden`, direct `.bat`/`.ps1`, `python.exe` vs `pythonw.exe`) — each with file, hook event and a wrapper fix |
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
 | `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
+| `automation` | scheduled tasks per surface — user crontab, `systemd --user` services/timers (loaded units plus installed unit files, so unloaded timers are still seen), Windows Task Scheduler: referenced paths/binaries that no longer exist (**FAIL**), tasks removed since the last run (**FAIL**, via a snapshot at `<data-dir>/doctor/automation-snapshot.json` — the only file the tool writes, its own state), and targets inside repo checkouts the ecosystem registry marks as absorbed. Surfaces that don't exist on the host report `surface unavailable` — never an error |
+
+The `automation` check's semantics are deliberately conservative:
+
+- **Unavailable ≠ removed.** If a scheduler probe fails (`crontab -l` error, no user systemd bus), that surface's recorded tasks are carried forward — not flagged as removed and not dropped from the baseline.
+- **Removal FAILs are sticky.** A task that disappears keeps FAILing every run until it returns or the removal is acknowledged — delete the task's entry inside `<data-dir>/doctor/automation-snapshot.json`, or delete the file to reset the whole baseline.
+- **Secrets are scrubbed.** Credential-shaped material (`--*token*`/`--*key*`/`--*pass*`/`--*secret*`/`--*auth*` arguments, sensitive `KEY=value` assignments, `Bearer` tokens, URL userinfo) becomes `***` before anything is stored or printed — a minimal local pattern set, not the full `devin-redact` catalog.
+- **Known limits:** Task Scheduler enumeration is capped at 200 tasks (a WARN fires when the listing is truncated) and a task whose `/xml` query fails is counted as unreadable WARN rather than silently healthy; shell parsing is heuristic — command substitution, globs and `$(...)`-generated paths are skipped rather than guessed.
 
 Privacy doctrine is strict across all checks: headers and metadata only —
 counts, sizes, paths and statuses, never message content. SQLite stores
@@ -180,7 +188,9 @@ timeout) plus a loopback bind — the only network call this tool can make.
 ## Works with Devin alone (Devin-only mode)
 
 devin-doctor is a pure local diagnostic: it reads Devin's own data
-directories, writes nothing, and never contacts a network service. No VM, no
+directories, writes nothing except its own small state file
+(`doctor/automation-snapshot.json`, used by the `automation` check's
+removed-task detection), and never contacts a network service. No VM, no
 Tailscale, no Ollama, no Slack — just Devin Desktop plus Python. On a
 restricted or corporate machine it is the safest first tool: install, run
 `devin-doctor`, read the report.
@@ -271,7 +281,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 ## When to use this
 
 - Devin misbehaves — missing history, auth errors, disk pressure — and you want one command to localize the cause.
-- You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates), each with a `fix:` suggestion.
+- You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates, automation), each with a `fix:` suggestion.
 - You need a paste-able report for a bug report: `devin-doctor report --md`.
 - You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (otherwise only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable).
 
@@ -285,7 +295,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 
 **How do I check if my Devin installation's local data is healthy?** Run `devin-doctor check`. It inspects `sessions.db`, `acp-messages/*.db`, `state.vscdb`, `credentials.toml` and disk usage, printing `PASS`/`WARN`/`FAIL` per check with a `fix:` suggestion. Exit code is `0` unless something FAILs. It also diagnoses the other agent session surfaces on the machine (Copilot, Codex, VS Code chat) in the same run — `--surface NAME` scopes that section.
 
-**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and writes nothing to the data dir. The only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`). Config check masks credential values in output. Fixes are suggested as text, never applied.
+**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and never touches the system's data or scheduled tasks; the single exception is its own state file (`doctor/automation-snapshot.json` under the data dir) that the `automation` check uses to detect tasks removed since the last run. The only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`). Config check masks credential values in output. Fixes are suggested as text, never applied.
 
 **What does "unknown schema version" mean?** Devin's `sessions.db` schema is versioned; devin-doctor understands v15–v17 via devin-internals-spec. A newer version produces a `schema-unknown` WARN: counts still run, but the layout isn't verified — update the tool or devin-internals-spec.
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `automation` check — scheduled automation that silently broke. The
+  check enumerates the user crontab, `systemd --user` services/timers
+  (loaded units plus installed unit files, so unloaded timers are still
+  seen) and Windows Task Scheduler (`schtasks`), extracts the
+  script/binary each task references and FAILs on: referenced paths that
+  no longer exist, tasks removed since the previous run (tracked via a
+  JSON snapshot at `<data-dir>/doctor/automation-snapshot.json` — the
+  tool's own state file, the only thing it writes), and targets inside
+  repo checkouts the ecosystem registry (`devin-powerups/registry.json`)
+  marks as absorbed/archived. Unavailable surfaces carry their history
+  forward instead of reading as empty; removal FAILs persist until the
+  task returns or its snapshot entry is deleted by hand;
+  credential-shaped fragments are redacted to `***` before findings and
+  snapshot writes. Motivated by a real incident: a cron line vanished
+  for ~3.5 days before anyone noticed.
+
 ## [0.3.1] - 2026-10-17
 
 ### Fixed

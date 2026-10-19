@@ -58,6 +58,16 @@ def _offline_updates(monkeypatch):
     monkeypatch.setenv("DEVIN_DOCTOR_OFFLINE", "1")
 
 
+@pytest.fixture(autouse=True)
+def _no_scheduler_probes(monkeypatch):
+    """The automation check probes crontab/systemctl/schtasks — keep every
+    test hermetic by reporting each surface tool as missing. Tests for the
+    check itself inject their own fake runner."""
+    from devin_doctor.checks import automation
+
+    monkeypatch.setattr(automation, "_run", lambda argv: None)
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     """A healthy synthetic Devin data dir (schema v17, 3 sessions, 2 acp DBs)."""
