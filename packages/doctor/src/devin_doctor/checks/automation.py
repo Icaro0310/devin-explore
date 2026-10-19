@@ -37,6 +37,7 @@ reports and the on-disk baseline never persist them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -45,7 +46,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -108,10 +109,6 @@ _INTERPRETER = re.compile(
 # string, never a path ('python3 -m http.server', 'sh -c ...').
 _PAYLOAD_FLAGS = frozenset({"-m", "-c", "-e", "-r"})
 
-# Splits glued shell pieces (``>>/log``, ``2>&1``, ``>f``, ``cmd;next``,
-# ``a&&b``) so each can be classified; ``<``/``>`` targets are files,
-# not commands.
-_REDIRECT_SPLIT = re.compile(r"(\d*[<>]+&?\d*|[;|&(){}]+)")
 _REDIRECT = re.compile(r"\d*[<>]+&?\d*")
 
 # Credential-looking fragments are scrubbed before a command is stored
@@ -150,6 +147,10 @@ class _Task:
     name: str
     command: str
     cwd: str | None = None
+    # Non-reversible identity for the snapshot key when ``name`` alone
+    # could collide — two cron jobs that differ only in a redacted
+    # credential must still be tracked as distinct tasks.
+    identity: str | None = None
 
 
 def _redact(text: str) -> str:
@@ -222,7 +223,15 @@ def _cron_tasks(
         )
         return None, f"crontab -l failed: {detail}", []
     return [
-        _Task("cron", _redact(command), command)
+        _Task(
+            "cron",
+            _redact(command),
+            command,
+            # redacted names can collide when two jobs differ only in a
+            # credential — the digest of the raw command keeps them
+            # distinct while staying non-reversible.
+            identity=hashlib.sha256(command.encode()).hexdigest()[:16],
+        )
         for command in _parse_crontab(res.stdout or "")
     ], None, []
 
@@ -240,9 +249,10 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
         if exec_match:
             commands.append(exec_match.group(1).strip())
         elif stripped.startswith("WorkingDirectory="):
-            wd = stripped.split("=", 1)[1].strip()
-            if wd:
-                workdir = wd
+            # an empty directive RESETS the directory (drop-ins are
+            # concatenated into one 'cat' — a later 'WorkingDirectory='
+            # clears an earlier one)
+            workdir = stripped.split("=", 1)[1].strip() or None
         elif stripped.startswith("Unit="):
             target = stripped.split("=", 1)[1].strip()
             if target:
@@ -395,6 +405,15 @@ def _is_path_token(token: str) -> bool:
     return "/" in token or "\\" in token or token.startswith("~")
 
 
+def _lex(command: str, posix: bool) -> list[str]:
+    """Punctuation-aware shell tokenize: operators (';', '&&', '>',
+    '2>&1') come out as their own tokens while punctuation inside quotes
+    stays literal — ``cmd '/srv/a;b.py'`` is one path, not a boundary."""
+    lexer = shlex.shlex(command, posix=posix, punctuation_chars=True)
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
 def _resolve_path(token: str, cwd: Path) -> Path:
     """``~`` expansion plus cwd-relative resolution (cron's cwd is the
     user's home; a ``cd dir &&`` prefix moves it)."""
@@ -425,7 +444,7 @@ def _task_targets(
     ``cd $HOME/repo && python3 scripts/job.py`` resolve correctly.
     """
     try:
-        tokens = shlex.split(command, posix=posix)
+        tokens = _lex(command, posix)
     except ValueError:
         tokens = command.split()
     targets: list[_Target] = []
@@ -461,13 +480,21 @@ def _task_targets(
             expect_cmd = False
             after_flag = False
             continue
-        for piece in _REDIRECT_SPLIT.split(token):
+        # The lexer emits shell operators as their own tokens, so each
+        # piece below is a whole word — a ';' or '&' inside quotes stays
+        # literal (e.g. a path named 'a;b.py') instead of reading as a
+        # boundary.
+        for piece in (token,):
             if not piece:
                 continue
             if _REDIRECT.fullmatch(piece):
-                if "<<" in piece or "&" in piece:
-                    # heredoc ('<<EOF') or fd duplication ('2>&1') —
-                    # the next word is a delimiter/fd, not a path.
+                if "&" in piece:
+                    # fd duplication ('2>&1') is self-contained — the
+                    # target fd is in-token and no next word is consumed.
+                    continue
+                if "<<" in piece:
+                    # heredoc ('<<EOF') — the next word is the delimiter,
+                    # not a path.
                     redirect_next = "skip"
                 elif "<" in piece:
                     redirect_next = "exists"
@@ -642,8 +669,13 @@ def _snapshot_path(ctx: Context) -> Path:
     return ctx.data_dir / SNAPSHOT_DIRNAME / SNAPSHOT_NAME
 
 
-def _load_snapshot(path: Path) -> dict[tuple[str, str], str] | None:
-    """``{(surface, name): command}``; ``None`` when absent/unreadable."""
+def _load_snapshot(
+    path: Path,
+) -> dict[tuple[str, str], tuple[str, str, bool]] | None:
+    """``{(surface, identity): (display_name, command, had_id)}`` —
+    ``None`` when absent/unreadable. ``identity`` is the stored ``id``
+    (a digest for cron, the task name elsewhere); rows written before
+    identities existed fall back to their (already redacted) name."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
@@ -651,7 +683,7 @@ def _load_snapshot(path: Path) -> dict[tuple[str, str], str] | None:
     tasks = data.get("tasks") if isinstance(data, dict) else None
     if not isinstance(tasks, list):
         return None
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple[str, str], tuple[str, str, bool]] = {}
     for task in tasks:
         if (
             isinstance(task, dict)
@@ -660,18 +692,24 @@ def _load_snapshot(path: Path) -> dict[tuple[str, str], str] | None:
         ):
             # Redact on load too — a snapshot written before redaction
             # existed still diffs cleanly against redacted identities.
-            key = (str(task["surface"]), _redact(str(task["name"])))
-            out[key] = _redact(str(task.get("command") or ""))
+            surface = str(task["surface"])
+            name = _redact(str(task["name"]))
+            task_id = task.get("id")
+            key = (surface, str(task_id)) if task_id else (surface, name)
+            out[key] = (
+                name,
+                _redact(str(task.get("command") or "")),
+                bool(task_id),
+            )
     return out
 
 
-def _write_snapshot(path: Path, tasks: dict[tuple[str, str], str]) -> None:
+def _write_snapshot(path: Path, rows: list[dict[str, str]]) -> None:
     payload = {
         "version": 1,
-        "tasks": [
-            {"surface": surface, "name": name, "command": command}
-            for (surface, name), command in sorted(tasks.items())
-        ],
+        "tasks": sorted(
+            rows, key=lambda r: (r["surface"], r["id"])
+        ),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -716,7 +754,16 @@ def run(
                 )
             )
         else:
-            enumerated[surface] = tasks
+            # Redact before anything else touches the command — target
+            # extraction, findings and the on-disk snapshot all see the
+            # scrubbed text ('--token /x/k.pem' can never leak as a
+            # resolved path in a report either).
+            enumerated[surface] = [
+                replace(
+                    t, name=_redact(t.name), command=_redact(t.command)
+                )
+                for t in tasks
+            ]
             for note in notes:
                 findings.append(
                     Finding(CHECK_ID, Status.WARN, f"{surface}: {note}")
@@ -843,14 +890,22 @@ def run(
         return findings
 
     snapshot_path = _snapshot_path(ctx)
-    current = {
-        (task.surface, task.name): _redact(task.command)
+    previous = _load_snapshot(snapshot_path)
+    # Snapshot keys are (surface, identity) — a non-reversible digest of
+    # the raw command for cron (redacted names can collide when two jobs
+    # differ only in a credential), the task name elsewhere.
+    current: dict[tuple[str, str], _Task] = {
+        (task.surface, task.identity or task.name): task
         for tasks in enumerated.values()
         for task in tasks
     }
     enumerated_surfaces = set(enumerated)
+    display_names = {
+        surface: {t.name for t in tasks}
+        for surface, tasks in enumerated.items()
+    }
+    prev_map = previous or {}
     snapshot_exists = snapshot_path.is_file()
-    previous = _load_snapshot(snapshot_path)
     if previous is None:
         if snapshot_exists:
             findings.append(
@@ -872,21 +927,33 @@ def run(
         )
         removed_keys: list[tuple[str, str]] = []
     else:
+        # Rows written before identity digests existed are keyed by their
+        # redacted name — match them against the current display names so
+        # one upgrade is not mistaken for a mass removal.
+        legacy_matched = {
+            key
+            for key, (name, _cmd, had_id) in prev_map.items()
+            if not had_id
+            and key[0] in enumerated_surfaces
+            and name in display_names[key[0]]
+        }
         # Only surfaces that actually answered may lose tasks — a
         # scheduler that failed to respond keeps its baseline entries,
         # otherwise a flaky probe reads as a mass removal.
         removed_keys = sorted(
             key
-            for key in previous
-            if key[0] in enumerated_surfaces and key not in current
+            for key in prev_map
+            if key[0] in enumerated_surfaces
+            and key not in current
+            and key not in legacy_matched
         )
-        for surface, name in removed_keys:
+        for key in removed_keys:
             findings.append(
                 Finding(
                     CHECK_ID,
                     Status.FAIL,
-                    f"{surface}: scheduled task removed since last check: "
-                    f"'{name}'",
+                    f"{key[0]}: scheduled task removed since last check: "
+                    f"'{prev_map[key][0]}'",
                     fix="Restore the entry if the removal was accidental; "
                     "the baseline keeps flagging it until the task "
                     "returns or the entry is deleted from "
@@ -903,14 +970,33 @@ def run(
             )
     # Persisted baseline = this run's tasks + entries of unanswered
     # surfaces + tasks still missing (they keep alerting until they are
-    # restored or their entry is deleted by hand).
-    merged = dict(current)
-    if previous:
-        for key, command in previous.items():
-            if key[0] not in enumerated_surfaces or key in removed_keys:
-                merged[key] = command
+    # restored or their entry is deleted by hand). Legacy name-keyed
+    # rows that matched a current task are superseded by the new
+    # digest-keyed row.
+    merged_rows = [
+        {
+            "surface": key[0],
+            "id": key[1],
+            "name": task.name,
+            "command": task.command,
+        }
+        for key, task in current.items()
+    ]
+    removed_set = set(removed_keys)
+    for key, (name, command, _had_id) in prev_map.items():
+        if (
+            key[0] not in enumerated_surfaces or key in removed_set
+        ) and key not in current:
+            merged_rows.append(
+                {
+                    "surface": key[0],
+                    "id": key[1],
+                    "name": name,
+                    "command": command,
+                }
+            )
     try:
-        _write_snapshot(snapshot_path, merged)
+        _write_snapshot(snapshot_path, merged_rows)
     except OSError as exc:
         findings.append(
             Finding(

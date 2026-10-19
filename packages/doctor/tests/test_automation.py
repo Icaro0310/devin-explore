@@ -597,6 +597,99 @@ def test_schtasks_unreadable_warns(ctx, tmp_path):
     assert "1 task(s)" in warn[0].message
 
 
+def test_quoted_separator_in_path_not_split(tmp_path):
+    """`python3 '/srv/a;b.py'` — a quoted ';' is literal, not a shell
+    boundary; the fragments must never be checked."""
+    targets, _ = automation._task_targets(
+        f"python3 '{tmp_path.as_posix()}/a;b.py'",
+        posix=True,
+        home=tmp_path,
+    )
+    names = {t.path.name for t in targets}
+    assert "a;b.py" in names
+    assert "a" not in names
+
+
+def test_fd_dup_does_not_swallow_next_token(tmp_path):
+    """`python3 2>&1 /x/missing.py` — fd duplication is self-contained;
+    the script arg after it is still a target."""
+    targets, _ = automation._task_targets(
+        "python3 2>&1 /srv/missing.py", posix=True, home=tmp_path
+    )
+    assert any(str(t.path) == "/srv/missing.py" for t in targets)
+
+
+def test_working_directory_reset_by_empty_directive():
+    """`WorkingDirectory=` with an empty value clears an earlier one —
+    drop-ins are concatenated into one `cat` output."""
+    _cmds, workdir, _activates = automation._unit_payload(
+        "[Service]\n"
+        "WorkingDirectory=/srv/old\n"
+        "WorkingDirectory=\n"
+        "ExecStart=/usr/bin/python3 ./job.py\n"
+    )
+    assert workdir is None
+
+
+def test_secret_differing_cron_jobs_are_distinct(ctx, tmp_path):
+    """`job.sh --token alice` vs `--token bob` — redaction must not
+    collapse them into one snapshot identity."""
+    script = tmp_path / "job.sh"
+    script.write_text("# fixture\n")
+    table = {
+        ("crontab", "-l"): (
+            0,
+            (
+                f"0 8 * * * {script.as_posix()} --token alice\n"
+                f"0 9 * * * {script.as_posix()} --token bob\n"
+            ),
+        ),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    assert _find(findings, "baseline snapshot recorded")
+    cron_rows = [
+        t
+        for t in json.loads(_snapshot(ctx).read_text())["tasks"]
+        if t["surface"] == "cron"
+    ]
+    assert len(cron_rows) == 2
+    assert len({r["id"] for r in cron_rows}) == 2  # distinct identities
+    assert "alice" not in _snapshot(ctx).read_text()
+    # remove alice's job — removal of ONE of the pair still FAILs
+    table[("crontab", "-l")] = (
+        0, f"0 9 * * * {script.as_posix()} --token bob\n"
+    )
+    findings = automation.run(ctx, runner=make_runner(table))
+    removed = _find(findings, "removed since last check", surface="cron")
+    assert len(removed) == 1 and removed[0].status is Status.FAIL
+
+
+def test_secret_flag_value_never_reaches_path_finding(ctx, tmp_path):
+    """`up.sh --token /secrets/k.pem` — the credential value is
+    redacted before extraction, so no finding can print it."""
+    script = tmp_path / "up.sh"
+    script.write_text("# fixture\n")
+    secret_path = tmp_path / "secrets" / "k.pem"
+    table = {
+        ("crontab", "-l"): (
+            0,
+            (
+                f"0 8 * * * {script.as_posix()}"
+                f" --token {secret_path.as_posix()}\n"
+            ),
+        ),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    blob = "\n".join(f.message for f in findings)
+    blob += _snapshot(ctx).read_text()
+    assert "k.pem" not in blob
+    assert not _find(findings, "missing path", surface="cron")
+
+
 def test_unloaded_unit_file_still_inventoried(ctx, tmp_path):
     """An installed-but-unloaded timer appears via list-unit-files —
     list-units alone would miss it and call it removed."""
