@@ -120,6 +120,20 @@ marker, so re-runs skip unchanged sessions (`--all` forces a rewrite,
 stats block — total sessions, date span, per-project and user/assistant/tool
 message totals — alongside the grouped links.
 
+Every exported note, JSON record and `index.json` entry carries the
+SESSION-EVIDENCE anchor triple from
+[`devin-internals-spec`](https://github.com/Icaro0310/devin-internals-spec)
+(`docs/SESSION-EVIDENCE.md`): `surface` (`devin-cli` for `sessions.db`
+sessions, `devin-chat` for `state.vscdb` GUI bindings), `native_id` (the
+store's own session id) and `ref` — the SESSION-SURFACES §4 canonical id
+`<surface>:<workspace-hash>:native:<id>` when a workspace identity exists,
+else the ephemeral `<surface>:ephemeral:<index>` display key (position in
+the full ordered listing, stable under `--session-id`/`--since` filters).
+The workspace hash is `sha256[:16]` of the normalized seed; the path itself
+is never part of the anchor. Notes written by older versions are healed on
+the next run — an unchanged `last_activity` marker without `ref` is not
+treated as up-to-date.
+
 `export-gui` reads the Electron `state.vscdb` store (auto-detected under
 `User/globalStorage/` of the Devin config dir, override with `--vscdb`)
 and writes one note per `windsurfSpace.sessionWorkspace/*` binding: slug,

@@ -16,6 +16,9 @@ from pathlib import Path
 
 from devin_history import identity, vscdb
 from devin_history.format import (
+    SURFACE_DEVIN_CHAT,
+    SURFACE_DEVIN_CLI,
+    evidence_ref,
     project_name,
     render_gui_index_json,
     render_gui_session_md,
@@ -31,6 +34,7 @@ MIN_USEFUL_NODES = 2
 FORMATS = ("md", "json")
 
 _MARKER_MD = re.compile(r"^last_activity:\s*(\d+)", re.MULTILINE)
+_ANCHOR_MD = re.compile(r"^ref:\s*\S", re.MULTILINE)
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -41,6 +45,9 @@ class IndexEntry:
     title: str
     project: str
     session_id: str = ""
+    surface: str = ""
+    native_id: str = ""
+    ref: str = ""
     user_msgs: int = 0
     assistant_msgs: int = 0
     tool_msgs: int = 0
@@ -67,6 +74,9 @@ class GuiIndexEntry:
     workspace_id: str | None
     last_updated: int | float | None
     last_accessed: int | float | None
+    surface: str = ""
+    native_id: str = ""
+    ref: str = ""
 
 
 @dataclass
@@ -78,15 +88,26 @@ class GuiExportResult:
 
 
 def _exported_marker(path: Path, fmt: str) -> int | None:
-    """Stored ``last_activity`` of a previously written note, if readable."""
+    """Stored ``last_activity`` of a previously written note, if readable.
+
+    ``-1`` when the file is unreadable or lacks the marker — and also when
+    it predates the SESSION-EVIDENCE anchors, so an incremental re-export
+    heals pre-anchor notes instead of skipping them forever.
+    """
     if not path.exists():
         return None
     try:
         if fmt == "md":
             head = path.read_text(encoding="utf-8")[:800]
-            m = _MARKER_MD.search(head)
-            return int(m.group(1)) if m else -1
+            fm_end = head.find("\n---", 4)
+            frontmatter = head[:fm_end] if fm_end != -1 else head
+            m = _MARKER_MD.search(frontmatter)
+            if not m or not _ANCHOR_MD.search(frontmatter):
+                return -1
+            return int(m.group(1))
         data = json.loads(path.read_text(encoding="utf-8"))
+        if "ref" not in data:
+            return -1
         return int(data.get("last_activity", -1))
     except (OSError, ValueError):
         return -1
@@ -139,6 +160,11 @@ def export_sessions(
 
     prov = identity.provenance()
     sessions = sorted(store.sessions(), key=lambda s: s.created_at)
+    # Positions in the FULL ordered listing back the ephemeral anchor
+    # (<surface>:ephemeral:<index>) — taking them after --session-id/--
+    # since filtering would renumber workspace-less sessions and collapse
+    # distinct notes onto the same ephemeral ref.
+    positions = {s.id: i for i, s in enumerate(sessions)}
     if only_session is not None:
         matches = [s for s in sessions
                    if s.id == only_session or s.id.startswith(only_session)]
@@ -163,6 +189,10 @@ def export_sessions(
             result.skipped_empty.append(s.id)
             continue
 
+        ref = evidence_ref(
+            SURFACE_DEVIN_CLI, s.id, s.working_directory,
+            ephemeral_index=positions[s.id],
+        )
         date = fmt_ts(s.created_at, "%Y-%m-%d")
         filename = f"{date}_{s.id}.{fmt}"
         fpath = out_dir / filename
@@ -171,10 +201,12 @@ def export_sessions(
             result.skipped_unchanged.append(s.id)
         else:
             if fmt == "md":
-                text = render_session_md(s, messages, prov)
+                text = render_session_md(s, messages, prov, ref=ref)
             else:
                 text = json.dumps(
-                    session_to_dict(s, messages, store.tool_call_state(s.id), prov),
+                    session_to_dict(
+                        s, messages, store.tool_call_state(s.id), prov,
+                        ref=ref),
                     ensure_ascii=False,
                     indent=2,
                 ) + "\n"
@@ -188,6 +220,9 @@ def export_sessions(
                 date=date,
                 filename=filename,
                 session_id=s.id,
+                surface=SURFACE_DEVIN_CLI,
+                native_id=s.id,
+                ref=ref,
                 title=(s.title or "Untitled").strip(),
                 project=project_name(s.working_directory),
                 user_msgs=counts["user"],
@@ -242,6 +277,9 @@ def _merge_index_entry(out_dir: Path, fmt: str,
                 date=e.get("date", ""), filename=e.get("file", ""),
                 title=e.get("title", ""), project=e.get("project", ""),
                 session_id=e.get("session_id", ""),
+                surface=e.get("surface", ""),
+                native_id=e.get("native_id", ""),
+                ref=e.get("ref", ""),
                 user_msgs=e.get("user_msgs", 0),
                 assistant_msgs=e.get("assistant_msgs", 0),
                 tool_msgs=e.get("tool_msgs", 0))
@@ -289,8 +327,12 @@ def export_gui_sessions(
         key=lambda g: (g.last_updated or g.last_accessed or 0, g.slug),
     )
     used_names: set[str] = set()
-    for gs in sessions:
+    for i, gs in enumerate(sessions):
         marker = int(gs.last_updated or gs.last_accessed or 0)
+        ref = evidence_ref(
+            SURFACE_DEVIN_CHAT, gs.slug, gs.workspace_id,
+            ephemeral_index=i,
+        )
         date = (
             fmt_ts(gs.last_updated or gs.last_accessed, "%Y-%m-%d")
             or "undated"
@@ -305,7 +347,8 @@ def export_gui_sessions(
             result.skipped_unchanged.append(gs.slug)
         else:
             if not dry_run:
-                _write_if_changed(fpath, render_gui_session_md(gs, prov))
+                _write_if_changed(
+                    fpath, render_gui_session_md(gs, prov, ref=ref))
             result.written.append(filename)
 
         result.index_entries.append(
@@ -319,6 +362,9 @@ def export_gui_sessions(
                 workspace_id=gs.workspace_id,
                 last_updated=gs.last_updated,
                 last_accessed=gs.last_accessed,
+                surface=SURFACE_DEVIN_CHAT,
+                native_id=gs.slug,
+                ref=ref,
             )
         )
 

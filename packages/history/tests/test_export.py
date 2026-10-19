@@ -1,13 +1,20 @@
 import hashlib
 import json
+import re
 
 from conftest import add_session, msg
 from devin_history.export import export_sessions
+from devin_history.format import evidence_ref
 from devin_internals.parsers import SessionsStore
 
 
 def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _ws_hash(seed):
+    """The §4 workspace hash: sha256(normalized seed)[:16]."""
+    return hashlib.sha256(seed.strip().encode()).hexdigest()[:16]
 
 
 def test_export_one_note_per_session_plus_index(store, tmp_path):
@@ -118,6 +125,170 @@ def test_export_json_dump(store, tmp_path):
     assert data["last_activity"]
     index = json.loads((out / "index.json").read_text(encoding="utf-8"))
     assert len(index["sessions"]) == 3
+
+
+# -- SESSION-EVIDENCE anchors (devin-internals-spec docs/SESSION-EVIDENCE.md)
+
+
+def test_evidence_ref_canonical_and_ephemeral():
+    # §4 canonical id: <surface>:<workspace-hash>:native:<id>
+    ref = evidence_ref("devin-cli", "sess-1", "/fixture/workspace/00")
+    assert ref == f"devin-cli:{_ws_hash('/fixture/workspace/00')}:native:sess-1"
+    # components encode `%` then `:` so separators stay unambiguous
+    assert evidence_ref("devin-cli", "a:b%c", "/ws").endswith(
+        ":native:a%3Ab%25c")
+    # seed normalization: trailing separators stripped before hashing
+    assert evidence_ref("devin-cli", "s", "/ws/") == \
+        evidence_ref("devin-cli", "s", "/ws")
+    # hashless native id → ephemeral display key, never a canonical id
+    assert evidence_ref("devin-cli", "sess-1", "") == "devin-cli:ephemeral:0"
+    assert evidence_ref("devin-cli", "sess-1", None, ephemeral_index=7) == \
+        "devin-cli:ephemeral:7"
+    assert evidence_ref("devin-cli", "sess-1", "  ") == \
+        "devin-cli:ephemeral:0"
+
+
+def test_export_notes_carry_evidence_anchors(store, tmp_path):
+    out = tmp_path / "out"
+    res = export_sessions(store, out)
+    sessions = {s.id: s for s in store.sessions()}
+    for name in res.written:
+        body = (out / name).read_text(encoding="utf-8")
+        sid = name[:-3].split("_", 1)[1]
+        session = sessions[sid]
+        assert f"session_id: {sid}" in body
+        assert "surface: devin-cli" in body
+        assert f"native_id: {sid}" in body
+        expected = (
+            f"devin-cli:{_ws_hash(session.working_directory)}:native:{sid}")
+        assert f"ref: {expected}" in body
+
+
+def test_export_json_carries_evidence_anchors(store, tmp_path):
+    out = tmp_path / "json"
+    res = export_sessions(store, out, fmt="json")
+    sessions = {s.id: s for s in store.sessions()}
+    for name in res.written:
+        data = json.loads((out / name).read_text(encoding="utf-8"))
+        sid = data["session_id"]
+        session = sessions[sid]
+        assert data["surface"] == "devin-cli"
+        assert data["native_id"] == sid
+        assert data["ref"] == (
+            f"devin-cli:{_ws_hash(session.working_directory)}:native:{sid}")
+
+
+def test_export_evidence_ref_ephemeral_without_workspace(db_path, tmp_path):
+    add_session(
+        db_path, "no-ws", working_directory="",
+        messages=[msg("user", "hi"), msg("assistant", "yo")])
+    with SessionsStore(db_path) as store:
+        res = export_sessions(store, tmp_path / "out")
+    name = next(n for n in res.written if "no-ws" in n)
+    body = (tmp_path / "out" / name).read_text(encoding="utf-8")
+    assert "surface: devin-cli" in body
+    assert "native_id: no-ws" in body
+    assert re.search(r"^ref: devin-cli:ephemeral:\d+$", body, re.MULTILINE)
+
+    with SessionsStore(db_path) as store:
+        res = export_sessions(store, tmp_path / "json", fmt="json")
+    name = next(n for n in res.written if "no-ws" in n)
+    data = json.loads((tmp_path / "json" / name).read_text(encoding="utf-8"))
+    assert data["native_id"] == "no-ws"
+    assert data["ref"].startswith("devin-cli:ephemeral:")
+
+
+def test_export_ephemeral_refs_stable_across_filters(db_path, tmp_path):
+    """Filtered exports must not renumber ephemeral anchors: a workspace-less
+    session keeps its position in the full ordered listing, so two sessions
+    exported under --session-id never collapse onto the same ref."""
+    add_session(
+        db_path, "no-ws-a", working_directory="",
+        messages=[msg("user", "hi"), msg("assistant", "yo")])
+    add_session(
+        db_path, "no-ws-b", working_directory="",
+        messages=[msg("user", "hey"), msg("assistant", "ya")])
+    with SessionsStore(db_path) as store:
+        pos = {
+            s.id: i
+            for i, s in enumerate(
+                sorted(store.sessions(), key=lambda s: s.created_at))
+        }
+        ra = export_sessions(store, tmp_path / "a", only_session="no-ws-a")
+        rb = export_sessions(store, tmp_path / "b", only_session="no-ws-b")
+
+    body_a = (tmp_path / "a" / ra.written[0]).read_text(encoding="utf-8")
+    body_b = (tmp_path / "b" / rb.written[0]).read_text(encoding="utf-8")
+    ref_a = next(
+        ln for ln in body_a.splitlines() if ln.startswith("ref:"))
+    ref_b = next(
+        ln for ln in body_b.splitlines() if ln.startswith("ref:"))
+    assert ref_a != ref_b
+    assert ref_a == f"ref: devin-cli:ephemeral:{pos['no-ws-a']}"
+    assert ref_b == f"ref: devin-cli:ephemeral:{pos['no-ws-b']}"
+
+
+def test_export_index_json_entries_carry_anchors(store, tmp_path):
+    out = tmp_path / "json"
+    export_sessions(store, out, fmt="json")
+    index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    sessions = {s.id: s for s in store.sessions()}
+    assert len(index["sessions"]) == 3
+    for entry in index["sessions"]:
+        sid = entry["session_id"]
+        assert entry["surface"] == "devin-cli"
+        assert entry["native_id"] == sid
+        assert entry["ref"] == (
+            f"devin-cli:{_ws_hash(sessions[sid].working_directory)}"
+            f":native:{sid}")
+
+
+def test_export_heals_pre_anchor_notes(store, tmp_path):
+    """A note written before the anchors existed must be re-rendered on the
+    next run — the unchanged-activity marker alone is not up-to-date."""
+    out = tmp_path / "out"
+    res = export_sessions(store, out)
+    for name in res.written:  # strip the anchor lines → pre-upgrade note
+        p = out / name
+        body = p.read_text(encoding="utf-8")
+        body = "\n".join(
+            ln for ln in body.splitlines()
+            if not ln.startswith(("surface:", "native_id:", "ref:"))
+        ) + "\n"
+        p.write_text(body, encoding="utf-8")
+
+    res2 = export_sessions(store, out)
+    assert len(res2.written) == 3
+    assert res2.skipped_unchanged == []
+    for name in res2.written:
+        body = (out / name).read_text(encoding="utf-8")
+        assert "surface: devin-cli" in body
+        assert re.search(r"^native_id: \S+$", body, re.MULTILINE)
+        assert re.search(r"^ref: devin-cli:\S+$", body, re.MULTILINE)
+
+    res3 = export_sessions(store, out)  # healed notes skip normally again
+    assert res3.written == []
+    assert len(res3.skipped_unchanged) == 3
+
+
+def test_export_json_heals_pre_anchor_records(store, tmp_path):
+    out = tmp_path / "json"
+    res = export_sessions(store, out, fmt="json")
+    for name in res.written:  # drop the anchor keys → pre-upgrade record
+        p = out / name
+        data = json.loads(p.read_text(encoding="utf-8"))
+        for key in ("surface", "native_id", "ref"):
+            del data[key]
+        p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    res2 = export_sessions(store, out, fmt="json")
+    assert len(res2.written) == 3
+    assert res2.skipped_unchanged == []
+    for name in res2.written:
+        data = json.loads((out / name).read_text(encoding="utf-8"))
+        assert data["surface"] == "devin-cli"
+        assert data["native_id"]
+        assert data["ref"].startswith("devin-cli:")
 
 
 def test_export_json_rerun_idempotent(store, tmp_path):
