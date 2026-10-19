@@ -452,6 +452,48 @@ def test_bare_relative_script_arg_checked(tmp_path):
     assert commands == ["python3"]
 
 
+def test_flag_value_not_flagged_as_missing_script(tmp_path):
+    """`cmd --handler skills.audit` — the flag's value is not a script
+    path even when it looks file-ish (real crontab false-positive)."""
+    targets, _ = automation._task_targets(
+        "python3 script.py --handler skills.audit",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "script.py" in {t.path for t in targets}
+    assert tmp_path / "skills.audit" not in {t.path for t in targets}
+
+
+def test_interpreter_module_payload_not_a_path(tmp_path):
+    """`python3 -m http.server` — a module name is never a file."""
+    targets, _ = automation._task_targets(
+        "python3 -m http.server 8080", posix=True, home=tmp_path
+    )
+    assert targets == []
+
+
+def test_non_interpreter_fileish_arg_not_checked(tmp_path):
+    """`tar -czf out.tar.gz src/` — output args of non-interpreters are
+    not verified (the file may be created by the run itself)."""
+    targets, _ = automation._task_targets(
+        "tar -czf out.tar.gz src/", posix=True, home=tmp_path
+    )
+    assert not any(t.path.name == "out.tar.gz" for t in targets)
+
+
+def test_redact_covers_url_userinfo_and_bearer():
+    assert (
+        automation._redact("curl https://user:pw@h/x")
+        == "curl https://***:***@h/x"
+    )
+    assert (
+        automation._redact(
+            "curl -H 'Authorization: Bearer abcdef0123456789'"
+        )
+        == "curl -H 'Authorization: Bearer ***'"
+    )
+
+
 def test_working_directory_scopes_relative_exec(ctx, tmp_path):
     """WorkingDirectory=/srv/jobs + ExecStart=... ./backup.py resolves
     under the unit's working dir, not home."""

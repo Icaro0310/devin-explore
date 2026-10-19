@@ -94,6 +94,20 @@ _BARE_COMMAND = re.compile(r"^[A-Za-z0-9_][\w.+-]*$")
 # object paths (``/org/kde/foo``) or output dirs would be false alarms.
 _FILEISH = re.compile(r"\.[A-Za-z0-9]{1,6}$")
 
+# A bare file-looking arg (``backup.py``) is only checked as a filesystem
+# reference when the running command is an interpreter that takes a
+# script argument — otherwise ``--handler skills.audit`` or
+# ``-m http.server`` would read as missing files.
+_INTERPRETER = re.compile(
+    r"^(?:[a-z]*sh|pythonw?[\d.]*|node(?:js)?|deno|ruby|perl|pwsh|"
+    r"powershell)(?:\.exe)?$",
+    re.IGNORECASE,
+)
+
+# Interpreter flags whose next token is a module name or inline code
+# string, never a path ('python3 -m http.server', 'sh -c ...').
+_PAYLOAD_FLAGS = frozenset({"-m", "-c", "-e", "-r"})
+
 # Splits glued shell pieces (``>>/log``, ``2>&1``, ``>f``, ``cmd;next``,
 # ``a&&b``) so each can be classified; ``<``/``>`` targets are files,
 # not commands.
@@ -111,6 +125,8 @@ _SECRET_FLAG = re.compile(
     r"(?i)(--?[A-Za-z0-9_-]*(?:token|secret|pass(?:word)?|api[-_]?key|"
     r"cred(?:ential)?|auth)[A-Za-z0-9_-]*)(=|\s+)(\S+)"
 )
+_URL_USERINFO = re.compile(r"(://)[^\s/:@]+:[^\s/@]+@")
+_BEARER = re.compile(r"\b([Bb]earer)\s+[A-Za-z0-9._~+/=-]{8,}")
 
 
 @dataclass(frozen=True)
@@ -137,13 +153,17 @@ class _Task:
 
 
 def _redact(text: str) -> str:
-    """Replace credential-looking env assignments and flag values with
-    ``***`` so task identities, findings and snapshots never persist a
-    secret from a scheduled command line."""
+    """Replace credential-looking env assignments, flag values, URL
+    userinfo and bearer tokens with ``***`` so task identities,
+    findings and snapshots never persist a secret from a scheduled
+    command line. (Minimal local set — the full catalog lives in
+    devin-redact and doesn't fit doctor's dependency surface.)"""
     text = _SECRET_ENV.sub(lambda m: m.group(1) + "=***", text)
-    return _SECRET_FLAG.sub(
+    text = _SECRET_FLAG.sub(
         lambda m: m.group(1) + m.group(2) + "***", text
     )
+    text = _URL_USERINFO.sub(r"\1***:***@", text)
+    return _BEARER.sub(r"\1 ***", text)
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
@@ -394,15 +414,15 @@ def _task_targets(
     """Split a scheduled command into ``(targets, bare_commands)``.
 
     ``targets`` are resolved filesystem references — the command itself,
-    file-looking argument paths (``script.py``, ``conf.toml`` — even a
-    bare ``backup.py`` without a slash, resolved under ``cwd``) and the
-    target of redirections (``>f`` checks the parent dir, ``<f`` checks
-    the file itself — a missing input file breaks the job before exec).
-    ``bare_commands`` are bare words found in command position (first
-    word of each ``&&``/``|``/``;`` segment) for a PATH lookup. Quoted
-    ``sh -c '...'`` payloads and ``cd dir &&`` prefixes are understood,
-    so crontab idioms like ``cd $HOME/repo && python3 scripts/job.py``
-    resolve correctly.
+    file-looking argument paths (``script.py``, ``conf.toml`` — plus a
+    bare ``backup.py`` when the running command is an interpreter,
+    resolved under ``cwd``) and the target of redirections (``>f``
+    checks the parent dir, ``<f`` checks the file itself — a missing
+    input file breaks the job before exec). ``bare_commands`` are bare
+    words found in command position (first word of each ``&&``/``|``/``;``
+    segment) for a PATH lookup. Quoted ``sh -c '...'`` payloads and
+    ``cd dir &&`` prefixes are understood, so crontab idioms like
+    ``cd $HOME/repo && python3 scripts/job.py`` resolve correctly.
     """
     try:
         tokens = shlex.split(command, posix=posix)
@@ -414,6 +434,12 @@ def _task_targets(
     expect_cmd = True
     cd_next = False
     redirect_next: str | None = None
+    payload_next = False
+    last_cmd: str | None = None
+    # The token right after a flag can be the flag's value
+    # ('--handler skills.audit'), so bare-arg script checks only apply
+    # when the previous significant token was not a flag.
+    after_flag = False
     for raw in tokens:
         token = raw.strip("\"'`")
         if not token:
@@ -433,6 +459,7 @@ def _task_targets(
                 targets += sub_t
                 commands += sub_c
             expect_cmd = False
+            after_flag = False
             continue
         for piece in _REDIRECT_SPLIT.split(token):
             if not piece:
@@ -451,14 +478,33 @@ def _task_targets(
                 expect_cmd = True
                 cd_next = False
                 redirect_next = None
+                payload_next = False
+                last_cmd = None
+                after_flag = False
                 continue
             if _ENV_ASSIGNMENT.match(piece):
+                after_flag = False
+                continue
+            if payload_next:
+                # '-m module' / '-c code' payload of an interpreter —
+                # not a filesystem path.
+                payload_next = False
+                after_flag = False
                 continue
             if piece in _CONTROL_WORDS:
+                after_flag = False
+                continue
+            if (
+                last_cmd is not None
+                and _INTERPRETER.match(last_cmd)
+                and piece in _PAYLOAD_FLAGS
+            ):
+                payload_next = True
                 continue
             if piece == "cd":
                 cd_next = True
                 expect_cmd = False
+                after_flag = False
                 continue
             if piece[0] in "-@:!+":
                 # systemd ExecStart modifier prefix ('-/path',
@@ -469,11 +515,14 @@ def _task_targets(
                 ):
                     piece = stripped
                 elif piece.startswith("-"):
+                    after_flag = True
                     continue
             if "://" in piece:
+                after_flag = False
                 continue
             expanded = os.path.expandvars(piece)
             if _UNRESOLVABLE.search(expanded):
+                after_flag = False
                 continue  # glob / unresolvable variable — not checkable
             piece = expanded
             if redirect_next:
@@ -498,18 +547,27 @@ def _task_targets(
                     targets.append(_Target(resolved, "exists"))
                 # else: positional non-file path arg (D-Bus object
                 # path, output dir, ...) — not verifiable, skipped.
-            elif _FILEISH.search(piece) and not expect_cmd:
-                # bare file-looking arg ('python3 backup.py'): relative
-                # to the task's cwd even without a slash.
-                targets.append(
-                    _Target(_resolve_path(piece, cwd), "exists")
-                )
+                if expect_cmd:
+                    last_cmd = PurePath(piece.replace("\\", "/")).name
             elif (
                 expect_cmd
                 and piece not in _BUILTINS
                 and _BARE_COMMAND.match(piece)
             ):
                 commands.append(piece)
+                last_cmd = piece
+            elif (
+                last_cmd is not None
+                and not after_flag
+                and _INTERPRETER.match(last_cmd)
+                and _BARE_COMMAND.match(piece)
+                and _FILEISH.search(piece)
+            ):
+                # 'python3 backup.py' — a bare script arg after an
+                # interpreter is a real file reference (a token right
+                # after a flag can be the flag's value instead).
+                targets.append(_Target(_resolve_path(piece, cwd), "exists"))
+            after_flag = False
             expect_cmd = False
     return targets, commands
 
