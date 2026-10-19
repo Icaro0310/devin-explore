@@ -69,9 +69,13 @@ def search(
     ``role`` is an exact match on the normalized role; ``project`` is a
     substring match on the session working directory; ``since`` keeps hits
     with ``ts >= since`` (epoch milliseconds); ``tool`` is an exact match
-    on the tool name indexed from tool-call payloads.
+    on the tool name indexed from tool-call payloads — a blank value
+    means no filter (same as not passing it).
     """
     index_path = Path(index_path).expanduser()
+    # Blank == absent: CLI `--tool ""` and MCP `tool=""` both mean
+    # "no filter" — never an exact match against the empty string.
+    tool = (tool or "").strip() or None
     if not index_path.exists():
         raise FileNotFoundError(
             f"{index_path}: no index — run `devin-search index` first"

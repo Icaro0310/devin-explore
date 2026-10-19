@@ -408,3 +408,53 @@ def test_query_tool_filter_end_to_end(db_path, tmp_path, capsys):
     rc = main(["query", "zeppelin", "--tool", "nope", "--index", str(idx)])
     assert rc == 1
     assert "no hits" in capsys.readouterr().out
+
+
+def test_query_tool_empty_means_no_filter(db_path, tmp_path, capsys):
+    """``--tool ""`` is not an exact match on "" — blank is the same as
+    omitting the flag (the MCP adapter's convention for optional params)."""
+    add_session(
+        db_path,
+        "cli-tools",
+        messages=[msg("user", "zeppelin check")],
+        tool_calls=[
+            ({"name": "shell", "command": "zeppelin now"}, None),
+        ],
+    )
+    idx = tmp_path / "search.db"
+    main(
+        ["index", "--sessions-db", str(db_path), "--no-acp",
+         "--index", str(idx)]
+    )
+    capsys.readouterr()
+
+    rc = main(
+        ["query", "zeppelin", "--tool", "", "--index", str(idx), "--json"]
+    )
+    assert rc == 0
+    hits = json.loads(capsys.readouterr().out)["hits"]
+    assert len(hits) == 2  # user message + tool-call doc, unfiltered
+
+
+def test_query_log_records_tool_filter(db_path, tmp_path, capsys):
+    """The query log stores the tool filter when given and omits the
+    field on unfiltered queries — miss analysis needs the real filter
+    set, not a phantom one."""
+    idx = tmp_path / "search.db"
+    main(
+        ["index", "--sessions-db", str(db_path), "--no-acp",
+         "--index", str(idx)]
+    )
+    capsys.readouterr()
+
+    main(["query", "absent", "--tool", "shell", "--index", str(idx)])
+    main(["query", "absent", "--index", str(idx)])
+
+    lines = [
+        json.loads(l)
+        for l in (tmp_path / "search.db.queries.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert lines[0]["tool"] == "shell"
+    assert "tool" not in lines[1]

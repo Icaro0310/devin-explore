@@ -122,6 +122,9 @@ def test_tool_filter(db_path, tmp_path):
     assert search(idx, "quasar", role="user", tool="shell") == []
     # Unknown tool name → no hits.
     assert search(idx, "quasar", tool="nonexistent-tool") == []
+    # Blank means absent — never an exact match on "".
+    assert search(idx, "quasar", tool="") == search(idx, "quasar")
+    assert search(idx, "quasar", tool="  ") == search(idx, "quasar")
     # No filter → user message + both tool-call docs.
     assert len(search(idx, "quasar")) == 3
 

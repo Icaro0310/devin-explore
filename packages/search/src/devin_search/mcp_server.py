@@ -28,8 +28,9 @@ def do_query(
     role: str | None = None,
     project: str | None = None,
     since: str | None = None,
-    tool: str | None = None,
     limit: int = 20,
+    *,
+    tool: str | None = None,
 ) -> dict:
     """Return the ``devin-search query --json`` payload as a dict.
 
@@ -111,7 +112,8 @@ def build_server():
         or the source stores. ``term`` tokens are ANDed; ``role`` filters
         user/assistant/tool/system/shell, ``project`` is a substring match
         on the working directory, ``since`` is YYYY-MM-DD or epoch ms,
-        ``tool`` is an exact match on the indexed tool-call name.
+        ``tool`` is an exact match on the indexed tool-call name (empty
+        = no filter).
         ``no_log`` is accepted for CLI parity — the adapter never writes
         the local query log regardless."""
         try:

@@ -68,6 +68,17 @@ def test_do_query_tool_filter(db_path, tmp_path):
     got = do_query("quasar", index=str(idx), tool="shell")
     assert [h["tool"] for h in got["hits"]] == ["shell"]
     assert do_query("quasar", index=str(idx), tool="other")["hits"] == []
+    # "" = no filter (MCP convention for omitted optional params).
+    assert do_query("quasar", index=str(idx), tool="")["hits"]
+
+
+def test_do_query_positional_limit_still_works(index):
+    """``tool`` is keyword-only: a caller passing ``limit`` positionally
+    must not hit the tool filter by accident."""
+    out = do_query("xyzzy", str(index), None, None, None, 1)
+    assert "error" not in out
+    assert len(out["hits"]) == 1
+    assert out["hits"][0]["session_id"] == "s1"
 
 
 def test_do_query_missing_index(tmp_path):
