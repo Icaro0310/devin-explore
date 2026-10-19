@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Feature** — `devin-history` exports now carry the SESSION-EVIDENCE
+  anchor triple (`surface`/`native_id`/`ref`) in Markdown frontmatter and
+  JSON, per `devin-internals-spec` `docs/SESSION-EVIDENCE.md`.
 - **Release** — `devin-search` bumped to 0.2.0 across pyproject,
   `__version__`, `package.json` and `plugin.json` (multi-source
   collectors + index format v2). The extension's `devin-search-cli`

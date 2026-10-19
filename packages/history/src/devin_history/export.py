@@ -155,7 +155,7 @@ def export_sessions(
     if effective_since:
         sessions = [s for s in sessions
                     if int(s.last_activity_at or 0) > effective_since]
-    for s in sessions:
+    for i, s in enumerate(sessions):
         nodes = store.message_nodes(s.id)
         messages = parse_nodes(nodes)
         user_msgs = sum(1 for m in messages if m.role == "user")
@@ -171,10 +171,12 @@ def export_sessions(
             result.skipped_unchanged.append(s.id)
         else:
             if fmt == "md":
-                text = render_session_md(s, messages, prov)
+                text = render_session_md(s, messages, prov, ephemeral_index=i)
             else:
                 text = json.dumps(
-                    session_to_dict(s, messages, store.tool_call_state(s.id), prov),
+                    session_to_dict(
+                        s, messages, store.tool_call_state(s.id), prov,
+                        ephemeral_index=i),
                     ensure_ascii=False,
                     indent=2,
                 ) + "\n"
@@ -289,7 +291,7 @@ def export_gui_sessions(
         key=lambda g: (g.last_updated or g.last_accessed or 0, g.slug),
     )
     used_names: set[str] = set()
-    for gs in sessions:
+    for i, gs in enumerate(sessions):
         marker = int(gs.last_updated or gs.last_accessed or 0)
         date = (
             fmt_ts(gs.last_updated or gs.last_accessed, "%Y-%m-%d")
@@ -305,7 +307,8 @@ def export_gui_sessions(
             result.skipped_unchanged.append(gs.slug)
         else:
             if not dry_run:
-                _write_if_changed(fpath, render_gui_session_md(gs, prov))
+                _write_if_changed(
+                    fpath, render_gui_session_md(gs, prov, ephemeral_index=i))
             result.written.append(filename)
 
         result.index_entries.append(

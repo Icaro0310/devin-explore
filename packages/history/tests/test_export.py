@@ -1,13 +1,20 @@
 import hashlib
 import json
+import re
 
 from conftest import add_session, msg
 from devin_history.export import export_sessions
+from devin_history.format import evidence_ref
 from devin_internals.parsers import SessionsStore
 
 
 def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _ws_hash(seed):
+    """The §4 workspace hash: sha256(normalized seed)[:16]."""
+    return hashlib.sha256(seed.strip().encode()).hexdigest()[:16]
 
 
 def test_export_one_note_per_session_plus_index(store, tmp_path):
@@ -118,6 +125,77 @@ def test_export_json_dump(store, tmp_path):
     assert data["last_activity"]
     index = json.loads((out / "index.json").read_text(encoding="utf-8"))
     assert len(index["sessions"]) == 3
+
+
+# -- SESSION-EVIDENCE anchors (devin-internals-spec docs/SESSION-EVIDENCE.md)
+
+
+def test_evidence_ref_canonical_and_ephemeral():
+    # §4 canonical id: <surface>:<workspace-hash>:native:<id>
+    ref = evidence_ref("devin-cli", "sess-1", "/fixture/workspace/00")
+    assert ref == f"devin-cli:{_ws_hash('/fixture/workspace/00')}:native:sess-1"
+    # components encode `%` then `:` so separators stay unambiguous
+    assert evidence_ref("devin-cli", "a:b%c", "/ws").endswith(
+        ":native:a%3Ab%25c")
+    # seed normalization: trailing separators stripped before hashing
+    assert evidence_ref("devin-cli", "s", "/ws/") == \
+        evidence_ref("devin-cli", "s", "/ws")
+    # hashless native id → ephemeral display key, never a canonical id
+    assert evidence_ref("devin-cli", "sess-1", "") == "devin-cli:ephemeral:0"
+    assert evidence_ref("devin-cli", "sess-1", None, ephemeral_index=7) == \
+        "devin-cli:ephemeral:7"
+    assert evidence_ref("devin-cli", "sess-1", "  ") == \
+        "devin-cli:ephemeral:0"
+
+
+def test_export_notes_carry_evidence_anchors(store, tmp_path):
+    out = tmp_path / "out"
+    res = export_sessions(store, out)
+    sessions = {s.id: s for s in store.sessions()}
+    for name in res.written:
+        body = (out / name).read_text(encoding="utf-8")
+        sid = name[:-3].split("_", 1)[1]
+        session = sessions[sid]
+        assert f"session_id: {sid}" in body
+        assert "surface: devin-cli" in body
+        assert f"native_id: {sid}" in body
+        expected = (
+            f"devin-cli:{_ws_hash(session.working_directory)}:native:{sid}")
+        assert f"ref: {expected}" in body
+
+
+def test_export_json_carries_evidence_anchors(store, tmp_path):
+    out = tmp_path / "json"
+    res = export_sessions(store, out, fmt="json")
+    sessions = {s.id: s for s in store.sessions()}
+    for name in res.written:
+        data = json.loads((out / name).read_text(encoding="utf-8"))
+        sid = data["session_id"]
+        session = sessions[sid]
+        assert data["surface"] == "devin-cli"
+        assert data["native_id"] == sid
+        assert data["ref"] == (
+            f"devin-cli:{_ws_hash(session.working_directory)}:native:{sid}")
+
+
+def test_export_evidence_ref_ephemeral_without_workspace(db_path, tmp_path):
+    add_session(
+        db_path, "no-ws", working_directory="",
+        messages=[msg("user", "hi"), msg("assistant", "yo")])
+    with SessionsStore(db_path) as store:
+        res = export_sessions(store, tmp_path / "out")
+    name = next(n for n in res.written if "no-ws" in n)
+    body = (tmp_path / "out" / name).read_text(encoding="utf-8")
+    assert "surface: devin-cli" in body
+    assert "native_id: no-ws" in body
+    assert re.search(r"^ref: devin-cli:ephemeral:\d+$", body, re.MULTILINE)
+
+    with SessionsStore(db_path) as store:
+        res = export_sessions(store, tmp_path / "json", fmt="json")
+    name = next(n for n in res.written if "no-ws" in n)
+    data = json.loads((tmp_path / "json" / name).read_text(encoding="utf-8"))
+    assert data["native_id"] == "no-ws"
+    assert data["ref"].startswith("devin-cli:ephemeral:")
 
 
 def test_export_json_rerun_idempotent(store, tmp_path):

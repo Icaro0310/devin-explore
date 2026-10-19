@@ -7,6 +7,7 @@ re-exporting an unchanged database produces byte-identical output.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Iterable
@@ -25,6 +26,53 @@ if TYPE_CHECKING:
 
 USER_CAP = 4000
 ASSISTANT_CAP = 1500
+
+# SESSION-EVIDENCE anchors (devin-internals-spec → docs/SESSION-EVIDENCE.md
+# §1 + SESSION-SURFACES §1/§4): ``surface`` is the closed-set surface of the
+# store the session came from, ``native_id`` the store's own session id, and
+# ``ref`` the §4 canonical id when a workspace identity exists (else the
+# ephemeral ``display_key``, §2). Exported notes carry the same three keys so
+# downstream consumers (e.g. the claims-vs-evidence auditor) can bind an
+# export back to the canonical session record.
+SURFACE_DEVIN_CLI = "devin-cli"    # ``cli/sessions.db``
+SURFACE_DEVIN_CHAT = "devin-chat"  # Devin Desktop chat (state.vscdb bindings)
+
+
+def _enc(component: str) -> str:
+    """Encode one canonical-id component: ``%`` first, then ``:`` (§4)."""
+    return component.replace("%", "%25").replace(":", "%3A")
+
+
+def _normalize_ws_seed(path: str) -> str:
+    """Workspace-seed normalization (SURFACES §3): trim, strip trailing
+    separators — the same treatment devin-search applies before hashing."""
+    seed = path.strip()
+    while len(seed) > 1 and seed.endswith(("/", "\\")):
+        seed = seed[:-1]
+    return seed
+
+
+def evidence_ref(
+    surface: str,
+    native_id: str,
+    workspace_seed: str | None,
+    *,
+    ephemeral_index: int = 0,
+) -> str:
+    """SESSION-EVIDENCE ``ref`` for one exported session.
+
+    ``<surface>:<workspace-hash>:native:<id>`` — the SESSION-SURFACES §4
+    canonical id — when a workspace identity is derivable; the ephemeral
+    ``<surface>:ephemeral:<index>`` display key otherwise (§4: a hashless
+    native id never gets a canonical id). The workspace hash is
+    ``sha256(normalized seed)[:16]`` — the path itself is never emitted.
+    """
+    if workspace_seed and workspace_seed.strip():
+        ws_hash = hashlib.sha256(
+            _normalize_ws_seed(workspace_seed).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"{surface}:{ws_hash}:native:{_enc(native_id)}"
+    return f"{surface}:ephemeral:{ephemeral_index}"
 
 
 def clip(text: str, cap: int) -> str:
@@ -57,6 +105,8 @@ def render_session_md(
     session: Session,
     messages: list[ChatMessage],
     prov: dict[str, str] | None = None,
+    *,
+    ephemeral_index: int = 0,
 ) -> str:
     """One Obsidian-ready note for a CLI session."""
     counts = Counter(m.role for m in messages)
@@ -64,12 +114,19 @@ def render_session_md(
     prov_fm = "" if prov is None else (
         f"\nmachine_id: {prov['machine_id']}\nprofile: {prov['profile']}"
     )
+    ref = evidence_ref(
+        SURFACE_DEVIN_CLI, session.id, session.working_directory,
+        ephemeral_index=ephemeral_index,
+    )
     project = project_name(session.working_directory)
     title = (session.title or "Untitled").strip()
     created = fmt_ts(session.created_at)
     body = "\n\n".join(parts) if parts else "_No user/assistant messages — tool calls only._"
     return f"""---
 session_id: {session.id}
+surface: {SURFACE_DEVIN_CLI}
+native_id: {session.id}
+ref: {ref}
 project: {project}
 started: {created}
 last_activity: {session.last_activity_at}
@@ -101,12 +158,20 @@ def session_to_dict(
     messages: list[ChatMessage],
     tool_calls: list[ToolCallState],
     prov: dict[str, str] | None = None,
+    *,
+    ephemeral_index: int = 0,
 ) -> dict[str, Any]:
     """Searchable JSON shape for one session (full text, no clipping)."""
     return {
         **({"machine_id": prov["machine_id"], "profile": prov["profile"]}
            if prov else {}),
         "session_id": session.id,
+        "surface": SURFACE_DEVIN_CLI,
+        "native_id": session.id,
+        "ref": evidence_ref(
+            SURFACE_DEVIN_CLI, session.id, session.working_directory,
+            ephemeral_index=ephemeral_index,
+        ),
         "title": (session.title or "Untitled").strip(),
         "project": project_name(session.working_directory),
         "working_directory": session.working_directory,
@@ -232,6 +297,8 @@ def render_index_json(
 def render_gui_session_md(
     session: GuiSession,
     prov: dict[str, str] | None = None,
+    *,
+    ephemeral_index: int = 0,
 ) -> str:
     """One Obsidian-ready note for a GUI session (metadata only).
 
@@ -243,6 +310,10 @@ def render_gui_session_md(
     )
     accessed_fm = "" if session.last_accessed is None else (
         f"\nlast_accessed: {int(session.last_accessed)}"
+    )
+    ref = evidence_ref(
+        SURFACE_DEVIN_CHAT, session.slug, session.workspace_id,
+        ephemeral_index=ephemeral_index,
     )
     project = project_name(session.workspace_id)
     title = (session.label or session.slug).strip()
@@ -256,6 +327,9 @@ def render_gui_session_md(
     return f"""---
 session_id: {session.slug}
 source: gui
+surface: {SURFACE_DEVIN_CHAT}
+native_id: {session.slug}
+ref: {ref}
 backend: {session.backend}
 project: {project}
 last_activity: {int(session.last_updated or 0)}{accessed_fm}

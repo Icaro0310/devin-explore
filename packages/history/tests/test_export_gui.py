@@ -79,6 +79,39 @@ def test_export_gui_note_frontmatter_and_body(vstore, tmp_path):
     assert "last_accessed:" not in body  # not derivable → omitted
 
 
+def test_export_gui_notes_carry_evidence_anchors(vstore, tmp_path):
+    """SESSION-EVIDENCE anchors on every GUI note (spec §1 + SURFACES §4)."""
+    out = tmp_path / "out"
+    res = export_gui_sessions(vstore, out)
+
+    name = next(n for n in res.written if "canyon-newspaper" in n)
+    body = (out / name).read_text(encoding="utf-8")
+    ws_hash = hashlib.sha256(b"/work/alpha").hexdigest()[:16]
+    assert "surface: devin-chat" in body
+    assert "native_id: canyon-newspaper" in body
+    assert f"ref: devin-chat:{ws_hash}:native:canyon-newspaper" in body
+
+    otter = next(n for n in res.written if "river-otter" in n)
+    body = (out / otter).read_text(encoding="utf-8")
+    ws_hash = hashlib.sha256(b"/srv/beta").hexdigest()[:16]
+    assert "surface: devin-chat" in body
+    assert "native_id: river-otter" in body
+    assert f"ref: devin-chat:{ws_hash}:native:river-otter" in body
+
+
+def test_export_gui_evidence_ref_ephemeral_without_workspace(vstore, tmp_path):
+    """A binding with no workspaceId keeps a hashless native id → the ref is
+    the ephemeral display key (SURFACES §4), never a canonical-looking id."""
+    out = tmp_path / "out"
+    res = export_gui_sessions(vstore, out)
+    name = next(n for n in res.written if "broken-json" in n)
+    body = (out / name).read_text(encoding="utf-8")
+    assert "surface: devin-chat" in body
+    assert "native_id: broken-json" in body
+    # broken-json has no timestamps → sorts first in the export listing
+    assert "ref: devin-chat:ephemeral:0" in body
+
+
 def test_export_gui_index_json_has_provenance_and_stats(vstore, tmp_path):
     out = tmp_path / "out"
     res = export_gui_sessions(vstore, out)

@@ -77,6 +77,12 @@ devin-history list   [--sessions-db PATH] [--limit N] [--json]
   the session's `last_activity` epoch-ms marker is embedded in frontmatter /
   top-level field; unchanged → skipped. Sessions with no user messages or
   `< 2` nodes are counted as empty and skipped.
+- Every exported session carries the SESSION-EVIDENCE anchor triple
+  (`devin-internals-spec` `docs/SESSION-EVIDENCE.md` §1): `surface`
+  (`devin-cli`; `devin-chat` for `export-gui` notes), `native_id` (the
+  store's own session id) and `ref` — the SESSION-SURFACES §4 canonical id
+  `<surface>:<workspace-hash>:native:<id>` when a workspace identity exists,
+  else the ephemeral `<surface>:ephemeral:<index>` display key.
 - `audit` prints a Markdown report (groupings: status / task type / project /
   month; anomaly list; session table) or JSON via `--json`; `--csv` also
   writes a flat CSV.
