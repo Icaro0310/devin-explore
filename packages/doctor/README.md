@@ -135,7 +135,14 @@ than hard failures, so the tool is still useful on agent-only machines:
 | `hooks-windows` | hooks/MCP commands that would pop a visible console window on Windows (`cmd /c` without a hidden wrapper, `powershell` without `-WindowStyle Hidden`, direct `.bat`/`.ps1`, `python.exe` vs `pythonw.exe`) — each with file, hook event and a wrapper fix |
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
 | `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
-| `automation` | scheduled tasks per surface — user crontab, `systemd --user` services/timers, Windows Task Scheduler: referenced paths/binaries that no longer exist (**FAIL**), tasks removed since the last run (**FAIL**, via a snapshot at `<data-dir>/doctor/automation-snapshot.json` — the only file the tool writes, its own state), and targets inside repo checkouts the ecosystem registry marks as absorbed. Surfaces that don't exist on the host report `surface unavailable` — never an error |
+| `automation` | scheduled tasks per surface — user crontab, `systemd --user` services/timers (loaded units plus installed unit files, so unloaded timers are still seen), Windows Task Scheduler: referenced paths/binaries that no longer exist (**FAIL**), tasks removed since the last run (**FAIL**, via a snapshot at `<data-dir>/doctor/automation-snapshot.json` — the only file the tool writes, its own state), and targets inside repo checkouts the ecosystem registry marks as absorbed. Surfaces that don't exist on the host report `surface unavailable` — never an error |
+
+The `automation` check's semantics are deliberately conservative:
+
+- **Unavailable ≠ removed.** If a scheduler probe fails (`crontab -l` error, no user systemd bus), that surface's recorded tasks are carried forward — not flagged as removed and not dropped from the baseline.
+- **Removal FAILs are sticky.** A task that disappears keeps FAILing every run until it returns or the removal is acknowledged — delete the task's entry inside `<data-dir>/doctor/automation-snapshot.json`, or delete the file to reset the whole baseline.
+- **Secrets are scrubbed.** Credential-shaped material (`--*token*`/`--*key*`/`--*pass*`/`--*secret*`/`--*auth*` arguments, sensitive `KEY=value` assignments, `Bearer` tokens, URL userinfo) becomes `***` before anything is stored or printed — a minimal local pattern set, not the full `devin-redact` catalog.
+- **Known limits:** Task Scheduler enumeration is capped at 200 tasks (a WARN fires when the listing is truncated) and a task whose `/xml` query fails is counted as unreadable WARN rather than silently healthy; shell parsing is heuristic — command substitution, globs and `$(...)`-generated paths are skipped rather than guessed.
 
 Privacy doctrine is strict across all checks: headers and metadata only —
 counts, sizes, paths and statuses, never message content. SQLite stores

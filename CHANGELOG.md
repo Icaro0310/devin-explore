@@ -4,11 +4,14 @@
 
 - **Feature** — `devin-doctor` gains an `automation` check for silently
   broken scheduled tasks: per-surface enumeration (user crontab,
-  `systemd --user` units/timers, Windows Task Scheduler), FAIL on
-  referenced paths that no longer exist or that point into
-  registry-absorbed repo checkouts, and FAIL on tasks removed since the
-  last run via a persisted snapshot (`<data-dir>/doctor/
-  automation-snapshot.json`). Unavailable surfaces report cleanly.
+  `systemd --user` units/timers including unloaded unit files, Windows
+  Task Scheduler), FAIL on referenced paths that no longer exist or that
+  point into registry-absorbed repo checkouts, and FAIL on tasks removed
+  since the last run via a persisted snapshot (`<data-dir>/doctor/
+  automation-snapshot.json`). Unavailable surfaces carry their recorded
+  tasks forward instead of reading as empty; removal FAILs persist until
+  the task returns or its snapshot entry is deleted by hand; credential-
+  shaped arguments are redacted to `***` before output and storage.
 - **Feature** — `devin-history` exports now carry the SESSION-EVIDENCE
   anchor triple (`surface`/`native_id`/`ref`) in Markdown frontmatter and
   JSON, per `devin-internals-spec` `docs/SESSION-EVIDENCE.md`.
