@@ -376,3 +376,35 @@ def test_query_stale_index_is_store_error_not_traceback(db_path, tmp_path, capsy
     assert rc == 2
     err = capsys.readouterr().err
     assert "stale" in err and "rebuild" in err and "Traceback" not in err
+
+
+def test_query_tool_filter_end_to_end(db_path, tmp_path, capsys):
+    """``query --tool`` narrows hits to the named tool's docs and exits
+    1 (no hits, not an error) on an unknown tool."""
+    add_session(
+        db_path,
+        "cli-tools",
+        messages=[msg("user", "zeppelin check")],
+        tool_calls=[
+            ({"name": "shell", "command": "zeppelin now"}, None),
+        ],
+    )
+    idx = tmp_path / "search.db"
+    main(
+        ["index", "--sessions-db", str(db_path), "--no-acp",
+         "--index", str(idx)]
+    )
+    capsys.readouterr()
+
+    rc = main(
+        ["query", "zeppelin", "--tool", "shell",
+         "--index", str(idx), "--json"]
+    )
+    assert rc == 0
+    hits = json.loads(capsys.readouterr().out)["hits"]
+    assert hits
+    assert all(h["tool"] == "shell" and h["role"] == "tool" for h in hits)
+
+    rc = main(["query", "zeppelin", "--tool", "nope", "--index", str(idx)])
+    assert rc == 1
+    assert "no hits" in capsys.readouterr().out

@@ -53,6 +53,23 @@ def test_do_query_filters(index, capsys):
     assert do_query("xyzzy", index=str(index), role="user") == expected
 
 
+def test_do_query_tool_filter(db_path, tmp_path):
+    """``tool`` reaches ``search()`` the same as the CLI's --tool flag."""
+    add_session(
+        db_path,
+        "s-tools",
+        tool_calls=[({"name": "shell", "command": "quasar x"}, None)],
+    )
+    idx = tmp_path / "search.db"
+    assert main(
+        ["index", "--sessions-db", str(db_path), "--no-acp",
+         "--index", str(idx)]
+    ) == 0
+    got = do_query("quasar", index=str(idx), tool="shell")
+    assert [h["tool"] for h in got["hits"]] == ["shell"]
+    assert do_query("quasar", index=str(idx), tool="other")["hits"] == []
+
+
 def test_do_query_missing_index(tmp_path):
     out = do_query("x", index=str(tmp_path / "none.db"))
     assert out == {

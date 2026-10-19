@@ -112,6 +112,46 @@ def extract_chat_message(raw: str) -> tuple[str, str] | None:
     return normalize_role(d.get("role")), extract_text(d)
 
 
+def parse_payload(text: str | None) -> dict[str, Any] | None:
+    """Decode a ``tool_call_*_json`` payload; ``None`` on anything unusable."""
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+# Tool-name extraction — ported from devin_graph.extract
+# (packages/graph/src/devin_graph/extract.py): devin-search deliberately
+# does not depend on devin-graph, so the minimal logic is duplicated
+# here; keep the key lists in sync with the graph package.
+_TOOL_NAME_KEYS = ("name", "tool_name", "tool", "kind", "type", "title")
+_TOOL_NESTED_KEYS = ("rawInput", "raw_input", "input", "args")
+
+
+def extract_tool_name(payload: dict[str, Any]) -> str | None:
+    """Best-effort tool name from an unstable tool-call payload shape.
+
+    Candidate keys are checked at the top level first, then one level
+    deep inside ``rawInput``/``raw_input``/``input``/``args`` (ACP carries
+    the real tool input there).
+    """
+    for key in _TOOL_NAME_KEYS:
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    for nest in _TOOL_NESTED_KEYS:
+        sub = payload.get(nest)
+        if isinstance(sub, dict):
+            for key in _TOOL_NAME_KEYS:
+                v = sub.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    return None
+
+
 def extract_payload(raw: str | None, kind: Any = None) -> tuple[str, str] | None:
     """Opaque JSON payload (tool calls, acp messages) → ``(role, text)``.
 

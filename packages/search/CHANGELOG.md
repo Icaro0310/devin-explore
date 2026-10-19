@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `devin-search query --tool <name>`: exact-match filter on the tool a
+  hit came from. `tool_call_state` payloads now lift their tool name
+  into a new `docs.tool` column (`UNINDEXED`) — extraction ports
+  devin-graph's best-effort heuristic (`name`/`tool_name`/`tool`/
+  `kind`/`type`/`title` at top level, then one level inside
+  `rawInput`/`raw_input`/`input`/`args`; the call payload wins over the
+  update payload). Combines with `--role tool` and the other filters,
+  and `--json` hits now carry a `tool` field. Index format bumped to
+  v4 — existing indexes rebuild automatically on the next `index` run.
+- `search_query` MCP tool and `do_query()` accept `tool` for CLI parity;
+  the local query log records the filter when set.
+
 ## [0.2.1] - 2026-10-17
 
 ### Fixed

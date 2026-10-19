@@ -91,6 +91,41 @@ def test_no_match_returns_empty(index_path):
     assert search(index_path, "nonexistent-term-zzz") == []
 
 
+def test_tool_filter(db_path, tmp_path):
+    """``tool`` keeps only docs whose tool-call payload named that tool;
+    combined with ``role`` it narrows further, and absent it nothing is
+    filtered out."""
+    add_session(
+        db_path,
+        "tool-sess",
+        messages=[msg("user", "quasar maintenance")],
+        tool_calls=[
+            ({"name": "shell", "command": "quasar restart"},
+             {"output": "quasar restarted"}),
+            ({"name": "read_file", "path": "/etc/quasar.conf"}, None),
+        ],
+    )
+    idx = tmp_path / "search.db"
+    build_index(idx, sessions_db=db_path)
+
+    hits = search(idx, "quasar", tool="shell")
+    assert hits
+    assert all(h.tool == "shell" for h in hits)
+    assert {h.ref for h in hits} == {"tool:tool-sess/tool-sess-tc0"}
+
+    hits = search(idx, "quasar", role="tool", tool="read_file")
+    assert hits
+    assert all(h.tool == "read_file" and h.role == "tool" for h in hits)
+    assert {h.ref for h in hits} == {"tool:tool-sess/tool-sess-tc1"}
+
+    # A doc cannot satisfy both sides of a contradictory pair.
+    assert search(idx, "quasar", role="user", tool="shell") == []
+    # Unknown tool name → no hits.
+    assert search(idx, "quasar", tool="nonexistent-tool") == []
+    # No filter → user message + both tool-call docs.
+    assert len(search(idx, "quasar")) == 3
+
+
 def test_fts_operators_in_term_are_safe(index_path):
     assert search(index_path, 'kubectl OR "unbalanced') == []
     assert to_fts_query('a "b" NEAR') == '"a" """b""" "NEAR"'

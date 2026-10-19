@@ -43,10 +43,11 @@ def test_hits_to_dicts_shape():
     (d,) = hits_to_dicts([_hit()])
     assert set(d) == {
         "session_id", "role", "ts", "project", "session_title",
-        "source", "ref", "snippet", "rank", "history_note",
+        "source", "ref", "snippet", "rank", "tool", "history_note",
     }
     assert d["ref"] == "node:7"
     assert d["rank"] == -1.5
+    assert d["tool"] is None
     assert d["history_note"] is None
 
 
