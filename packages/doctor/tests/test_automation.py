@@ -9,7 +9,6 @@ runs.
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -189,9 +188,11 @@ def test_absorbed_repo_target_is_fail(ctx, tmp_path):
     assert "devin-explore/packages/history" in absorbed[0].message
 
 
-def test_registry_missing_skips_absorbed_check(ctx):
+def test_registry_missing_skips_absorbed_check(ctx, tmp_path):
+    job = tmp_path / "job.sh"
+    job.write_text("# fixture\n")
     table = {
-        ("crontab", "-l"): (0, "0 8 * * * /bin/true\n"),
+        ("crontab", "-l"): (0, f"0 8 * * * {job.as_posix()}\n"),
         ("systemctl", "--user", "list-units", "--type=service,timer",
          "--all", "--no-legend", "--no-pager"): (1, ""),
     }
@@ -214,6 +215,10 @@ def test_unavailable_surfaces_report_cleanly(ctx):
 
 def test_systemd_user_units_checked(ctx, tmp_path):
     missing = tmp_path / "uninstalled" / "devin-scout.py"
+    interpreter = tmp_path / "python3"  # exists — only the script is gone
+    interpreter.write_text("# fixture\n")
+    real = tmp_path / "real.sh"
+    real.write_text("#!/bin/sh\n")
     units_out = (
         "devin-scout.timer   loaded active waiting   devin-scout.timer\n"
         "devin-backup.service loaded inactive dead    devin-backup.service\n"
@@ -224,10 +229,9 @@ def test_systemd_user_units_checked(ctx, tmp_path):
     )
     service_unit = (
         "[Service]\nType=oneshot\n"
-        f"ExecStart=/usr/bin/python3 {missing}\n"
+        f"ExecStart={interpreter.as_posix()} {missing.as_posix()}\n"
     )
-    backup_unit = f"[Service]\nExecStart={tmp_path}/real.sh\n"
-    (tmp_path / "real.sh").write_text("#!/bin/sh\n")
+    backup_unit = f"[Service]\nExecStart={real.as_posix()}\n"
     table = {
         ("systemctl", "--user", "list-units", "--type=service,timer",
          "--all", "--no-legend", "--no-pager"): (0, units_out),
@@ -293,55 +297,67 @@ def test_parse_crontab_skips_comments_and_env():
 
 
 def test_task_targets_finds_paths_and_commands(tmp_path):
+    work = tmp_path / "work"
+    script = work / "run.py"
+    log = tmp_path / "var" / "log" / "x.log"
     targets, commands = automation._task_targets(
-        "cd /tmp && python3 /x/run.py --v > /var/log/x.log",
+        f"cd {work.as_posix()} && python3 {script.as_posix()} --v"
+        f" > {log.as_posix()}",
         posix=True,
         home=tmp_path,
     )
     paths = {t.path: t.kind for t in targets}
-    assert Path("/x/run.py") in paths
+    assert paths[work] == "exists"
+    assert paths[script] == "exists"
     # redirection targets check the parent dir, not the file itself
-    assert paths[Path("/var/log/x.log")] == "parent"
+    assert paths[log] == "parent"
     assert commands == ["python3"]
 
 
 def test_task_targets_subcommand_args_not_flagged(tmp_path):
     """``script.sh run`` — 'run' is an argument, not a missing command."""
+    tool = tmp_path / "tool.sh"
     targets, commands = automation._task_targets(
-        "/x/tool.sh run", posix=True, home=tmp_path
+        f"{tool.as_posix()} run", posix=True, home=tmp_path
     )
-    assert [t.path for t in targets] == [Path("/x/tool.sh")]
+    assert [t.path for t in targets] == [tool]
     assert commands == []
 
 
 def test_task_targets_nested_sh_c_payload(tmp_path):
+    srv = tmp_path / "srv"
     targets, commands = automation._task_targets(
-        "sh -c 'cd /srv && ./deploy.sh'", posix=True, home=tmp_path
+        f"sh -c 'cd {srv.as_posix()} && ./deploy.sh'",
+        posix=True,
+        home=tmp_path,
     )
-    # the inner 'cd /srv' scopes './deploy.sh' to /srv
-    assert Path("/srv") in {t.path for t in targets}
-    assert Path("/srv/deploy.sh") in {t.path for t in targets}
+    # the inner 'cd <srv>' scopes './deploy.sh' to it
+    assert srv in {t.path for t in targets}
+    assert srv / "deploy.sh" in {t.path for t in targets}
     assert commands == ["sh"]
 
 
 def test_task_targets_dbus_object_path_arg_skipped(tmp_path):
     """qdbus positional object paths are not filesystem references."""
+    qdbus = tmp_path / "bin" / "qdbus"
     targets, commands = automation._task_targets(
-        "/usr/lib/qt6/bin/qdbus org.kde.kcminit /kcminit"
+        f"{qdbus.as_posix()} org.kde.kcminit /kcminit"
         " org.kde.KCMInit.runPhase1",
         posix=True,
         home=tmp_path,
     )
-    assert [t.path for t in targets] == [Path("/usr/lib/qt6/bin/qdbus")]
+    assert [t.path for t in targets] == [qdbus]
     assert commands == []
 
 
-def test_corrupt_snapshot_resets_baseline(ctx):
+def test_corrupt_snapshot_resets_baseline(ctx, tmp_path):
+    job = tmp_path / "job.sh"
+    job.write_text("# fixture\n")
     path = _snapshot(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json")
     table = {
-        ("crontab", "-l"): (0, "0 8 * * * /bin/true\n"),
+        ("crontab", "-l"): (0, f"0 8 * * * {job.as_posix()}\n"),
         ("systemctl", "--user", "list-units", "--type=service,timer",
          "--all", "--no-legend", "--no-pager"): (1, ""),
     }
