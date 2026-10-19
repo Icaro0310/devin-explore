@@ -9,7 +9,6 @@ runs.
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -541,16 +540,18 @@ def test_redact_covers_url_userinfo_and_bearer():
 
 
 def test_working_directory_scopes_relative_exec(ctx, tmp_path):
-    """WorkingDirectory=/srv/jobs + ExecStart=... ./backup.py resolves
+    """WorkingDirectory=<jobs> + ExecStart=... ./backup.py resolves
     under the unit's working dir, not home."""
     jobs = tmp_path / "jobs"
     jobs.mkdir()
     (jobs / "backup.py").write_text("# fixture\n")
+    interpreter = tmp_path / "python3"
+    interpreter.write_text("# fixture\n")
     units_out = "jobs.service loaded active exited jobs.service\n"
     unit = (
         "[Service]\n"
         f"WorkingDirectory={jobs.as_posix()}\n"
-        "ExecStart=/usr/bin/python3 ./backup.py\n"
+        f"ExecStart={interpreter.as_posix()} ./backup.py\n"
     )
     table = {
         ("crontab", "-l"): (1, "no crontab for u"),
@@ -563,23 +564,26 @@ def test_working_directory_scopes_relative_exec(ctx, tmp_path):
 
 
 def test_glued_separator_still_checks_script(tmp_path):
-    """`python3 /x/missing.py; echo done` — the glued ';' cannot hide
+    """`python3 <missing>; echo done` — the glued ';' cannot hide
     the missing script behind one token."""
+    missing = tmp_path / "missing.py"
     targets, _ = automation._task_targets(
-        "python3 /srv/missing.py; echo done", posix=True, home=tmp_path
+        f"python3 {missing.as_posix()}; echo done",
+        posix=True,
+        home=tmp_path,
     )
-    assert any(t.path == Path("/srv/missing.py") for t in targets)
+    assert any(t.path == missing for t in targets)
 
 
 def test_redirect_input_file_must_exist(tmp_path):
-    """`reporter < /srv/missing.txt` — input redirects check the file
+    """`reporter < <missing>` — input redirects check the file
     itself, not just its parent dir."""
+    missing = tmp_path / "missing.txt"
     targets, _ = automation._task_targets(
-        "reporter < /srv/missing.txt", posix=True, home=tmp_path
+        f"reporter < {missing.as_posix()}", posix=True, home=tmp_path
     )
     assert any(
-        t.path == Path("/srv/missing.txt") and t.kind == "exists"
-        for t in targets
+        t.path == missing and t.kind == "exists" for t in targets
     )
 
 
@@ -657,12 +661,15 @@ def test_quoted_separator_in_path_not_split(tmp_path):
 
 
 def test_fd_dup_does_not_swallow_next_token(tmp_path):
-    """`python3 2>&1 /x/missing.py` — fd duplication is self-contained;
+    """`python3 2>&1 <missing>` — fd duplication is self-contained;
     the script arg after it is still a target."""
+    missing = tmp_path / "missing.py"
     targets, _ = automation._task_targets(
-        "python3 2>&1 /srv/missing.py", posix=True, home=tmp_path
+        f"python3 2>&1 {missing.as_posix()}",
+        posix=True,
+        home=tmp_path,
     )
-    assert any(str(t.path) == "/srv/missing.py" for t in targets)
+    assert any(t.path == missing for t in targets)
 
 
 def test_working_directory_reset_by_empty_directive():
