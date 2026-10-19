@@ -937,3 +937,30 @@ def test_spaced_digit_before_redirect_is_a_word(tmp_path):
     )
     assert commands == ["123"]
     assert any(t.path == log and t.kind == "parent" for t in targets)
+
+
+def test_digits_glued_or_spaced_vs_word_suffix(tmp_path):
+    """io_number is only an fd when the digit run is a standalone
+    word glued to the operator: '2>out' strips it, 'python3 >out'
+    keeps 'python3', '123 >out' keeps '123' as a command word and
+    '/tmp/job2>out' keeps the '2' inside the path."""
+    log = tmp_path / "out.log"
+    job = tmp_path / "job2"
+    # glued fd -> the real command survives, not the digit
+    _, commands = automation._task_targets(
+        f"2>{log.as_posix()} python3 backup.py",
+        posix=True,
+        home=tmp_path,
+    )
+    assert commands == ["python3"]
+    # digit ending a word is literal, not an fd
+    _, commands = automation._task_targets(
+        f"python3 >{log.as_posix()}", posix=True, home=tmp_path
+    )
+    assert commands == ["python3"]
+    # '/tmp/job2 >out' — the '2' belongs to the path
+    targets, _ = automation._task_targets(
+        f"{job.as_posix()} >{log.as_posix()}", posix=True, home=tmp_path
+    )
+    assert job in {t.path for t in targets}
+    assert any(t.path == log and t.kind == "parent" for t in targets)

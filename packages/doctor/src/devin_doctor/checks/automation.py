@@ -467,9 +467,11 @@ def _task_targets(
     # A descriptor number GLUED to a redirect operator ('2>log',
     # '1>&2') is part of the operator — strip it before lexing so the
     # digit cannot steal command position and hide the real command.
-    # A spaced digit ('123 >out') is a real word — a command or
-    # argument — and survives.
-    command = re.sub(r"\d+(?=[<>])", "", command)
+    # Shell io_number rules: the digit run must be a whole word
+    # (preceded by whitespace, an operator or line start) — trailing
+    # digits of a word are literal ('python3 >out', '/tmp/job2>out')
+    # — and spaced digits ('123 >out') are a real word too.
+    command = re.sub(r"(?<![^\s;&|(){}])\d+(?=[<>])", "", command)
     try:
         tokens = _lex(command, posix)
     except ValueError:
