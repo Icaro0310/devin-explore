@@ -472,6 +472,52 @@ def test_interpreter_module_payload_not_a_path(tmp_path):
     assert targets == []
 
 
+def test_switch_flag_does_not_hide_script_arg(tmp_path):
+    """`python3 -u backup.py` — boolean switches take no value; the
+    script after them is still a filesystem reference."""
+    targets, _ = automation._task_targets(
+        "python3 -u backup.py", posix=True, home=tmp_path
+    )
+    assert tmp_path / "backup.py" in {t.path for t in targets}
+
+
+def test_option_terminator_before_script(tmp_path):
+    """`python3 -- backup.py` — '--' ends options, the script follows."""
+    targets, _ = automation._task_targets(
+        "python3 -- backup.py", posix=True, home=tmp_path
+    )
+    assert tmp_path / "backup.py" in {t.path for t in targets}
+
+
+def test_preload_file_flag_checked(tmp_path):
+    """`node -r preload.js` — '-r'/'--require' take a preload FILE, not
+    a code string."""
+    targets, _ = automation._task_targets(
+        "node -r preload.js app.js", posix=True, home=tmp_path
+    )
+    assert tmp_path / "preload.js" in {t.path for t in targets}
+    assert tmp_path / "app.js" in {t.path for t in targets}
+
+
+def test_shell_c_single_token_payload_checked(tmp_path):
+    """`sh -c ./missing.sh` — a single-token '-c' payload is still a
+    command and its path is checked."""
+    targets, _ = automation._task_targets(
+        "sh -c ./missing.sh", posix=True, home=tmp_path
+    )
+    assert tmp_path / "missing.sh" in {t.path for t in targets}
+
+
+def test_python_c_inline_code_not_a_path(tmp_path):
+    """`python3 -c "print(1)"` — '-c' on a non-shell interpreter is
+    inline code, never a path."""
+    targets, commands = automation._task_targets(
+        "python3 -c print\\(1\\)", posix=True, home=tmp_path
+    )
+    assert targets == []
+    assert commands == ["python3"]
+
+
 def test_non_interpreter_fileish_arg_not_checked(tmp_path):
     """`tar -czf out.tar.gz src/` — output args of non-interpreters are
     not verified (the file may be created by the run itself)."""

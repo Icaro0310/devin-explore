@@ -105,9 +105,17 @@ _INTERPRETER = re.compile(
     re.IGNORECASE,
 )
 
-# Interpreter flags whose next token is a module name or inline code
-# string, never a path ('python3 -m http.server', 'sh -c ...').
-_PAYLOAD_FLAGS = frozenset({"-m", "-c", "-e", "-r"})
+# POSIX-family shells whose ``-c`` takes a nested command line.
+_POSIX_SHELL = re.compile(r"^(?:a|ba|da|k|z)?sh(?:\.exe)?$", re.IGNORECASE)
+
+# Interpreter flags whose next token is a module name, inline code or an
+# option value — never a path. ``-r``/``--require``/``--import`` are
+# deliberately absent: they take a preload FILE that must be checked.
+# ``-c`` is handled per-interpreter (nested command for shells, inline
+# code elsewhere). Short switches (``-u``, ``-I``) take no value and are
+# not suppressed; long options (``--handler x``) are assumed to take a
+# value.
+_PAYLOAD_FLAGS = frozenset({"-m", "-e", "-X", "-W"})
 
 _REDIRECT = re.compile(r"\d*[<>]+&?\d*")
 
@@ -453,12 +461,12 @@ def _task_targets(
     expect_cmd = True
     cd_next = False
     redirect_next: str | None = None
+    # next token is an interpreter option value / module / inline code
+    # ('-m', '-e', '-X', '-W', long options) — never a path.
     payload_next = False
+    # next token is a shell '-c' payload — a nested command line.
+    shell_next = False
     last_cmd: str | None = None
-    # The token right after a flag can be the flag's value
-    # ('--handler skills.audit'), so bare-arg script checks only apply
-    # when the previous significant token was not a flag.
-    after_flag = False
     for raw in tokens:
         token = raw.strip("\"'`")
         if not token:
@@ -478,7 +486,8 @@ def _task_targets(
                 targets += sub_t
                 commands += sub_c
             expect_cmd = False
-            after_flag = False
+            payload_next = False
+            shell_next = False
             continue
         # The lexer emits shell operators as their own tokens, so each
         # piece below is a whole word — a ';' or '&' inside quotes stays
@@ -488,6 +497,10 @@ def _task_targets(
             if not piece:
                 continue
             if _REDIRECT.fullmatch(piece):
+                # an operator cannot be a pending flag's value — clear
+                # both consume-states before classifying it.
+                payload_next = False
+                shell_next = False
                 if "&" in piece:
                     # fd duplication ('2>&1') is self-contained — the
                     # target fd is in-token and no next word is consumed.
@@ -506,32 +519,33 @@ def _task_targets(
                 cd_next = False
                 redirect_next = None
                 payload_next = False
+                shell_next = False
                 last_cmd = None
-                after_flag = False
                 continue
             if _ENV_ASSIGNMENT.match(piece):
-                after_flag = False
                 continue
             if payload_next:
-                # '-m module' / '-c code' payload of an interpreter —
-                # not a filesystem path.
+                # '-m module' / '-e code' / long-option value of an
+                # interpreter — a name or code string, never a path.
                 payload_next = False
-                after_flag = False
+                continue
+            if shell_next:
+                # '-c' payload of a POSIX shell — a nested command line
+                # (possibly a single token); inspect it.
+                shell_next = False
+                if depth < _MAX_DEPTH:
+                    sub_t, sub_c = _task_targets(
+                        piece, posix=posix, home=cwd, cwd=cwd,
+                        depth=depth + 1,
+                    )
+                    targets += sub_t
+                    commands += sub_c
                 continue
             if piece in _CONTROL_WORDS:
-                after_flag = False
-                continue
-            if (
-                last_cmd is not None
-                and _INTERPRETER.match(last_cmd)
-                and piece in _PAYLOAD_FLAGS
-            ):
-                payload_next = True
                 continue
             if piece == "cd":
                 cd_next = True
                 expect_cmd = False
-                after_flag = False
                 continue
             if piece[0] in "-@:!+":
                 # systemd ExecStart modifier prefix ('-/path',
@@ -542,14 +556,30 @@ def _task_targets(
                 ):
                     piece = stripped
                 elif piece.startswith("-"):
-                    after_flag = True
+                    if last_cmd is not None and _INTERPRETER.match(
+                        last_cmd
+                    ):
+                        # arity-aware: '-m'/'-e'/'-X'/'-W' and long
+                        # options take a value; '-r'/'--require' take a
+                        # preload FILE (left to the fileish check);
+                        # '-c' of a shell is a nested command; '--' ends
+                        # options; short switches ('-u', '-I') take none.
+                        if piece == "--":
+                            pass
+                        elif piece == "-c":
+                            if _POSIX_SHELL.fullmatch(last_cmd):
+                                shell_next = True
+                            else:
+                                payload_next = True
+                        elif piece in _PAYLOAD_FLAGS or piece.startswith(
+                            "--"
+                        ):
+                            payload_next = True
                     continue
             if "://" in piece:
-                after_flag = False
                 continue
             expanded = os.path.expandvars(piece)
             if _UNRESOLVABLE.search(expanded):
-                after_flag = False
                 continue  # glob / unresolvable variable — not checkable
             piece = expanded
             if redirect_next:
@@ -585,16 +615,14 @@ def _task_targets(
                 last_cmd = piece
             elif (
                 last_cmd is not None
-                and not after_flag
                 and _INTERPRETER.match(last_cmd)
                 and _BARE_COMMAND.match(piece)
                 and _FILEISH.search(piece)
             ):
                 # 'python3 backup.py' — a bare script arg after an
-                # interpreter is a real file reference (a token right
-                # after a flag can be the flag's value instead).
+                # interpreter is a real file reference; option values
+                # are already consumed via payload_next.
                 targets.append(_Target(_resolve_path(piece, cwd), "exists"))
-            after_flag = False
             expect_cmd = False
     return targets, commands
 
