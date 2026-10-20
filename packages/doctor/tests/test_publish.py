@@ -535,6 +535,93 @@ def test_wheel_ok_returns_none(tmp_path):
     ) is None
 
 
+def test_wheel_entry_point_whitespace_in_attr_fails(tmp_path):
+    """Regression (re-review): whitespace INSIDE the callable is a
+    broken target, not an alternate spelling — ``cli:m ain`` can never
+    resolve ``main``. Only spacing around the colon normalizes."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": (
+                "[console_scripts]\ndevin-foo = devin_foo.cli:m ain\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
+        ),
+    )
+    assert err is not None and "devin-foo" in err and "points to" in err
+
+
+def test_wheel_entry_point_spaced_colon_passes(tmp_path):
+    """Spacing around the colon is legal entry-point syntax and must
+    still normalize away."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": (
+                "[console_scripts]\ndevin-foo = devin_foo.cli : main\n"
+            ),
+        },
+    )
+    assert publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
+        ),
+    ) is None
+
+
+def test_wheel_version_exact_compare_matches_gate(tmp_path):
+    """Regression (re-review): the publish gate asserts
+    ``__version__ == [project].version`` literally — '1.0' vs '1.0.0'
+    are PEP 440-equal but gate-unequal, so readiness must FAIL too."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.0"\n',
+            "devin_foo-1.0.0.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.0.0\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.0.0",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "__version__" in err
+
+
 def test_wheel_entry_point_wrong_group_fails(tmp_path):
     """Regression (re-review): a console script landing in [gui_scripts]
     means no console launcher is installed — name-alone matching missed

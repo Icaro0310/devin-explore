@@ -335,8 +335,14 @@ def _same_version(a: str, b: str) -> bool:
 
 
 def _squash_target(target: str) -> str:
-    """``mod : attr`` and ``mod:attr`` are the same entry point."""
-    return re.sub(r"\s+", "", target)
+    """``mod : attr`` and ``mod:attr`` are the same entry point.
+
+    Entry-point syntax permits whitespace around the colon and at the
+    edges only — never inside a module or attribute identifier, so
+    interior whitespace must survive: ``cli:m ain`` is a broken target,
+    not a different spelling of ``cli:main``.
+    """
+    return re.sub(r"\s*:\s*", ":", target.strip())
 
 
 def _entry_point_groups(text: str) -> dict[str, dict[str, str]]:
@@ -387,7 +393,10 @@ def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
                 match = _VERSION_RE.search(text)
                 if match is None:
                     return f"wheel {init_rel} has no __version__"
-                if not _same_version(match.group(1), expect.version):
+                # Exact compare: the publish gate asserts
+                # `__version__ == [project].version` literally, and the
+                # packaged file is byte-identical to the source one.
+                if match.group(1) != expect.version:
                     return (
                         f"wheel {init_rel} __version__ "
                         f"'{match.group(1)}' != pyproject version "
@@ -612,7 +621,10 @@ def _version_findings(
             fix=f'Add __version__ = "{version}" — the wheel gate '
             "compares it to [project].version.",
         )]
-    if not _same_version(match.group(1), version):
+    # Exact compare, same as the verify-wheel-version gate: the gate
+    # asserts `__version__ == [project].version` literally, so PEP 440
+    # equivalence ('1.0' == '1.0.0') must not pass readiness either.
+    if match.group(1) != version:
         return [Finding(
             CHECK_ID, Status.FAIL,
             f"{label}: __version__ '{match.group(1)}' != pyproject "
