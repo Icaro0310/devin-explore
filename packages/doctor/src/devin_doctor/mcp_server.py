@@ -28,6 +28,7 @@ def do_check(
     cwd: str | None = None,
     stale_days: int = 30,
     surface: str = "",
+    package: str = "",
     *,
     offline: bool = False,
     now_ms: int | None = None,
@@ -58,6 +59,9 @@ def do_check(
             else default_config_dir() if data_dir is None else None
         ),
         offline=offline,
+        packages=tuple(
+            s.strip() for s in package.split(",") if s.strip()
+        ),
     )
     surfaces = (
         [s.strip() for s in surface.split(",") if s.strip()]
@@ -121,6 +125,7 @@ def build_server():
         cwd: str = "",
         stale_days: int = 30,
         surface: str = "",
+        package: str = "",
         offline: bool = False,
     ) -> dict:
         """Diagnose the local agent environment — one health ladder per
@@ -130,6 +135,8 @@ def build_server():
         modifies state, only reports findings with fix suggestions.
         ``surface`` scopes the surface checks (one name or a
         comma-separated list; the Devin checks always run).
+        ``package`` scopes the publish-readiness check to named packages
+        under ``<cwd>/packages`` (one name or a comma-separated list).
         ``offline=True`` skips the updates check's network fetch and PATH
         probes.
         """
@@ -140,6 +147,7 @@ def build_server():
                 cwd=cwd or None,
                 stale_days=stale_days,
                 surface=surface,
+                package=package,
                 offline=offline,
             )
         except Exception as error:  # noqa: BLE001 — tool boundary must not raise

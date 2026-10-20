@@ -90,6 +90,7 @@ devin-doctor check --data-dir D:\devin-backup
 devin-doctor check --data-dir ~/.local/share/devin --config-dir ~/.config/Devin
 devin-doctor check --json             # machine-readable output
 devin-doctor check --surface codex-cli  # scope surface checks (repeatable)
+devin-doctor check --cwd . --package doctor  # publish-readiness on one package
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
 ```
@@ -105,7 +106,10 @@ surface whose roots don't exist emits the canonical `present PASS` /
 `note: not-installed` finding and groups under `not detected`: an
 uninstalled agent is a valid environment, never a failure.
 `--surface NAME` (repeatable) scopes this section; the
-**devin environment** checks always run unscoped.
+**devin environment** checks always run unscoped — except
+`publish-readiness`, which scopes to `packages/*` under `--cwd` (or a
+single package dir) and narrows further with `--package NAME`
+(repeatable, by dir or project name).
 
 Surface findings carry three optional fields in `--json` — `rung` (the
 ladder rung that produced them), `code` (the §5 codebook on WARN/FAIL:
@@ -144,6 +148,7 @@ The `automation` check's semantics are deliberately conservative:
 - **Removal FAILs are sticky.** A task that disappears keeps FAILing every run until it returns or the removal is acknowledged — delete the task's entry inside `<data-dir>/doctor/automation-snapshot.json`, or delete the file to reset the whole baseline.
 - **Secrets are scrubbed.** Credential-shaped material (`--*token*`/`--*key*`/`--*pass*`/`--*secret*`/`--*auth*` arguments, sensitive `KEY=value` assignments, `Bearer` tokens, URL userinfo) becomes `***` before anything is stored or printed — a minimal local pattern set, not the full `devin-redact` catalog.
 - **Known limits:** Task Scheduler enumeration is capped at 200 tasks (a WARN fires when the listing is truncated) and a task whose `/xml` query fails is counted as unreadable WARN rather than silently healthy; shell parsing is heuristic — command substitution, globs and `$(...)`-generated paths are skipped rather than guessed.
+| `publish-readiness` | can a `packages/<name>` dir ship to PyPI — `[project]` name/version, `src/` layout, `__version__` sync, console-script targets, a staged-copy wheel build (static `[build-system]` fallback when `build`/`setuptools` are absent or `--offline`), `pypi-publish.yml` fan-out coverage. Scopes to `packages/*` under `--cwd` (or one package dir); `--package NAME` narrows the fan-out |
 
 Privacy doctrine is strict across all checks: headers and metadata only —
 counts, sizes, paths and statuses, never message content. SQLite stores

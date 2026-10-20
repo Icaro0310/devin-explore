@@ -74,6 +74,15 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         + ", ".join(SURFACE_NAMES)
         + "). Devin-environment checks always run unscoped.",
     )
+    p.add_argument(
+        "--package",
+        action="append",
+        metavar="NAME",
+        help="scope the publish-readiness check to package NAME "
+        "(repeatable; matches the packages/NAME dir or the project "
+        "name in its pyproject). Pointing --cwd at a single package "
+        "dir scopes the same way.",
+    )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
 
@@ -155,6 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.config_dir is not None
             else default_config_dir() if args.data_dir is None else None
         ),
+        packages=tuple(args.package or ()),
     )
     report = doctor.run_all(ctx, surfaces=args.surface)
     if args.command == "plan":

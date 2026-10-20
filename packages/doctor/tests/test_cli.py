@@ -23,6 +23,7 @@ def test_check_healthy_exit_0(ctx, capsys):
         "disk",
         "automation",
         "path-check",
+        "publish-readiness",
     ):
         assert check_id in out
 
@@ -84,6 +85,7 @@ def test_check_json_schema(ctx, capsys):
         "updates",
         "automation",
         "path-check",
+        "publish-readiness",
     }
     # Extension contract: the VS Code adapter gates on a parseable version
     # and renders all three summary counters.

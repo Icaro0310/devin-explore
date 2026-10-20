@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential-shaped fragments are redacted to `***` before findings and
   snapshot writes. Motivated by a real incident: a cron line vanished
   for ~3.5 days before anyone noticed.
+- New `publish-readiness` check: verifies a package dir can ship through
+  the repo's PyPI fan-out (`pypi-publish.yml`). Per package under
+  `--cwd`'s `packages/` (or a single package dir passed as `--cwd`) it
+  fails loud on: missing/unparseable `pyproject.toml`, `[project]`
+  without `name`/`version`, flat (non-`src/`) layout, `__version__` in
+  `src/<mod>/__init__.py` diverging from `[project].version`, and
+  console-script entry points that resolve to nothing under `src/`. The
+  wheel build is exercised for real via `python -m build --wheel
+  --no-isolation` against a temp-dir copy — the package dir is never
+  written to — with a static `[build-system]` fallback when
+  `build`/`setuptools` are not importable or the run is offline. Missing
+  `pypi-publish.yml` `resolve` coverage is WARN-only (not every package
+  publishes). New `--package NAME` flag (repeatable, also `package` on
+  the MCP `doctor_check` tool) narrows the fan-out by dir or project
+  name.
 
 ## [0.3.1] - 2026-10-17
 
