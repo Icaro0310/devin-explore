@@ -518,21 +518,30 @@ def _build_wheel(pkg: Path, expect: _BuildExpect) -> str | None:
 
 def _python_signals(pkg: Path) -> bool:
     """Does the dir intend to be a Python package? ``setup.py``/
-    ``setup.cfg``, any top-level ``*.py``, a top-level import-package
-    dir (``<name>/__init__.py``, the flat layout), or any ``.py``
-    anywhere under ``src/`` — including nested namespace packages.
-    A ``packages/*`` member with none of these — an npm bridge, a VS
-    Code extension, a docs dir — is not a PyPI candidate, so its missing
-    pyproject.toml is skipped, not failed. The scan never descends
-    outside ``src/`` or below the root level, so ``node_modules`` and
-    build outputs cannot trigger a false positive."""
+    ``setup.cfg``, a top-level import-package dir
+    (``<name>/__init__.py``, the flat layout), any ``.py`` anywhere
+    under ``src/`` — including nested namespace packages — or a loose
+    top-level ``*.py``. A ``packages/*`` member with none of these — an
+    npm bridge, a VS Code extension, a docs dir — is not a PyPI
+    candidate, so its missing pyproject.toml is skipped, not failed.
+    The scan never descends outside ``src/`` or below the root level, so
+    ``node_modules`` and build outputs cannot trigger a false positive.
+
+    The loose-root-``.py`` signal is the ambiguous one: it may be a
+    single-module flat distribution or just a maintenance helper. A
+    foreign manifest (``package.json``) beside it means the script is
+    tooling for that ecosystem, so it is not counted — the structural
+    shapes above still are."""
     if (pkg / "setup.py").is_file() or (pkg / "setup.cfg").is_file():
         return True
+    manifest = pkg / "package.json"
+    foreign = manifest.exists() or manifest.is_symlink()
     try:
         for child in pkg.iterdir():
-            if child.suffix == ".py":
-                return True
-            if child.is_dir() and (child / "__init__.py").is_file():
+            if child.is_dir():
+                if (child / "__init__.py").is_file():
+                    return True
+            elif child.suffix == ".py" and not foreign:
                 return True
     except OSError:
         pass
@@ -942,7 +951,7 @@ def _check_package(
     ):
         return [Finding(
             CHECK_ID, Status.PASS,
-            f"{label}: not a Python package (no .py/setup files) — "
+            f"{label}: not a Python package (no packaging signals) — "
             "skipped",
         )]
     findings, project = _metadata_findings(label, meta, err)

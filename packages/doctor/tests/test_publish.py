@@ -314,6 +314,66 @@ def test_publish_target_never_skipped(tmp_path):
     )
 
 
+def test_helper_script_next_to_package_json_skips(tmp_path):
+    """A lone ``clean.py`` beside ``package.json`` is npm tooling, not a
+    single-module distribution — the member stays skipped."""
+    write_repo(tmp_path)
+    member = tmp_path / "packages" / "npm-tools"
+    member.mkdir()
+    (member / "package.json").write_text("{}\n", encoding="utf-8")
+    (member / "clean.py").write_text(
+        "import shutil\nshutil.rmtree('dist', ignore_errors=True)\n",
+        encoding="utf-8",
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/npm-tools" in f.message for f in fails)
+    assert any(
+        "packages/npm-tools" in f.message
+        and "not a Python package" in f.message
+        for f in findings
+    )
+
+
+def test_lone_module_without_manifest_still_fails(tmp_path):
+    """A lone top-level ``.py`` with no foreign manifest is a
+    single-module flat distribution in progress — FAIL, not skipped."""
+    write_repo(tmp_path)
+    solo = tmp_path / "packages" / "solo"
+    solo.mkdir()
+    (solo / "solo.py").write_text(
+        "__version__ = '0.1'\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/solo" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_import_package_dir_beats_foreign_manifest(tmp_path):
+    """``package.json`` only mutes loose root scripts — a real
+    import-package dir still marks the member Python."""
+    write_repo(tmp_path)
+    hybrid = tmp_path / "packages" / "hybrid"
+    (hybrid / "hybrid").mkdir(parents=True)
+    (hybrid / "package.json").write_text("{}\n", encoding="utf-8")
+    (hybrid / "hybrid" / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/hybrid" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
 def test_invalid_toml_fails(tmp_path):
     pkg = tmp_path / "bad"
     pkg.mkdir()
