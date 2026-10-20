@@ -307,13 +307,22 @@ class _BuildExpect:
     modules: tuple[str, ...] = ()  # import modules that must ship
     init_module: str | None = None  # whose __init__.py carries __version__
     version: str | None = None  # expected __version__ (None when dynamic)
+    dist_name: str | None = None  # [project].name for METADATA Name:
+    scripts: tuple[str, ...] = ()  # script names expected in
+    # entry_points.txt
+
+
+def _norm_dist(name: str) -> str:
+    """PEP 503 normalization for dist-name comparison."""
+    return re.sub(r"[-_.]+", "-", name.strip()).lower()
 
 
 def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
     """The publish gate checks the *wheel*, not the source tree — a wheel
     that built but shipped without the declared module (wrong
-    ``packages.find`` config) or with a diverging ``__version__`` fails
-    here."""
+    ``packages.find`` config), with a diverging ``__version__``, or with
+    ``.dist-info`` metadata (Name/Version/entry_points) that does not
+    match the declared project fails here."""
     try:
         with zipfile.ZipFile(wheel) as zf:
             names = set(zf.namelist())
@@ -341,6 +350,58 @@ def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
                         f"wheel {init_rel} __version__ "
                         f"'{match.group(1)}' != pyproject version "
                         f"'{expect.version}'"
+                    )
+            meta_names = [
+                n for n in names if n.endswith(".dist-info/METADATA")
+            ]
+            if expect.dist_name or expect.version:
+                if not meta_names:
+                    return "built wheel has no .dist-info/METADATA"
+                meta_text = zf.read(meta_names[0]).decode(
+                    "utf-8", errors="replace"
+                )
+                m_name = re.search(
+                    r"^Name:\s*(.+?)\s*$", meta_text, re.MULTILINE
+                )
+                m_ver = re.search(
+                    r"^Version:\s*(.+?)\s*$", meta_text, re.MULTILINE
+                )
+                if expect.dist_name and m_name and (
+                    _norm_dist(m_name.group(1))
+                    != _norm_dist(expect.dist_name)
+                ):
+                    return (
+                        f"wheel METADATA Name '{m_name.group(1)}' != "
+                        f"project name '{expect.dist_name}'"
+                    )
+                if expect.version and m_ver and (
+                    m_ver.group(1) != expect.version
+                ):
+                    return (
+                        f"wheel METADATA Version '{m_ver.group(1)}' != "
+                        f"pyproject version '{expect.version}'"
+                    )
+            if expect.scripts:
+                ep_files = [
+                    n for n in names
+                    if n.endswith(".dist-info/entry_points.txt")
+                ]
+                ep_text = (
+                    zf.read(ep_files[0]).decode("utf-8", errors="replace")
+                    if ep_files else ""
+                )
+                missing_eps = [
+                    cmd for cmd in expect.scripts
+                    if not re.search(
+                        rf"^{re.escape(cmd)}\s*=",
+                        ep_text,
+                        re.MULTILINE,
+                    )
+                ]
+                if missing_eps:
+                    return (
+                        "wheel entry_points.txt lacks declared "
+                        "script(s): " + ", ".join(missing_eps)
                     )
             return None
     except (zipfile.BadZipFile, OSError, KeyError) as exc:
@@ -702,14 +763,15 @@ def _coverage_findings(
 
 
 def _script_modules(project: dict[str, Any]) -> list[str]:
-    """Module path of every declared console script, in order."""
-    scripts = project.get("scripts")
+    """Module path of every declared console/gui script, in order."""
     out: list[str] = []
-    if isinstance(scripts, dict):
-        for target in scripts.values():
-            module = str(target).partition(":")[0].strip()
-            if module:
-                out.append(module)
+    for group in ("scripts", "gui-scripts"):
+        table = project.get(group)
+        if isinstance(table, dict):
+            for target in table.values():
+                module = str(target).partition(":")[0].strip()
+                if module:
+                    out.append(module)
     return out
 
 
@@ -733,6 +795,13 @@ def _check_package(
     findings += _version_findings(label, pkg, project, mod)
     findings += _scripts_findings(label, pkg, project)
     version = project.get("version")
+    script_names: tuple[str, ...] = ()
+    scripts = project.get("scripts")
+    if isinstance(scripts, dict):
+        script_names = tuple(str(k) for k in scripts)
+    gui = project.get("gui-scripts")
+    if isinstance(gui, dict):
+        script_names += tuple(str(k) for k in gui)
     expect = _BuildExpect(
         modules=tuple(
             dict.fromkeys(
@@ -741,6 +810,12 @@ def _check_package(
         ),
         init_module=mod,
         version=version if isinstance(version, str) else None,
+        dist_name=(
+            project.get("name")
+            if isinstance(project.get("name"), str)
+            else None
+        ),
+        scripts=script_names,
     )
     findings += _build_findings(
         label, pkg, meta, expect, build_probe, builder, dist_version

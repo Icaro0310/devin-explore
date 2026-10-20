@@ -509,6 +509,12 @@ def test_wheel_ok_returns_none(tmp_path):
         {
             "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
             "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Metadata-Version: 2.1\nName: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": (
+                "[console_scripts]\ndevin-foo = devin_foo.cli:main\n"
+            ),
         },
     )
     assert publish._wheel_errors(
@@ -517,8 +523,98 @@ def test_wheel_ok_returns_none(tmp_path):
             modules=("devin_foo", "devin_foo.cli"),
             init_module="devin_foo",
             version="1.2.3",
+            dist_name="devin-foo",
+            scripts=("devin-foo",),
         ),
     ) is None
+
+
+def test_wheel_metadata_name_mismatch_fails(tmp_path):
+    """Regression (re-review): dist metadata was unchecked — a wheel
+    naming a different project passed."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_bar-1.2.3.dist-info/METADATA": (
+                "Name: devin-bar\nVersion: 1.2.3\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "devin-bar" in err and "devin-foo" in err
+
+
+def test_wheel_metadata_version_mismatch_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo-9.9.9.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 9.9.9\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "9.9.9" in err and "1.2.3" in err
+
+
+def test_wheel_missing_dist_info_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {"devin_foo/__init__.py": '__version__ = "1.2.3"\n'},
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "METADATA" in err
+
+
+def test_wheel_entry_point_missing_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": "",
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+            scripts=("devin-foo",),
+        ),
+    )
+    assert err is not None and "entry_points" in err and "devin-foo" in err
 
 
 # --- pypi-publish.yml fan-out coverage ---------------------------------------
