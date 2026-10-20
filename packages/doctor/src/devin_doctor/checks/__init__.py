@@ -9,6 +9,7 @@ lists are ordered the way they appear in the report.
 from devin_doctor.checks import (
     automation,
     config,
+    deps_internals,
     disk,
     health,
     hooks_windows,
@@ -30,6 +31,7 @@ DEVIN_CHECKS = [
     automation,
     path_check,
     publish,
+    deps_internals,
 ]
 
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
@@ -41,6 +43,7 @@ __all__ = [
     "SURFACE_NAMES",
     "automation",
     "config",
+    "deps_internals",
     "disk",
     "health",
     "hooks_windows",

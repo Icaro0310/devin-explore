@@ -161,7 +161,11 @@ def test_surface_scope_filters_surface_checks(ctx, capsys):
     assert rc == 0
     assert "devin-cli — PASS" in out
     assert "devin-chat" not in out
-    assert "not detected" not in out  # only the scoped surface ran
+    # other surfaces never run — not even 'not detected' (deps-internals
+    # can still sit in the devin-environment 'not detected' line: ctx.cwd
+    # here has no .venv for it to inspect)
+    surfaces_out = out.split("devin environment")[0]
+    assert "not detected" not in surfaces_out
     for check_id in (
         "health-of-data", "config", "disk", "updates", "automation",
         "path-check",

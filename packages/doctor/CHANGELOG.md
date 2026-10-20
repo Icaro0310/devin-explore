@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `deps-internals` — silently stale internal deps inside `<cwd>/.venv`.
+  Editable installs (`__editable__*.pth`, both the plain-path and the
+  setuptools `*_finder.py` form) are FAILed when their target no longer
+  exists — the repo moved or absorbed the package — and WARNed when the
+  target resolves outside the checkout (a venv bound to a different
+  workspace) or cannot be read. Non-editable `devin_*` dists (read from
+  `*.dist-info` metadata, never imported) are compared against the
+  same-named `packages/*/pyproject.toml` version — PEP 440-aware, so
+  `1.0.0-rc1` matches `1.0.0rc1` — and a drift is a WARN (stale wheel
+  shadowing fresh source); dists with no checkout match are foreign
+  tooling and ignored. `direct_url.json` `dir_info.editable` plus the
+  `__editable__*` .pth set keep editable dist-infos out of the wheel
+  comparison. site-packages resolves via `lib/python*/site-packages`,
+  `lib64/…` and `Lib/site-packages` (Windows), first sorted match.
+  `.venv` only — a checkout without one reports 'not detected'.
+  Read-only — venv/site-packages introspection only.
+
 - `path-check` — declared console scripts vs PATH reachability. For each
   package dir in scope (`--cwd` pointing at a `packages/` fan-out root or
   at a single package dir) the check reads `[project.scripts]` /
