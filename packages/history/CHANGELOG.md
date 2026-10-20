@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
 ### Fixed
 
 - `devin-history-mcp` keeps the traceback on `.run()` `ImportError`s; the
