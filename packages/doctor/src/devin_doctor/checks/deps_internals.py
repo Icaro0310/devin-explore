@@ -19,9 +19,9 @@ so every internal dep inside it is compared whenever the venv exists.
 
 site-packages resolves via ``lib/python*/site-packages`` (``lib64`` on
 distro layouts) and ``Lib/site-packages`` (Windows); when several dirs
-match — a lib64 mirror or multiple ``pythonX.Y`` versions — the first in
-sorted order wins, deterministic and right for the single-interpreter
-venvs these repos ship.
+match — a lib64 mirror or a ``pythonX.Y`` dir left behind by an
+interpreter upgrade — ``pyvenv.cfg``'s ``version`` picks the active one
+and sorted order only breaks the remaining ties.
 
 Verdicts:
 
@@ -48,6 +48,7 @@ installed, removed or rewritten.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -57,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 import tomllib
+from packaging.version import InvalidVersion, Version
 
 from devin_doctor.model import Context, Finding, Status
 
@@ -150,36 +152,62 @@ def _project_version(meta: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _same_version(a: str, b: str) -> bool:
-    """PEP 440-aware equality: installed metadata normalizes
-    ``1.0.0-rc1`` to ``1.0.0rc1`` while pyproject keeps the literal
-    spelling. Prefers ``packaging``; falls back to a separator/case-
-    insensitive compare."""
+def _same_version(a: str, b: str) -> bool | None:
+    """PEP 440 equality — installed metadata normalizes ``1.0.0-rc1``
+    to ``1.0.0rc1`` while pyproject keeps the literal spelling, and
+    ``1.0`` equals ``1.0.0``. ``None`` when either side is not a valid
+    PEP 440 version: approximating equality there invents drift that
+    does not exist, so the pair reports as unverifiable instead."""
     if a == b:
         return True
     try:
-        from packaging.version import Version
-
         return Version(a) == Version(b)
-    except Exception:  # noqa: BLE001 — packaging absent or a bad version
-        squash = lambda v: re.sub(r"[-_.]+", "", v.strip().lower())
-        return squash(a) == squash(b)
+    except InvalidVersion:
+        return None
 
 
 # --- venv / site-packages resolution (injectable) -----------------------
 
 
+def _venv_version(venv: Path) -> str | None:
+    """``X.Y`` of the interpreter the venv actually runs, from
+    ``pyvenv.cfg`` — the site-packages dir to audit must match it, or a
+    stale pre-upgrade ``pythonX.Y`` dir silently wins over the active one."""
+    try:
+        text = (venv / "pyvenv.cfg").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip().lower() == "version":
+            parts = value.strip().split(".")
+            return ".".join(parts[:2]) if len(parts) >= 2 else None
+    return None
+
+
 def _site_packages(venv: Path) -> Path | None:
     """The venv's site-packages dir, or ``None`` when it has none.
 
-    Every matching ``_SITE_PATTERNS`` layout is collected; the first in
-    sorted order wins — deterministic, and identical single-interpreter
-    venvs agree on it.
+    Every matching ``_SITE_PATTERNS`` layout is collected. A venv whose
+    interpreter was upgraded keeps the old ``pythonX.Y`` dir beside the
+    active one, so several matches resolve via ``pyvenv.cfg``'s version;
+    the first in sorted order is only the final tie-break — deterministic,
+    and identical single-interpreter venvs agree on it.
     """
     matches: list[Path] = []
     for pattern in _SITE_PATTERNS:
         matches += [p for p in venv.glob(pattern) if p.is_dir()]
-    return min(matches) if matches else None
+    if not matches:
+        return None
+    if len(matches) > 1:
+        xy = _venv_version(venv)
+        if xy:
+            preferred = [p for p in matches if p.parent.name == f"python{xy}"]
+            if preferred:
+                return min(preferred)
+    return min(matches)
 
 
 def _pth_label(pth: Path) -> str:
@@ -193,15 +221,49 @@ def _pth_label(pth: Path) -> str:
 
 def _finder_targets(finder: Path) -> list[str]:
     """Absolute paths quoted inside a ``__editable___*_finder.py`` — its
-    MAPPING values are the dirs the editable install puts on sys.path."""
+    MAPPING values are the dirs the editable install puts on sys.path.
+
+    Finder files are Python source: ``MAPPING``/``NAMESPACES`` values are
+    string literals, so a Windows path is spelled ``'C:\\\\work\\\\repo'``
+    and must be decoded via ``ast.literal_eval`` — probing the doubled-
+    backslash spelling would flag a live source dir as missing."""
     try:
         text = finder.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    return [
-        m.group(1) for m in _QUOTED_RE.finditer(text)
-        if os.path.isabs(m.group(1))
-    ]
+    targets: list[str] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in tree.body:
+            if not (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id in ("MAPPING", "NAMESPACES")
+                    for t in node.targets
+                )
+            ):
+                continue
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError, MemoryError):
+                continue
+            entries = value.values() if isinstance(value, dict) else ()
+            for entry in entries:
+                for path in [entry] if isinstance(entry, str) else entry:
+                    if isinstance(path, str) and os.path.isabs(path):
+                        targets.append(path)
+    if not targets:  # nonstandard finder — decode bare literals instead
+        for m in _QUOTED_RE.finditer(text):
+            try:
+                decoded = ast.literal_eval(m.group(0))
+            except (ValueError, TypeError, SyntaxError, MemoryError):
+                continue
+            if isinstance(decoded, str) and os.path.isabs(decoded):
+                targets.append(decoded)
+    return targets
 
 
 def _pth_targets(pth: Path, site_dir: Path) -> list[str] | None:
@@ -407,12 +469,15 @@ def _dist_findings(
         if project is None:
             continue  # foreign tool — not this repo's problem
         proj_name, proj_version, proj_label = project
-        if dist.version and proj_version and _same_version(
-            dist.version, proj_version
-        ):
+        same = (
+            _same_version(dist.version, proj_version)
+            if dist.version and proj_version
+            else None
+        )
+        if same is True:
             matched += 1
             continue
-        if dist.version and proj_version:
+        if same is False:
             findings.append(Finding(
                 CHECK_ID, Status.WARN,
                 f"'{proj_name}' is installed in .venv at {dist.version} "

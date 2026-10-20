@@ -569,3 +569,87 @@ def test_import_line_pth_keeps_cwd_out_of_message(tmp_path):
     findings = deps_internals.run(_ctx(tmp_path))
     assert _statuses(findings) == [Status.WARN]
     assert "devin_foo-1.2.3" in findings[0].message
+
+
+# --- review fixes: active site-packages, finder escapes, PEP 440 ----------
+
+
+def test_site_packages_prefers_the_pyvenv_cfg_version(tmp_path):
+    """A venv upgraded 3.10 → 3.11 keeps both dirs; ``pyvenv.cfg`` says
+    which interpreter actually runs, so its site-packages wins over the
+    lexical-min stale one."""
+    venv = tmp_path / ".venv"
+    write_venv(tmp_path, pyver="python3.10")
+    active = write_venv(tmp_path, pyver="python3.11")
+    (venv / "pyvenv.cfg").write_text(
+        "home = /usr/bin\nversion = 3.11.5\n", encoding="utf-8"
+    )
+    assert deps_internals._site_packages(venv) == active
+
+
+def test_site_packages_without_pyvenv_cfg_keeps_sorted_order(tmp_path):
+    """No version hint (broken/synthetic venv): the deterministic min()
+    fallback still applies."""
+    venv = tmp_path / ".venv"
+    older = write_venv(tmp_path, pyver="python3.10")
+    write_venv(tmp_path, pyver="python3.11")
+    assert deps_internals._site_packages(venv) == older
+
+
+def test_finder_decodes_windows_escaped_mapping(tmp_path, monkeypatch):
+    """A setuptools finder spells ``C:\\work`` as ``'C:\\\\work'`` —
+    regex-only extraction probes the doubled-backslash literal and flags
+    a live dir as missing. ``ast.literal_eval`` decodes it first."""
+    import ntpath
+
+    finder = tmp_path / "__editable___devin_foo_1_2_3_finder.py"
+    finder.write_text(
+        "MAPPING = {'devin_foo': 'C:\\\\work\\\\repo\\\\src\\\\devin_foo'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deps_internals.os.path, "isabs", ntpath.isabs)
+    assert deps_internals._finder_targets(finder) == [
+        "C:\\work\\repo\\src\\devin_foo"
+    ]
+
+
+def test_finder_still_reads_posix_mapping(tmp_path):
+    finder = tmp_path / "__editable___devin_foo_1_2_3_finder.py"
+    finder.write_text(
+        f"MAPPING = {{'devin_foo': '{tmp_path / 'src' / 'devin_foo'}'}}\n",
+        encoding="utf-8",
+    )
+    assert deps_internals._finder_targets(finder) == [
+        str(tmp_path / "src" / "devin_foo")
+    ]
+
+
+def test_same_version_pep440_equivalents():
+    """``1.0`` == ``1.0.0`` and ``-rc1`` == ``rc1`` — the review's false-
+    drift cases; invalid input is unverifiable, never approximated."""
+    assert deps_internals._same_version("1.0", "1.0.0") is True
+    assert deps_internals._same_version("1.0.0-rc1", "1.0.0rc1") is True
+    assert deps_internals._same_version("1.0", "1.1") is False
+    assert deps_internals._same_version("not-a-version", "1.0") is None
+
+
+def test_dist_findings_equivalent_versions_do_not_warn(tmp_path):
+    """The exact review case: wheel 1.0 vs pyproject 1.0.0 must match,
+    not emit a stale-wheel WARN."""
+    write_pkg(tmp_path, "foo", version="1.0.0")
+    site_dir = write_venv(tmp_path)
+    write_dist_info(site_dir, "devin-foo", "1.0")
+    findings = deps_internals.run(_ctx(tmp_path))
+    assert _statuses(findings) == [Status.PASS]
+    assert "match" in findings[0].message
+
+
+def test_dist_findings_invalid_version_is_unverifiable(tmp_path):
+    """An unparseable installed version warns 'unverifiable', never
+    'stale wheel' — approximated equality would invent drift."""
+    write_pkg(tmp_path, "foo", version="1.2.3")
+    site_dir = write_venv(tmp_path)
+    write_dist_info(site_dir, "devin-foo", "not-a-version")
+    findings = deps_internals.run(_ctx(tmp_path))
+    assert _statuses(findings) == [Status.WARN]
+    assert "unverifiable" in findings[0].message
