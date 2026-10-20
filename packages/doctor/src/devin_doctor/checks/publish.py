@@ -30,7 +30,8 @@ mismatched item is named in its own finding:
   with 'unknown package', so it reports WARN, not covered.
 
 Scope: ``ctx.cwd`` is the fan-out root when it holds ``packages/`` (every
-child dir is a candidate) or the container dir named ``packages`` itself;
+child dir is a candidate, non-Python members skipped) or the container
+dir named ``packages`` itself;
 a lone dir with a ``pyproject.toml`` is checked as a single package.
 ``ctx.packages`` (``--package NAME``) narrows the fan-out by dir or
 project name. Nothing package-shaped → one PASS 'nothing to verify'
@@ -42,6 +43,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -105,7 +107,9 @@ def _package_dirs(cwd: Path) -> list[Path]:
     """Package dirs in scope, sorted.
 
     ``cwd/packages`` exists → every non-hidden child is a candidate (a
-    missing ``pyproject.toml`` inside is itself a finding). A ``cwd``
+    missing ``pyproject.toml`` inside is a finding *only* when the dir
+    carries Python-package signals — non-Python members like an npm
+    bridge or a VS Code extension are skipped). A ``cwd``
     named ``packages`` → same child scan. Else ``cwd`` with a
     ``pyproject.toml`` — or a bare ``src/`` dir, the mark of an
     in-progress package — → the single package. Anything else → empty.
@@ -513,6 +517,72 @@ def _build_wheel(pkg: Path, expect: _BuildExpect) -> str | None:
         return f"exit {proc.returncode}, no wheel produced"
 
 
+def _python_signals(pkg: Path) -> bool:
+    """Does the dir intend to be a Python package? ``setup.py``/
+    ``setup.cfg``, a top-level import-package dir
+    (``<name>/__init__.py``, the flat layout), any ``.py`` anywhere
+    under ``src/`` — including nested namespace packages — or a loose
+    top-level ``*.py``. A ``packages/*`` member with none of these — an
+    npm bridge, a VS Code extension, a docs dir — is not a PyPI
+    candidate, so its missing pyproject.toml is skipped, not failed.
+    The scan never descends outside ``src/`` or below the root level, so
+    ``node_modules`` and build outputs cannot trigger a false positive.
+
+    The loose-root-``.py`` signal is the ambiguous one: it may be a
+    single-module flat distribution or just a maintenance helper. A
+    foreign manifest file (``package.json`` — present or dangling,
+    parseable or not) means the scripts are tooling for that
+    ecosystem, so loose ``.py`` files are not counted. Ambiguity a
+    name-matched ``<pkg>/<pkg>.py`` may still carry is surfaced by the
+    caller as a WARN, not silently skipped — and never a FAIL."""
+    if (pkg / "setup.py").is_file() or (pkg / "setup.cfg").is_file():
+        return True
+    manifest = pkg / "package.json"
+    foreign = manifest.exists() or manifest.is_symlink()
+    try:
+        for child in pkg.iterdir():
+            if child.is_dir():
+                if (child / "__init__.py").is_file():
+                    return True
+            elif child.suffix == ".py" and not foreign:
+                return True
+    except OSError:
+        pass
+    src = pkg / "src"
+    if src.is_dir():
+        try:
+            return any(p.suffix == ".py" for p in src.rglob("*.py"))
+        except OSError:
+            return False
+    return False
+
+
+def _has_pyproject(pkg: Path) -> bool:
+    """A ``pyproject.toml`` *entry* exists — file, directory or even a
+    dangling symlink. Any of those is publish intent: the metadata leg
+    reports what is wrong with it instead of the dir riding the
+    non-Python skip."""
+    path = pkg / "pyproject.toml"
+    return path.exists() or path.is_symlink()
+
+
+def _is_publish_target(pkg: Path) -> bool:
+    """A ``pypi-publish.yml`` resolve arm mapping ``dir=packages/<pkg>``
+    — or a dispatch-option/tag reference to it — makes this dir a real
+    publish target: a missing pyproject there fails the release, so the
+    non-Python skip must not apply."""
+    workflow = _find_publish_workflow(pkg)
+    if workflow is None:
+        return False
+    parsed = _publish_coverage(workflow)
+    if parsed is None:
+        return False
+    arms, referenced = parsed
+    if pkg.name in referenced:
+        return True
+    return any(adir == pkg.name for adir, _mod in arms.values())
+
+
 def _metadata_findings(label: str, meta: dict[str, Any] | None, err: str | None):
     """pyproject parse + [project] name/version gate."""
     if err is not None:
@@ -877,6 +947,34 @@ def _check_package(
     dist_version: Callable[[str], str | None],
 ) -> list[Finding]:
     label = _label(ctx.cwd, pkg)
+    if (
+        not _has_pyproject(pkg)
+        and not _python_signals(pkg)
+        and not _is_publish_target(pkg)
+    ):
+        findings = [Finding(
+            CHECK_ID, Status.PASS,
+            f"{label}: not a Python package (no packaging signals) — "
+            "skipped",
+        )]
+        manifest = pkg / "package.json"
+        if manifest.exists() or manifest.is_symlink():
+            try:
+                json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                findings.append(Finding(
+                    CHECK_ID, Status.WARN,
+                    f"{label}: package.json unparseable — member still "
+                    "read as foreign tooling",
+                ))
+            if (pkg / f"{pkg.name}.py").is_file():
+                findings.append(Finding(
+                    CHECK_ID, Status.WARN,
+                    f"{label}: {pkg.name}.py beside package.json — "
+                    "ambiguous hybrid member skipped; name it in "
+                    "pypi-publish.yml to force metadata checks",
+                ))
+        return findings
     findings, project = _metadata_findings(label, meta, err)
     if project is None:
         return findings

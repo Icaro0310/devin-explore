@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `publish-readiness` — a `packages/*` member without `pyproject.toml`
+  no longer fails when the dir carries no Python-package signals (npm
+  bridges, VS Code extensions, docs dirs). Missing pyproject still
+  fails for dirs that look like in-progress Python packages
+  (`setup.py`/`setup.cfg`, top-level `.py`, or `.py` under `src/`).
+
 ### Added
 
 - `deps-internals` — silently stale internal deps inside `<cwd>/.venv`.

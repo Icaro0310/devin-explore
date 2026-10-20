@@ -169,7 +169,11 @@ def test_cwd_can_be_the_packages_container(tmp_path):
 
 def test_missing_pyproject_fails(tmp_path):
     pkg = tmp_path / "noproj"
-    (pkg / "src").mkdir(parents=True)  # package-shaped, no pyproject
+    # An in-progress Python package: src/<mod>/__init__.py but no
+    # pyproject — the check must still FAIL it.
+    mod = pkg / "src" / "noproj"
+    mod.mkdir(parents=True)
+    (mod / "__init__.py").write_text("", encoding="utf-8")
     findings = publish.run(
         _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
@@ -179,13 +183,193 @@ def test_missing_pyproject_fails(tmp_path):
 
 def test_missing_pyproject_under_packages_fails(tmp_path):
     write_repo(tmp_path)
-    (tmp_path / "packages" / "noproj").mkdir()
+    noproj = tmp_path / "packages" / "noproj"
+    (noproj / "src" / "noproj").mkdir(parents=True)
+    (noproj / "src" / "noproj" / "__init__.py").write_text("", encoding="utf-8")
     findings = publish.run(
         _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
         "packages/noproj" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+# --- non-Python packages/* members are skipped -----------------------------
+
+
+def test_nonpython_member_skipped(tmp_path):
+    """An npm/VS-Code-style member (package.json + src/*.ts, no .py) is
+    not a PyPI candidate — PASS note, never a pyproject FAIL."""
+    write_repo(tmp_path)
+    bridge = tmp_path / "packages" / "bridge"
+    (bridge / "src").mkdir(parents=True)
+    (bridge / "src" / "index.ts").write_text("export {}\n", encoding="utf-8")
+    (bridge / "package.json").write_text("{}\n", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/bridge" in f.message for f in fails)
+    assert any(
+        "packages/bridge" in f.message and "not a Python package" in f.message
+        for f in findings
+    )
+
+
+def test_empty_member_dir_skipped(tmp_path):
+    """An empty packages/ dir carries no publish intent either."""
+    write_repo(tmp_path)
+    (tmp_path / "packages" / "empty").mkdir()
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    assert not any(f.status is Status.FAIL for f in findings)
+
+
+def test_setup_py_signals_still_fails_without_pyproject(tmp_path):
+    """A setup.py legacy package can't ship through the pyproject-only
+    fan-out — the missing-pyproject FAIL still applies."""
+    write_repo(tmp_path)
+    legacy = tmp_path / "packages" / "legacy"
+    legacy.mkdir()
+    (legacy / "setup.py").write_text("from setuptools import setup\nsetup()\n", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/legacy" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_flat_layout_member_still_fails(tmp_path):
+    """``packages/tool/tool/__init__.py`` with no project metadata is a
+    flat-layout package in progress — FAIL, not skipped."""
+    write_repo(tmp_path)
+    mod = tmp_path / "packages" / "tool" / "tool"
+    mod.mkdir(parents=True)
+    (mod / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/tool" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_nested_namespace_member_still_fails(tmp_path):
+    """``src/acme/tools/__init__.py`` — a deeper src nesting — still
+    counts as Python intent."""
+    write_repo(tmp_path)
+    ns = tmp_path / "packages" / "ns" / "src" / "acme" / "tools"
+    ns.mkdir(parents=True)
+    (ns / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/ns" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_dangling_pyproject_symlink_fails(tmp_path):
+    """A broken ``pyproject.toml`` symlink is publish intent gone wrong
+    — the metadata leg reports it instead of the skip hiding it."""
+    write_repo(tmp_path)
+    broken = tmp_path / "packages" / "broken"
+    broken.mkdir()
+    (broken / "pyproject.toml").symlink_to(broken / "gone.toml")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any("packages/broken" in f.message for f in fails)
+
+
+def test_publish_target_never_skipped(tmp_path):
+    """A resolve arm mapping ``dir=packages/<name>`` makes the member a
+    publish target: gutted of Python files it must FAIL, not skip."""
+    write_repo(tmp_path)
+    gutted = tmp_path / "packages" / "foo"
+    for child in list(gutted.iterdir()):
+        if child.is_dir():
+            import shutil
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/foo" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_helper_script_next_to_package_json_skips(tmp_path):
+    """A lone ``clean.py`` beside ``package.json`` is npm tooling, not a
+    single-module distribution — the member stays skipped."""
+    write_repo(tmp_path)
+    member = tmp_path / "packages" / "npm-tools"
+    member.mkdir()
+    (member / "package.json").write_text("{}\n", encoding="utf-8")
+    (member / "clean.py").write_text(
+        "import shutil\nshutil.rmtree('dist', ignore_errors=True)\n",
+        encoding="utf-8",
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/npm-tools" in f.message for f in fails)
+    assert any(
+        "packages/npm-tools" in f.message
+        and "not a Python package" in f.message
+        for f in findings
+    )
+
+
+def test_lone_module_without_manifest_still_fails(tmp_path):
+    """A lone top-level ``.py`` with no foreign manifest is a
+    single-module flat distribution in progress — FAIL, not skipped."""
+    write_repo(tmp_path)
+    solo = tmp_path / "packages" / "solo"
+    solo.mkdir()
+    (solo / "solo.py").write_text(
+        "__version__ = '0.1'\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/solo" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_import_package_dir_beats_foreign_manifest(tmp_path):
+    """``package.json`` only mutes loose root scripts — a real
+    import-package dir still marks the member Python."""
+    write_repo(tmp_path)
+    hybrid = tmp_path / "packages" / "hybrid"
+    (hybrid / "hybrid").mkdir(parents=True)
+    (hybrid / "package.json").write_text("{}\n", encoding="utf-8")
+    (hybrid / "hybrid" / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/hybrid" in f.message and "no pyproject.toml" in f.message
         for f in fails
     )
 
@@ -1202,3 +1386,51 @@ def test_real_wheel_missing_declared_module_fails(tmp_path):
         and f.status is Status.FAIL
         for f in findings
     ), [f.message for f in findings]
+
+
+def test_hybrid_member_module_warns_not_fails(tmp_path):
+    """``widget/widget.py`` beside ``package.json`` may be a single-
+    module dist or a name-matched helper — WARN ambiguous, never FAIL
+    and never silently skipped."""
+    write_repo(tmp_path)
+    widget = tmp_path / "packages" / "widget"
+    widget.mkdir()
+    (widget / "package.json").write_text("{}\n", encoding="utf-8")
+    (widget / "widget.py").write_text(
+        "__version__ = '0.1'\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/widget" in f.message for f in fails)
+    assert any(
+        "packages/widget" in f.message
+        and "ambiguous hybrid member" in f.message
+        and f.status is Status.WARN
+        for f in findings
+    )
+
+
+def test_broken_manifest_stays_foreign_but_warns(tmp_path):
+    """A malformed ``package.json`` does not flip the member to a
+    Python candidate — it is skipped as foreign tooling and the broken
+    manifest is its own WARN."""
+    write_repo(tmp_path)
+    member = tmp_path / "packages" / "npm-tools"
+    member.mkdir()
+    (member / "package.json").write_text("{oops\n", encoding="utf-8")
+    (member / "clean.py").write_text(
+        "import shutil\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/npm-tools" in f.message for f in fails)
+    assert any(
+        "packages/npm-tools" in f.message
+        and "unparseable" in f.message
+        and f.status is Status.WARN
+        for f in findings
+    )
