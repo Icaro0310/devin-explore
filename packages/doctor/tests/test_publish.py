@@ -1386,3 +1386,43 @@ def test_real_wheel_missing_declared_module_fails(tmp_path):
         and f.status is Status.FAIL
         for f in findings
     ), [f.message for f in findings]
+
+
+def test_hybrid_member_module_still_checked(tmp_path):
+    """``widget/widget.py`` beside ``package.json`` is a hybrid single-
+    module distribution — the JS manifest does not hide it."""
+    write_repo(tmp_path)
+    widget = tmp_path / "packages" / "widget"
+    widget.mkdir()
+    (widget / "package.json").write_text("{}\n", encoding="utf-8")
+    (widget / "widget.py").write_text(
+        "__version__ = '0.1'\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/widget" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_broken_manifest_does_not_prove_foreign(tmp_path):
+    """An unparseable ``package.json`` proves nothing — a loose ``.py``
+    beside it is still a Python signal, not npm tooling."""
+    write_repo(tmp_path)
+    member = tmp_path / "packages" / "npm-tools"
+    member.mkdir()
+    (member / "package.json").write_text("{oops\n", encoding="utf-8")
+    (member / "clean.py").write_text(
+        "import shutil\n", encoding="utf-8"
+    )
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/npm-tools" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
