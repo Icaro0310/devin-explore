@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `toolchain` — missing test/build tools named per-OS with concrete
+  `fix:` hints (the 2026-10-02 env-missing incident class). Probes
+  `python3`/`python`/`py`, `pip3`/`pip`, `python -m venv` plus
+  `import ensurepip` (the Debian `python3-venv` split a PATH lookup
+  alone cannot see — a venv that builds without pip FAILs as
+  env-missing), `node` (with the `nodejs` alias), `npm` and `git`.
+  Hints target the detected package manager: apt/dnf/pacman on Linux
+  via `/etc/os-release` ID/ID_LIKE, brew on macOS, winget on Windows,
+  generic when the distro is unrecognized. Present-but-degraded pieces
+  WARN (pip importable only via `python -m pip`, unanswerable probes);
+  healthy pieces PASS. Read-only — `shutil.which` plus `--help`/
+  `--version` subprocess calls under 10 s timeouts.
+
 - `deps-internals` — silently stale internal deps inside `<cwd>/.venv`.
   Editable installs (`__editable__*.pth`, both the plain-path and the
   setuptools `*_finder.py` form) are FAILed when their target no longer

@@ -68,6 +68,25 @@ def _no_scheduler_probes(monkeypatch):
     monkeypatch.setattr(automation, "_run", lambda argv: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_toolchain_probes(monkeypatch):
+    """The toolchain check probes PATH binaries and runs interpreter
+    subprocesses — keep every test hermetic by reporting all tools
+    present. Tests for the check itself inject their own fakes."""
+    import subprocess
+
+    from devin_doctor.checks import toolchain
+
+    monkeypatch.setattr(
+        toolchain, "_which", lambda cmd: f"/stub/bin/{cmd}"
+    )
+    monkeypatch.setattr(
+        toolchain,
+        "_probe",
+        lambda argv: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     """A healthy synthetic Devin data dir (schema v17, 3 sessions, 2 acp DBs)."""
