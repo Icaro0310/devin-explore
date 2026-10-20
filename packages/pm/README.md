@@ -278,10 +278,12 @@ counts, status totals, milestones, last activity and cost).
 `devin plugins install
 Icaro0310/devin-explore#packages/pm/adapters` — it ships in the
 repo, not inside the wheel. The manifest launches the server through
-`uvx --from 'devin-pm[mcp]' devin-pm-mcp`, which resolves once
-the matching PyPI release ships; until then run the source-installed
-`devin-pm-mcp` directly or point a local manifest copy at the
-checkout (`uvx --from './packages/pm[mcp]' devin-pm-mcp`).
+`uvx --from 'devin-pm[mcp]' devin-pm-mcp`, which resolves the
+published PyPI release — no local install needed. To run the server
+from a source checkout instead, install it editable
+(`pip install -e '.[mcp]'`) and call `devin-pm-mcp` directly, or
+point a local manifest copy at the checkout
+(`uvx --from './packages/pm[mcp]' devin-pm-mcp`).
 
 ### MCP host configs
 
