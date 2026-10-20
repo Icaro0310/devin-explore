@@ -23,6 +23,14 @@ _FEDORA = 'ID=fedora\n'
 _ARCH = 'ID=arch\nID_LIKE=arch\n'
 _UNKNOWN_DISTRO = 'ID=nixos\n'
 
+_WHEELS_PROBE = (
+    "import os, ensurepip, sys; "
+    "d = os.path.join(os.path.dirname(ensurepip.__file__), "
+    "'_bundled'); "
+    "sys.exit(0 if os.path.isdir(d) and "
+    "any(n.endswith('.whl') for n in os.listdir(d)) else 1)"
+)
+
 
 def _ctx(tmp_path: Path) -> Context:
     return Context(data_dir=tmp_path, cwd=tmp_path)
@@ -180,8 +188,9 @@ def test_missing_node_and_npm_fail(tmp_path):
     assert "apt install npm" in (npm[0].fix or "")
 
 
-def test_nodejs_alias_passes(tmp_path):
-    """Older Debian exposes only 'nodejs' — still a working node."""
+def test_nodejs_alias_warns(tmp_path):
+    """Only 'nodejs' resolves — 'node --test' style commands still
+    fail, so the alias is degraded, not healthy."""
     bins = _full_path_which()
     del bins["node"]
     findings = toolchain.run(
@@ -191,9 +200,77 @@ def test_nodejs_alias_passes(tmp_path):
         plat="linux",
         os_release=_DEBIAN,
     )
-    node = _by_msg(findings, "'node'")
-    assert [f.status for f in node] == [Status.PASS]
-    assert "nodejs" in node[0].message
+    node = _by_msg(findings, "'nodejs'")
+    assert [f.status for f in node] == [Status.WARN]
+    assert "node" in node[0].message
+    assert "apt install nodejs" in (node[0].fix or "")
+
+
+def test_broken_python_shim_falls_through_to_py(tmp_path):
+    """'python' resolves but cannot run (Store alias) — a working 'py'
+    behind it still wins, and is the interpreter venv/pip probes use."""
+    bins = _full_path_which()
+    del bins["python3"]
+    findings = toolchain.run(
+        _ctx(tmp_path),
+        which=_which(bins),
+        probe=_probe({("/usr/bin/python", "--version"): 1}),
+        plat="windows",
+    )
+    py = _by_msg(findings, "resolved as 'py'")
+    assert [f.status for f in py] == [Status.PASS]
+
+
+def test_all_python_shims_broken_fails(tmp_path):
+    """Every candidate resolves but none executes — FAIL names the
+    broken shims instead of reporting PASS."""
+    findings = toolchain.run(
+        _ctx(tmp_path),
+        which=_which(_full_path_which()),
+        probe=_probe({
+            ("/usr/bin/python3", "--version"): 1,
+            ("/usr/bin/python", "--version"): 1,
+            ("/usr/bin/py", "--version"): 1,
+        }),
+        plat="windows",
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert fails
+    assert "broken shim" in fails[0].message
+    assert "winget" in (fails[0].fix or "")
+
+
+def test_ensurepip_without_bundled_wheels_fails(tmp_path):
+    """ensurepip imports but ships no wheel — fresh venvs still die
+    during pip bootstrap."""
+    findings = toolchain.run(
+        _ctx(tmp_path),
+        which=_which(_full_path_which()),
+        probe=_probe({(_WHEELS_PROBE,): 1}),
+        plat="linux",
+        os_release=_DEBIAN,
+    )
+    venv_fails = [f for f in findings
+                  if f.status is Status.FAIL and "bundles no pip wheel" in f.message]
+    assert len(venv_fails) == 1
+    assert "python3-venv" in (venv_fails[0].fix or "")
+
+
+def test_windows_pip_fix_uses_resolved_interpreter(tmp_path):
+    """No 'py' launcher on PATH — the ensurepip hint must name the
+    interpreter that actually resolved ('python'), not 'py'."""
+    bins = _full_path_which()
+    del bins["python3"], bins["py"], bins["pip3"], bins["pip"]
+    findings = toolchain.run(
+        _ctx(tmp_path),
+        which=_which(bins),
+        probe=_probe({("-m", "pip", "--version"): 1}),
+        plat="windows",
+    )
+    pip_fail = _by_msg(findings, "'pip'/'pip3' not on PATH")
+    assert len(pip_fail) == 1
+    assert "python -m ensurepip" in (pip_fail[0].fix or "")
+    assert "py -m" not in (pip_fail[0].fix or "")
 
 
 def test_missing_git_fails(tmp_path):

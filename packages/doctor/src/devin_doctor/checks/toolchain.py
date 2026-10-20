@@ -12,16 +12,19 @@ a binary on PATH is ambiguous (the classic case: ``python3`` exists but
 ``python3 -m venv`` fails without ``python3-venv``):
 
 - ``python3`` / ``python`` / ``py`` — the interpreter pytest and venv
-  creation hang off (``py`` is the Windows launcher name; ``nodejs``
-  aliases ``node`` on older Debian);
+  creation hang off. Presence alone is not enough: each candidate must
+  answer ``--version``, so a Microsoft Store alias or broken shim that
+  resolves but cannot run falls through to the next name;
 - ``pip3`` / ``pip`` — and, when no script is on PATH, ``<python> -m
   pip --version``: a module that answers but exposes no script is
   degraded (WARN), not missing — bare ``pip`` still fails;
-- ``<python> -m venv --help`` then ``import ensurepip`` — the venv
-  module itself, and the pip-bootstrap half Debian splits into
-  ``python3-venv``. A venv that builds without pip IS env-missing —
-  the exact incident shape — so it FAILs rather than WARNs;
-- ``node``, ``npm``, ``git``.
+- ``<python> -m venv --help`` then ``import ensurepip`` **and** a
+  bundled-wheel listing — the venv module itself, the pip-bootstrap
+  half Debian splits into ``python3-venv``, and the partial install
+  whose ensurepip imports but ships no wheel to bootstrap from;
+- ``node``, ``npm``, ``git`` — an alias-only hit (``nodejs`` without
+  ``node``) is WARN, not PASS: the shell still cannot resolve the name
+  the build/test scripts actually invoke.
 
 Verdicts:
 
@@ -181,9 +184,14 @@ def _manager(plat: str, os_release: str) -> str | None:
     return None
 
 
-def _fix(tool: str, manager: str | None) -> str:
+def _fix(tool: str, manager: str | None, *, pyexe: str | None = None) -> str:
     if manager is not None:
-        return f"Install it: {_FIXES[tool][manager]}."
+        command = _FIXES[tool][manager]
+        # "py -m ensurepip" presumes the launcher — name the
+        # interpreter the probe actually resolved instead.
+        if tool == "pip" and manager == "winget" and pyexe is not None:
+            command = f"{Path(pyexe).stem} -m ensurepip"
+        return f"Install it: {command}."
     return (
         f"Install '{_PKG_NAMES[tool]}' with your package manager "
         "(apt/dnf/pacman/brew/winget)."
@@ -195,13 +203,26 @@ def _fix(tool: str, manager: str | None) -> str:
 
 def _python_finding(
     which: Callable[[str], str | None],
+    probe: Callable[
+        [Sequence[str]], subprocess.CompletedProcess[str] | None
+    ],
     manager: str | None,
 ) -> tuple[Finding, str | None]:
     """(finding, resolved interpreter path) — the path feeds the
-    ``-m venv``/``-m pip`` probes; ``None`` when nothing resolved."""
+    ``-m venv``/``-m pip`` probes; ``None`` when nothing resolved.
+
+    ``which`` only proves a file exists — a Microsoft Store
+    ``python.exe`` alias or a broken shim resolves but cannot run, so
+    each candidate must answer ``--version`` before it counts. A broken
+    shim falls through to the next name (a working ``py`` launcher
+    behind a dead ``python`` still wins)."""
+    broken: list[str] = []
     for name in _PYTHON_NAMES:
         resolved = which(name)
-        if resolved:
+        if not resolved:
+            continue
+        res = probe([resolved, "--version"])
+        if res is not None and res.returncode == 0:
             alias = "" if name == "python3" else f" (resolved as '{name}')"
             return (
                 Finding(
@@ -210,11 +231,32 @@ def _python_finding(
                 ),
                 resolved,
             )
+        if res is None:
+            # Unanswerable probe is 'unverified', never 'missing' —
+            # still hand the path downstream so the venv/pip probes
+            # can draw their own verdicts.
+            return (
+                Finding(
+                    CHECK_ID, Status.WARN,
+                    f"python on PATH at {resolved} but '--version' "
+                    "could not be probed",
+                ),
+                resolved,
+            )
+        broken.append(name)
+    if broken:
+        names = "', '".join(broken)
+        detail = (
+            f"'{names}' resolves on PATH but fails "
+            "to run (broken shim or Store alias); "
+        )
+    else:
+        detail = "'python3', 'python' and 'py' are all missing; "
     return (
         Finding(
             CHECK_ID, Status.FAIL,
-            "no Python interpreter on PATH — 'python3', 'python' and "
-            "'py' are all missing; pytest and venv creation cannot run",
+            f"no working Python interpreter on PATH — {detail}"
+            "pytest and venv creation cannot run",
             fix=_fix("python", manager),
         ),
         None,
@@ -255,7 +297,7 @@ def _pip_finding(
     return Finding(
         CHECK_ID, Status.FAIL,
         f"'pip'/'pip3' not on PATH{detail}",
-        fix=_fix("pip", manager),
+        fix=_fix("pip", manager, pyexe=pyexe),
     )
 
 
@@ -298,6 +340,30 @@ def _venv_finding(
             "venvs get no pip (Debian splits this into 'python3-venv')",
             fix=_fix("venv", manager),
         )
+    # Importable is not bootstrappable: a partial install can ship
+    # ensurepip without its bundled wheels, and ``python -m venv``
+    # then dies inside ``_setup_pip``.
+    wheels_probe = (
+        "import os, ensurepip, sys; "
+        "d = os.path.join(os.path.dirname(ensurepip.__file__), "
+        "'_bundled'); "
+        "sys.exit(0 if os.path.isdir(d) and "
+        "any(n.endswith('.whl') for n in os.listdir(d)) else 1)"
+    )
+    wheels = probe([pyexe, "-c", wheels_probe])
+    if wheels is None:
+        return Finding(
+            CHECK_ID, Status.WARN,
+            "ensurepip imports but its bundled-wheel probe did not "
+            "answer — pip bootstrap inside fresh venvs unverified",
+        )
+    if wheels.returncode != 0:
+        return Finding(
+            CHECK_ID, Status.FAIL,
+            "ensurepip imports but bundles no pip wheel — fresh venvs "
+            "fail during pip bootstrap",
+            fix=_fix("venv", manager),
+        )
     return Finding(
         CHECK_ID, Status.PASS,
         f"'{pyexe} -m venv' works and ensurepip can bootstrap pip",
@@ -313,10 +379,19 @@ def _binary_finding(
     for name in names:
         resolved = which(name)
         if resolved:
-            alias = "" if name == tool else f" (resolved as '{name}')"
+            if name != tool:
+                # An alias binary does not make the shell resolve the
+                # real name: with only 'nodejs', every 'node ...'
+                # invocation in test/build scripts still fails.
+                return Finding(
+                    CHECK_ID, Status.WARN,
+                    f"only '{name}' on PATH at {resolved} — commands "
+                    f"invoking '{tool}' still fail",
+                    fix=_fix(tool, manager),
+                )
             return Finding(
                 CHECK_ID, Status.PASS,
-                f"'{tool}' on PATH at {resolved}{alias}",
+                f"'{tool}' on PATH at {resolved}",
             )
     return Finding(
         CHECK_ID, Status.FAIL,
@@ -343,7 +418,7 @@ def run(
     manager = _manager(plat, os_release)
 
     findings: list[Finding] = []
-    py_finding, pyexe = _python_finding(which, manager)
+    py_finding, pyexe = _python_finding(which, probe, manager)
     findings.append(py_finding)
     findings.append(_pip_finding(which, probe, pyexe, manager))
     venv = _venv_finding(probe, pyexe, manager)
