@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **CI** — `auto-approve` now calls the shared `pr-approve` reusable
+  workflow at v1.3 (was v1.1), keeping the Devin Review gate on the
+  current head commit.
 - **Feature** — `devin-doctor` gains an `automation` check for silently
   broken scheduled tasks: per-surface enumeration (user crontab,
   `systemd --user` units/timers including unloaded unit files, Windows
