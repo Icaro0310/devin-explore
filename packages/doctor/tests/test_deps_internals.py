@@ -672,3 +672,28 @@ def test_finder_keeps_raw_capture_on_invalid_escapes(tmp_path, monkeypatch):
     assert deps_internals._finder_targets(finder) == [
         "C:\\work\\repo\\src\\devin_foo"
     ]
+
+
+def test_finder_apostrophe_path_not_truncated(tmp_path):
+    """``"/checkout/O'Connor/src"`` must extract whole — a quote inside
+    the other quote style is content, not a terminator."""
+    finder = tmp_path / "__editable___devin_foo_1_2_3_finder.py"
+    finder.write_text(
+        'MAPPING = {"devin_foo": "/checkout/O\'Connor/src"}\n',
+        encoding="utf-8",
+    )
+    assert deps_internals._finder_targets(finder) == [
+        "/checkout/O'Connor/src"
+    ]
+
+
+def test_finder_adjacent_literals_stay_separate(tmp_path):
+    finder = tmp_path / "__editable___devin_foo_1_2_3_finder.py"
+    finder.write_text(
+        "MAPPING = {'a': '/checkout/one', 'b': '/checkout/two'}\n",
+        encoding="utf-8",
+    )
+    assert deps_internals._finder_targets(finder) == [
+        "/checkout/one",
+        "/checkout/two",
+    ]

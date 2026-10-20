@@ -79,7 +79,13 @@ _DIST_INFO_SUFFIX = ".dist-info"
 # editable installs carry an import line instead of a path line; the real
 # targets live as quoted absolute paths in the companion *_finder.py.
 _IMPORT_LINE_RE = re.compile(r"^import\s+([A-Za-z_][\w.]*)")
-_QUOTED_RE = re.compile(r"['\"]([^'\"]+)['\"]")
+_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
+
+
+def _inner(m: re.Match[str]) -> str:
+    """The inside of a quoted-literal regex match — group 1 is the
+    double-quoted alternative, group 2 the single-quoted one."""
+    return m.group(1) if m.group(1) is not None else m.group(2)
 # devin_* / devin-* installed distributions are 'internal'.
 _INTERNAL_DIST_PREFIX = "devin_"
 
@@ -255,7 +261,7 @@ def _finder_targets(finder: Path) -> list[str]:
                 # No real escapes to decode (or an unparsable literal):
                 # quoted text is verbatim path text — decoding single-
                 # backslash pseudo-escapes like \r or \t would mangle it.
-                entries = [m.group(1) for m in _QUOTED_RE.finditer(seg)]
+                entries = [_inner(m) for m in _QUOTED_RE.finditer(seg)]
             elif isinstance(value, dict):
                 entries = value.values()
             else:
@@ -266,7 +272,7 @@ def _finder_targets(finder: Path) -> list[str]:
                         targets.append(path)
     if not targets:  # nonstandard finder — decode bare literals instead
         for m in _QUOTED_RE.finditer(text):
-            decoded = m.group(1)
+            decoded = _inner(m)
             if "\\\\" in m.group(0):
                 try:
                     value = ast.literal_eval(m.group(0))
