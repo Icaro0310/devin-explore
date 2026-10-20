@@ -30,7 +30,8 @@ mismatched item is named in its own finding:
   with 'unknown package', so it reports WARN, not covered.
 
 Scope: ``ctx.cwd`` is the fan-out root when it holds ``packages/`` (every
-child dir is a candidate) or the container dir named ``packages`` itself;
+child dir is a candidate, non-Python members skipped) or the container
+dir named ``packages`` itself;
 a lone dir with a ``pyproject.toml`` is checked as a single package.
 ``ctx.packages`` (``--package NAME``) narrows the fan-out by dir or
 project name. Nothing package-shaped → one PASS 'nothing to verify'
@@ -105,7 +106,9 @@ def _package_dirs(cwd: Path) -> list[Path]:
     """Package dirs in scope, sorted.
 
     ``cwd/packages`` exists → every non-hidden child is a candidate (a
-    missing ``pyproject.toml`` inside is itself a finding). A ``cwd``
+    missing ``pyproject.toml`` inside is a finding *only* when the dir
+    carries Python-package signals — non-Python members like an npm
+    bridge or a VS Code extension are skipped). A ``cwd``
     named ``packages`` → same child scan. Else ``cwd`` with a
     ``pyproject.toml`` — or a bare ``src/`` dir, the mark of an
     in-progress package — → the single package. Anything else → empty.
@@ -513,6 +516,35 @@ def _build_wheel(pkg: Path, expect: _BuildExpect) -> str | None:
         return f"exit {proc.returncode}, no wheel produced"
 
 
+def _python_signals(pkg: Path) -> bool:
+    """Does the dir intend to be a Python package? ``setup.py``/
+    ``setup.cfg``, any top-level ``*.py``, or a ``src/`` tree holding a
+    ``.py`` file up to one level deep (flat module or import package).
+    A ``packages/*`` member with none of these — an npm bridge, a VS
+    Code extension, a docs dir — is not a PyPI candidate, so its missing
+    pyproject.toml is skipped, not failed."""
+    if (pkg / "setup.py").is_file() or (pkg / "setup.cfg").is_file():
+        return True
+    try:
+        if any(c.suffix == ".py" for c in pkg.iterdir()):
+            return True
+    except OSError:
+        pass
+    src = pkg / "src"
+    if src.is_dir():
+        try:
+            for child in src.iterdir():
+                if child.suffix == ".py":
+                    return True
+                if child.is_dir() and any(
+                    p.suffix == ".py" for p in child.iterdir()
+                ):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def _metadata_findings(label: str, meta: dict[str, Any] | None, err: str | None):
     """pyproject parse + [project] name/version gate."""
     if err is not None:
@@ -877,6 +909,12 @@ def _check_package(
     dist_version: Callable[[str], str | None],
 ) -> list[Finding]:
     label = _label(ctx.cwd, pkg)
+    if not (pkg / "pyproject.toml").is_file() and not _python_signals(pkg):
+        return [Finding(
+            CHECK_ID, Status.PASS,
+            f"{label}: not a Python package (no .py/setup files) — "
+            "skipped",
+        )]
     findings, project = _metadata_findings(label, meta, err)
     if project is None:
         return findings

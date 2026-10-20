@@ -169,7 +169,11 @@ def test_cwd_can_be_the_packages_container(tmp_path):
 
 def test_missing_pyproject_fails(tmp_path):
     pkg = tmp_path / "noproj"
-    (pkg / "src").mkdir(parents=True)  # package-shaped, no pyproject
+    # An in-progress Python package: src/<mod>/__init__.py but no
+    # pyproject — the check must still FAIL it.
+    mod = pkg / "src" / "noproj"
+    mod.mkdir(parents=True)
+    (mod / "__init__.py").write_text("", encoding="utf-8")
     findings = publish.run(
         _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
@@ -179,13 +183,64 @@ def test_missing_pyproject_fails(tmp_path):
 
 def test_missing_pyproject_under_packages_fails(tmp_path):
     write_repo(tmp_path)
-    (tmp_path / "packages" / "noproj").mkdir()
+    noproj = tmp_path / "packages" / "noproj"
+    (noproj / "src" / "noproj").mkdir(parents=True)
+    (noproj / "src" / "noproj" / "__init__.py").write_text("", encoding="utf-8")
     findings = publish.run(
         _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
         "packages/noproj" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+# --- non-Python packages/* members are skipped -----------------------------
+
+
+def test_nonpython_member_skipped(tmp_path):
+    """An npm/VS-Code-style member (package.json + src/*.ts, no .py) is
+    not a PyPI candidate — PASS note, never a pyproject FAIL."""
+    write_repo(tmp_path)
+    bridge = tmp_path / "packages" / "bridge"
+    (bridge / "src").mkdir(parents=True)
+    (bridge / "src" / "index.ts").write_text("export {}\n", encoding="utf-8")
+    (bridge / "package.json").write_text("{}\n", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/bridge" in f.message for f in fails)
+    assert any(
+        "packages/bridge" in f.message and "not a Python package" in f.message
+        for f in findings
+    )
+
+
+def test_empty_member_dir_skipped(tmp_path):
+    """An empty packages/ dir carries no publish intent either."""
+    write_repo(tmp_path)
+    (tmp_path / "packages" / "empty").mkdir()
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    assert not any(f.status is Status.FAIL for f in findings)
+
+
+def test_setup_py_signals_still_fails_without_pyproject(tmp_path):
+    """A setup.py legacy package can't ship through the pyproject-only
+    fan-out — the missing-pyproject FAIL still applies."""
+    write_repo(tmp_path)
+    legacy = tmp_path / "packages" / "legacy"
+    legacy.mkdir()
+    (legacy / "setup.py").write_text("from setuptools import setup\nsetup()\n", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/legacy" in f.message and "no pyproject.toml" in f.message
         for f in fails
     )
 
