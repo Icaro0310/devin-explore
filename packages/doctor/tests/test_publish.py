@@ -122,7 +122,7 @@ def _statuses(findings):
 
 def test_single_package_all_pass(tmp_path):
     pkg = write_pkg(tmp_path / "mypkg")
-    findings = publish.run(_ctx(pkg), build_probe=lambda: True, builder=_ok)
+    findings = publish.run(_ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok)
     assert findings, "expected findings"
     assert all(f.status is Status.PASS for f in findings)
     assert all(f.check == "publish-readiness" for f in findings)
@@ -136,7 +136,7 @@ def test_single_package_all_pass(tmp_path):
 def test_fanout_repo_root(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
-        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert all(f.status is Status.PASS for f in findings)
     labels = {f.message.split(":")[0] for f in findings}
@@ -147,7 +147,7 @@ def test_fanout_repo_root(tmp_path):
 
 def test_nothing_package_shaped_is_pass(tmp_path):
     findings = publish.run(
-        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert _statuses(findings) == [Status.PASS]
     assert "nothing to verify" in findings[0].message
@@ -157,7 +157,7 @@ def test_cwd_can_be_the_packages_container(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
         _ctx(tmp_path / "packages"),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=_ok,
     )
     assert all(f.status is Status.PASS for f in findings)
@@ -171,7 +171,7 @@ def test_missing_pyproject_fails(tmp_path):
     pkg = tmp_path / "noproj"
     (pkg / "src").mkdir(parents=True)  # package-shaped, no pyproject
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert _statuses(findings) == [Status.FAIL]
     assert "no pyproject.toml" in findings[0].message
@@ -181,7 +181,7 @@ def test_missing_pyproject_under_packages_fails(tmp_path):
     write_repo(tmp_path)
     (tmp_path / "packages" / "noproj").mkdir()
     findings = publish.run(
-        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
@@ -195,7 +195,7 @@ def test_invalid_toml_fails(tmp_path):
     pkg.mkdir()
     (pkg / "pyproject.toml").write_text("this is = = not toml\n")
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert _statuses(findings) == [Status.FAIL]
     assert "does not parse" in findings[0].message
@@ -208,7 +208,7 @@ def test_missing_name_and_version_fails(tmp_path):
         '[project]\ndescription = "x"\n'
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
@@ -220,7 +220,7 @@ def test_missing_name_and_version_fails(tmp_path):
 def test_missing_version_only_fails(tmp_path):
     pkg = write_pkg(tmp_path / "nover", version=None)
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any("missing version" in f.message for f in fails)
@@ -232,7 +232,7 @@ def test_dynamic_version_does_not_exempt_fails(tmp_path):
     wheel against [project].version — absent means FAIL either way."""
     pkg = write_pkg(tmp_path / "dynver", version=None, dynamic=["version"])
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any("missing version" in f.message for f in fails), findings
@@ -250,7 +250,7 @@ def test_no_src_layout_names_flat_module(tmp_path):
     pkg = write_pkg(tmp_path / "flat", src_layout=False)
     (pkg / "devin_foo.py").write_text('__version__ = "1.2.3"\n')
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any("no src/ layout" in f.message for f in fails)
@@ -264,7 +264,7 @@ def test_src_without_package_fails(tmp_path):
     (pkg / "src" / "devin_foo").rmdir()
     (pkg / "src" / "notes.txt").write_text("not a package")
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "holds no package" in f.message and f.status is Status.FAIL
@@ -275,7 +275,7 @@ def test_src_without_package_fails(tmp_path):
 def test_version_mismatch_fails_naming_both(tmp_path):
     pkg = write_pkg(tmp_path / "skew", version="1.2.3", init_version="9.9.9")
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
@@ -286,7 +286,7 @@ def test_version_mismatch_fails_naming_both(tmp_path):
 def test_missing_dunder_version_fails(tmp_path):
     pkg = write_pkg(tmp_path / "noversion", init_version=None)
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "no __version__" in f.message and f.status is Status.FAIL
@@ -303,7 +303,7 @@ def test_script_module_missing_fails(tmp_path):
         scripts={"devin-foo": "devin_foo.nope:main"},
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "'devin-foo'" in f.message and "devin_foo.nope" in f.message
@@ -317,7 +317,7 @@ def test_script_not_module_attr_fails(tmp_path):
         tmp_path / "badfmt", scripts={"devin-foo": "devin_foo.cli"}
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "'module:attr'" in f.message and f.status is Status.FAIL
@@ -330,7 +330,7 @@ def test_script_attr_not_found_warns(tmp_path):
         tmp_path / "noattr", scripts={"devin-foo": "devin_foo.cli:run"}
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "devin_foo.cli:run" in f.message and f.status is Status.WARN
@@ -342,7 +342,7 @@ def test_script_attr_not_found_warns(tmp_path):
 def test_no_scripts_is_library_pass(tmp_path):
     pkg = write_pkg(tmp_path / "lib", scripts={})
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert all(f.status is Status.PASS for f in findings)
     assert any("library-only" in f.message for f in findings)
@@ -355,7 +355,7 @@ def test_build_failure_fails_with_detail(tmp_path):
     pkg = write_pkg(tmp_path / "brokenbuild")
     findings = publish.run(
         _ctx(pkg),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=lambda _p, _e: "setuptools died",
     )
     assert any(
@@ -391,7 +391,7 @@ def test_build_runs_offline_when_tooling_exists(tmp_path, monkeypatch):
 
     pkg = write_pkg(tmp_path / "offline")
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=spy
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=spy
     )
     assert called == [1]
     assert any(
@@ -411,7 +411,7 @@ def test_no_wheel_build_env_optout(tmp_path, monkeypatch):
 
     pkg = write_pkg(tmp_path / "optout")
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=spy
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=spy
     )
     assert called == []
     assert any(
@@ -764,7 +764,7 @@ def test_gui_script_dead_callable_fails(tmp_path):
         gui_scripts={"devin-foo-gui": "devin_foo.nope:main"},
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "'devin-foo-gui'" in f.message
@@ -781,7 +781,7 @@ def test_gui_script_missing_attr_warns(tmp_path):
         gui_scripts={"devin-foo-gui": "devin_foo.cli:run"},
     )
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "devin_foo.cli:run" in f.message and f.status is Status.WARN
@@ -886,7 +886,7 @@ def test_wheel_entry_point_missing_fails(tmp_path):
 def test_coverage_hit_passes(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
-        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert any(
         "covers 'foo'" in f.message and f.status is Status.PASS
@@ -898,7 +898,7 @@ def test_coverage_miss_warns(tmp_path):
     root = write_repo(tmp_path)
     write_pkg(root / "packages" / "newpkg", name="devin-newpkg")
     findings = publish.run(
-        _ctx(root), build_probe=lambda: True, builder=_ok
+        _ctx(root), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     mine = [f for f in findings if f.message.startswith("packages/newpkg")]
     assert any(
@@ -939,7 +939,7 @@ jobs:
         encoding="utf-8",
     )
     findings = publish.run(
-        _ctx(root), build_probe=lambda: True, builder=_ok
+        _ctx(root), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     mine = [f for f in findings if f.message.startswith("packages/ghost")]
     assert any(
@@ -971,7 +971,7 @@ jobs:
         encoding="utf-8",
     )
     findings = publish.run(
-        _ctx(root), build_probe=lambda: True, builder=_ok
+        _ctx(root), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     mine = [f for f in findings if f.message.startswith("packages/foo")]
     assert any(
@@ -999,7 +999,7 @@ def test_package_scope_selects_one(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
         _ctx(tmp_path, packages=("foo",)),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=_ok,
     )
     assert findings
@@ -1010,7 +1010,7 @@ def test_package_scope_matches_project_name(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
         _ctx(tmp_path, packages=("devin-bar",)),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=_ok,
     )
     assert {f.message.split(":")[0] for f in findings} == {"packages/bar"}
@@ -1020,7 +1020,7 @@ def test_package_scope_unknown_name_warns(tmp_path):
     write_repo(tmp_path)
     findings = publish.run(
         _ctx(tmp_path, packages=("ghost",)),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=_ok,
     )
     assert _statuses(findings) == [Status.WARN]
@@ -1030,7 +1030,7 @@ def test_package_scope_unknown_name_warns(tmp_path):
 def test_package_scope_on_empty_dir_warns(tmp_path):
     findings = publish.run(
         _ctx(tmp_path, packages=("ghost",)),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=_ok,
     )
     assert _statuses(findings) == [Status.WARN]
@@ -1053,7 +1053,7 @@ def test_check_is_readonly_against_package_dir(tmp_path):
     pkg = write_pkg(tmp_path / "frozen")
     before = _tree(pkg)
     findings = publish.run(
-        _ctx(pkg), build_probe=lambda: True, builder=_ok
+        _ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     assert _tree(pkg) == before
     assert not (pkg / "dist").exists()
@@ -1161,7 +1161,7 @@ def test_real_wheel_build_stages_a_copy(tmp_path):
     produces a wheel without touching the source tree."""
     pkg = write_pkg(tmp_path / "realpkg")
     before = _tree(pkg)
-    findings = publish.run(_ctx(pkg), build_probe=lambda: True)
+    findings = publish.run(_ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None)
     assert any(
         "wheel builds" in f.message and f.status is Status.PASS
         for f in findings
@@ -1177,7 +1177,7 @@ def test_builder_called_with_package_dir(tmp_path):
     seen = []
     findings = publish.run(
         _ctx(pkg),
-        build_probe=lambda: True,
+        build_probe=lambda: True, dist_version=lambda _n: None,
         builder=lambda p, _e: seen.append(p) or None,
     )
     assert seen == [pkg]
@@ -1195,7 +1195,7 @@ def test_real_wheel_missing_declared_module_fails(tmp_path):
         scripts={"devin-foo": "devin_foo.cli:main",
                  "devin-foo-alt": "devin_foo.missing:main"},
     )
-    findings = publish.run(_ctx(pkg), build_probe=lambda: True)
+    findings = publish.run(_ctx(pkg), build_probe=lambda: True, dist_version=lambda _n: None)
     assert any(
         "does not contain" in f.message
         and "devin_foo.missing" in f.message
