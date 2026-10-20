@@ -6,17 +6,28 @@ the wheel building with ``__version__ == [project].version``. This check
 replays that contract locally, per package, fail-loud — every missing or
 mismatched item is named in its own finding:
 
-- ``pyproject.toml`` parses and ``[project]`` carries ``name``/``version``;
+- ``pyproject.toml`` parses and ``[project]`` carries a literal
+  ``name``/``version`` — the verify gate compares a built wheel against
+  it, so ``dynamic = ["version"]`` cannot stand in;
 - ``src/`` layout holds the import package (flat modules are named);
 - ``src/<mod>/__init__.py`` ``__version__`` equals ``[project].version``;
 - every declared ``[project.scripts]`` entry point resolves under ``src/``;
-- the wheel actually builds — ``python -m build --wheel --no-isolation``
-  run against a *copy* in a temp dir (the package dir is never written
-  to). When ``build``/``setuptools`` are absent — or ``--offline`` /
-  ``DEVIN_DOCTOR_OFFLINE=1`` pins the run local — a static-equivalent
-  pass over ``[build-system]`` stands in;
-- ``pypi-publish.yml``'s ``resolve`` case covers the package (WARN-only:
-  not every package under ``packages/`` publishes).
+- the wheel actually builds *and ships the declared modules* —
+  ``python -m build --wheel --no-isolation`` against a temp-dir *copy*
+  (the package dir is never written to), then the artifact is opened:
+  a missing declared module or a wheel ``__version__`` diverging from
+  ``[project].version`` is a FAIL. The build runs whenever ``build`` +
+  ``setuptools`` are importable — ``--offline`` included, it needs no
+  network — and WARNs 'unverified' instead of rubber-stamping PASS when
+  it cannot run (missing tooling, a local backend older than the
+  declared ``requires`` floor, or ``DEVIN_DOCTOR_NO_WHEEL_BUILD=1`` —
+  PEP 517 hooks execute the package's build backend, which is code from
+  the checkout);
+- ``pypi-publish.yml``'s ``resolve`` case covers the package — an arm
+  mapping the right ``dir=packages/<name>`` *and* ``mod`` — WARN-only
+  (not every package under ``packages/`` publishes). A package merely
+  listed in dispatch options or tag patterns still dies at publish time
+  with 'unknown package', so it reports WARN, not covered.
 
 Scope: ``ctx.cwd`` is the fan-out root when it holds ``packages/`` (every
 child dir is a candidate) or the container dir named ``packages`` itself;
@@ -29,6 +40,7 @@ checkout is a valid environment).
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import os
 import re
@@ -36,7 +48,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,12 +64,27 @@ _BUILD_TIMEOUT_S = 240
 # Bounds the upward hunt for .github/workflows/pypi-publish.yml — enough
 # for packages/<name> (2 levels) plus symlinked/nested worktree layouts.
 _MAX_UPWARD = 6
+# Opt-out for the wheel-build leg: PEP 517 hooks execute the package's
+# build backend, so an untrusted checkout means running its code.
+_NO_BUILD_ENV = "DEVIN_DOCTOR_NO_WHEEL_BUILD"
 
 _VERSION_RE = re.compile(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
+# One resolve arm: `doctor)  echo "dir=packages/doctor" >> ...;
+# echo "mod=devin_doctor" >> ... ;;` — the mod output is optional (an arm
+# without it still counts as dir coverage, it just skips the mod check).
 _ARM_RE = re.compile(
-    r"^\s*[A-Za-z0-9_-]+\)\s+echo\s+\"dir=packages/([^\"]+)\"", re.MULTILINE
+    r'^\s*([A-Za-z0-9_-]+)\)\s+echo\s+"dir=packages/([^"]+)"'
+    r'(?:.*?echo\s+"mod=([^"]+)")?',
+    re.MULTILINE,
 )
 _OPTIONS_BLOCK_RE = re.compile(r"options:\s*\n((?:\s*-\s*\S+\s*\n)+)")
+_TAG_RE = re.compile(r"['\"]([A-Za-z0-9_-]+)-v\*['\"]")
+# `setuptools>=68`-style floor in [build-system].requires — used to detect
+# a local backend older than the declaration (a no-isolation build would
+# then fail for environment reasons, not package reasons).
+_REQUIREMENT_RE = re.compile(
+    r"^\s*([A-Za-z0-9_-]+)\s*>=\s*([0-9][0-9A-Za-z.]*)\s*$"
+)
 _IGNORE_ON_COPY = shutil.ignore_patterns(
     ".git", "dist", "build", "__pycache__", "*.egg-info",
     ".venv", "*.pyc", ".mypy_cache", ".pytest_cache", ".ruff_cache",
@@ -182,21 +211,36 @@ def _find_publish_workflow(start: Path) -> Path | None:
     return None
 
 
-def _publish_coverage(workflow: Path) -> set[str] | None:
-    """Package names the fan-out resolves: ``dir=packages/<name>`` arms
-    plus the ``workflow_dispatch`` ``options`` list. ``None`` when the
-    file cannot be read."""
+def _publish_coverage(
+    workflow: Path,
+) -> tuple[dict[str, tuple[str, str | None]], set[str]] | None:
+    """(resolve arms, referenced names) from pypi-publish.yml.
+
+    ``arms`` maps each ``resolve`` case label to ``(dir, mod)`` — only
+    these prove a tag/dispatch selection actually reaches a package.
+    ``referenced`` collects names mentioned by dispatch ``options`` or
+    ``<name>-v*`` tag patterns: a package listed there but without a
+    resolve arm fails at publish time with 'unknown package', so it must
+    not count as covered."""
     try:
         text = workflow.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    covered = set(_ARM_RE.findall(text))
+    arms = {
+        m.group(1): (m.group(2), m.group(3))
+        for m in _ARM_RE.finditer(text)
+    }
+    referenced = set(_TAG_RE.findall(text))
     block = _OPTIONS_BLOCK_RE.search(text)
     if block:
-        covered.update(
-            re.findall(r"^\s*-\s*([A-Za-z0-9_-]+)\s*$", block.group(1), re.MULTILINE)
+        referenced.update(
+            re.findall(
+                r"^\s*-\s*([A-Za-z0-9_-]+)\s*$",
+                block.group(1),
+                re.MULTILINE,
+            )
         )
-    return covered
+    return arms, referenced
 
 
 def _build_available() -> bool:
@@ -209,10 +253,105 @@ def _build_available() -> bool:
     )
 
 
-def _build_wheel(pkg: Path) -> str | None:
-    """Build the wheel from a temp-dir *copy* of ``pkg``. Returns an
-    error string, or ``None`` when a ``.whl`` lands. Read-only against
-    the package dir — only the copy is built."""
+def _dist_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    parts = []
+    for piece in str(version).split("."):
+        digits = "".join(c for c in piece if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def _build_env_problem(
+    meta: dict[str, Any],
+    dist_version: Callable[[str], str | None],
+) -> str | None:
+    """Local build backend older than the declared ``requires`` floor —
+    a no-isolation build would fail for environment reasons, so the
+    finding reports 'unverified' instead of a misleading package FAIL."""
+    bs = meta.get("build-system")
+    if not isinstance(bs, dict):
+        return None
+    backend = bs.get("build-backend")
+    if not isinstance(backend, str):
+        return None
+    backend_root = backend.split(".", maxsplit=1)[0].replace("-", "_").lower()
+    requires = bs.get("requires")
+    if not isinstance(requires, list):
+        return None
+    for req in requires:
+        m = _REQUIREMENT_RE.match(str(req))
+        if not m or m.group(1).replace("-", "_").lower() != backend_root:
+            continue
+        installed = dist_version(m.group(1))
+        if installed is None:
+            return None  # cannot compare — let the build speak
+        if _version_key(installed) < _version_key(m.group(2)):
+            return (
+                f"local {m.group(1)} {installed} < declared "
+                f"'{m.group(0).strip()}'"
+            )
+    return None
+
+
+@dataclass(frozen=True)
+class _BuildExpect:
+    """What the produced wheel must contain, beyond merely existing."""
+
+    modules: tuple[str, ...] = ()  # import modules that must ship
+    init_module: str | None = None  # whose __init__.py carries __version__
+    version: str | None = None  # expected __version__ (None when dynamic)
+
+
+def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
+    """The publish gate checks the *wheel*, not the source tree — a wheel
+    that built but shipped without the declared module (wrong
+    ``packages.find`` config) or with a diverging ``__version__`` fails
+    here."""
+    try:
+        with zipfile.ZipFile(wheel) as zf:
+            names = set(zf.namelist())
+            missing: list[str] = []
+            init_rel: str | None = None
+            for mod in expect.modules:
+                rel = mod.replace(".", "/")
+                if f"{rel}/__init__.py" in names:
+                    if mod == expect.init_module:
+                        init_rel = f"{rel}/__init__.py"
+                elif f"{rel}.py" not in names:
+                    missing.append(mod)
+            if missing:
+                return (
+                    "built wheel does not contain module(s): "
+                    + ", ".join(missing)
+                )
+            if init_rel and expect.version:
+                text = zf.read(init_rel).decode("utf-8", errors="replace")
+                match = _VERSION_RE.search(text)
+                if match is None:
+                    return f"wheel {init_rel} has no __version__"
+                if match.group(1) != expect.version:
+                    return (
+                        f"wheel {init_rel} __version__ "
+                        f"'{match.group(1)}' != pyproject version "
+                        f"'{expect.version}'"
+                    )
+            return None
+    except (zipfile.BadZipFile, OSError, KeyError) as exc:
+        return f"built wheel unreadable: {exc}"
+
+
+def _build_wheel(pkg: Path, expect: _BuildExpect) -> str | None:
+    """Build the wheel from a temp-dir *copy* of ``pkg``, then verify the
+    artifact ships the declared modules and version. Returns an error
+    string, or ``None`` on success. Read-only against the package dir —
+    only the copy is built."""
     with tempfile.TemporaryDirectory(prefix="devin-doctor-build-") as tmp:
         work = Path(tmp) / "pkg"
         outdir = Path(tmp) / "dist"
@@ -235,7 +374,7 @@ def _build_wheel(pkg: Path) -> str | None:
             return f"python -m build could not start: {exc}"
         wheels = list(outdir.glob("*.whl")) if outdir.is_dir() else []
         if proc.returncode == 0 and wheels:
-            return None
+            return _wheel_errors(wheels[0], expect)
         for stream in (proc.stderr, proc.stdout):
             lines = (stream or "").strip().splitlines()
             if lines:
@@ -262,11 +401,9 @@ def _metadata_findings(label: str, meta: dict[str, Any] | None, err: str | None)
         key for key in ("name", "version")
         if not isinstance(project.get(key), str) or not project.get(key)
     ]
-    dynamic = project.get("dynamic")
-    if "version" in missing and isinstance(dynamic, list) and (
-        "version" in dynamic
-    ):
-        missing.remove("version")
+    # No dynamic-version exemption: this fan-out's verify gate compares a
+    # built wheel against [project].version, so an absent literal version
+    # fails the gate either way.
     if missing:
         return [Finding(
             CHECK_ID, Status.FAIL,
@@ -321,15 +458,8 @@ def _version_findings(
     if project is None:
         return []
     version = project.get("version")
-    dynamic = project.get("dynamic")
     if not isinstance(version, str) or not version:
-        if isinstance(dynamic, list) and "version" in dynamic:
-            return [Finding(
-                CHECK_ID, Status.WARN,
-                f"{label}: version is dynamic — __version__ sync cannot "
-                "be verified statically",
-            )]
-        return []  # the metadata finding already named it
+        return []  # the metadata finding already FAILs on it
     if mod is None:
         return [Finding(
             CHECK_ID, Status.FAIL,
@@ -435,9 +565,10 @@ def _build_findings(
     label: str,
     pkg: Path,
     meta: dict[str, Any] | None,
-    offline: bool,
+    expect: _BuildExpect,
     build_probe: Callable[[], bool],
-    builder: Callable[[Path], str | None],
+    builder: Callable[[Path, _BuildExpect], str | None],
+    dist_version: Callable[[str], str | None],
 ) -> list[Finding]:
     if not isinstance(meta, dict):
         return []
@@ -455,17 +586,31 @@ def _build_findings(
             fix='Add e.g. requires = ["setuptools>=68"], '
             'build-backend = "setuptools.build_meta".',
         )]
-    if offline or not build_probe():
-        reason = (
-            "offline mode" if offline
-            else "'build'/'setuptools' not importable"
-        )
+    # The staged --no-isolation build runs whenever the local tooling is
+    # importable — offline included: it needs no network, and skipping it
+    # is how broken wheels once PASSED the offline pre-commit gate. When
+    # no verification can run, the build reports WARN 'unverified',
+    # never a rubber-stamp PASS.
+    if os.environ.get(_NO_BUILD_ENV) == "1":
         return [Finding(
-            CHECK_ID, Status.PASS,
-            f"{label}: build metadata ok — real wheel build skipped "
-            f"({reason})",
+            CHECK_ID, Status.WARN,
+            f"{label}: wheel build unverified — disabled via "
+            f"{_NO_BUILD_ENV} (PEP 517 hooks execute the package's "
+            "declared backend)",
         )]
-    error = builder(pkg)
+    if not build_probe():
+        return [Finding(
+            CHECK_ID, Status.WARN,
+            f"{label}: wheel build unverified — 'build'/'setuptools' "
+            "not importable ([build-system] metadata checked only)",
+        )]
+    env_problem = _build_env_problem(meta, dist_version)
+    if env_problem is not None:
+        return [Finding(
+            CHECK_ID, Status.WARN,
+            f"{label}: wheel build unverified — {env_problem}",
+        )]
+    error = builder(pkg, expect)
     if error is not None:
         return [Finding(
             CHECK_ID, Status.FAIL,
@@ -475,13 +620,16 @@ def _build_findings(
         )]
     return [Finding(
         CHECK_ID, Status.PASS,
-        f"{label}: wheel builds (python -m build --wheel, "
-        "staged copy)",
+        f"{label}: wheel builds and ships the declared module(s) "
+        "(staged copy)",
     )]
 
 
 def _coverage_findings(
-    label: str, pkg: Path, project_name: str | None
+    label: str,
+    pkg: Path,
+    project_name: str | None,
+    mod: str | None,
 ) -> list[Finding]:
     workflow = _find_publish_workflow(pkg)
     if workflow is None:
@@ -490,29 +638,59 @@ def _coverage_findings(
             f"{label}: no pypi-publish.yml above this dir — fan-out "
             "coverage not applicable",
         )]
-    covered = _publish_coverage(workflow)
-    if covered is None:
+    parsed = _publish_coverage(workflow)
+    if parsed is None:
         return [Finding(
             CHECK_ID, Status.WARN,
             f"{label}: pypi-publish.yml unreadable — cannot verify "
             "fan-out coverage",
         )]
+    arms, referenced = parsed
     candidates = {pkg.name}
     if project_name:
         candidates.add(project_name)
         if project_name.startswith("devin-"):
             candidates.add(project_name.removeprefix("devin-"))
-    hit = candidates & covered
-    if hit:
+    # Covered means a `resolve` arm maps this package — dispatch options
+    # and tag patterns alone still exit 'unknown package' at publish.
+    arm_label = arm_dir = arm_mod = None
+    for key, (adir, amod) in arms.items():
+        if key in candidates or adir == pkg.name:
+            arm_label, arm_dir, arm_mod = key, adir, amod
+            break
+    if arm_label is not None:
+        if arm_dir != pkg.name:
+            return [Finding(
+                CHECK_ID, Status.WARN,
+                f"{label}: resolve arm '{arm_label}' maps "
+                f"dir=packages/{arm_dir}, not packages/{pkg.name}",
+                fix="Point the arm's dir output at this package dir.",
+            )]
+        if arm_mod is not None and mod is not None and arm_mod != mod:
+            return [Finding(
+                CHECK_ID, Status.WARN,
+                f"{label}: resolve arm '{arm_label}' maps "
+                f"mod={arm_mod} but the package ships '{mod}' — the "
+                "verify job checks the wrong module",
+                fix=f"Change the arm's mod output to {mod}.",
+            )]
         return [Finding(
             CHECK_ID, Status.PASS,
-            f"{label}: pypi-publish.yml covers '{min(hit)}'",
+            f"{label}: pypi-publish.yml resolve covers '{arm_label}'",
         )]
-    if not covered:
+    if candidates & referenced:
+        return [Finding(
+            CHECK_ID, Status.WARN,
+            f"{label}: '{pkg.name}' is referenced by pypi-publish.yml "
+            "(dispatch options/tag pattern) but no resolve arm maps it "
+            "— publishing would exit 'unknown package'",
+            fix=f"Add a '{pkg.name})' case to the resolve step.",
+        )]
+    if not arms and not referenced:
         return [Finding(
             CHECK_ID, Status.WARN,
             f"{label}: pypi-publish.yml found but no resolve case or "
-            "dispatch options parsed",
+            "references parsed",
         )]
     return [Finding(
         CHECK_ID, Status.WARN,
@@ -523,15 +701,27 @@ def _coverage_findings(
     )]
 
 
+def _script_modules(project: dict[str, Any]) -> list[str]:
+    """Module path of every declared console script, in order."""
+    scripts = project.get("scripts")
+    out: list[str] = []
+    if isinstance(scripts, dict):
+        for target in scripts.values():
+            module = str(target).partition(":")[0].strip()
+            if module:
+                out.append(module)
+    return out
+
+
 def _check_package(
     ctx: Context,
     pkg: Path,
     meta: dict[str, Any] | None,
     err: str | None,
     *,
-    offline: bool,
     build_probe: Callable[[], bool],
-    builder: Callable[[Path], str | None],
+    builder: Callable[[Path, _BuildExpect], str | None],
+    dist_version: Callable[[str], str | None],
 ) -> list[Finding]:
     label = _label(ctx.cwd, pkg)
     findings, project = _metadata_findings(label, meta, err)
@@ -542,10 +732,20 @@ def _check_package(
     findings += _layout_findings(label, pkg, src_pkgs, mod)
     findings += _version_findings(label, pkg, project, mod)
     findings += _scripts_findings(label, pkg, project)
-    findings += _build_findings(
-        label, pkg, meta, offline, build_probe, builder
+    version = project.get("version")
+    expect = _BuildExpect(
+        modules=tuple(
+            dict.fromkeys(
+                ([mod] if mod else []) + _script_modules(project)
+            )
+        ),
+        init_module=mod,
+        version=version if isinstance(version, str) else None,
     )
-    findings += _coverage_findings(label, pkg, project.get("name"))
+    findings += _build_findings(
+        label, pkg, meta, expect, build_probe, builder, dist_version
+    )
+    findings += _coverage_findings(label, pkg, project.get("name"), mod)
     return findings
 
 
@@ -553,7 +753,8 @@ def run(
     ctx: Context,
     *,
     build_probe: Callable[[], bool] = _build_available,
-    builder: Callable[[Path], str | None] = _build_wheel,
+    builder: Callable[[Path, _BuildExpect], str | None] = _build_wheel,
+    dist_version: Callable[[str], str | None] = _dist_version,
 ) -> list[Finding]:
     dirs = _package_dirs(ctx.cwd)
     if not dirs:
@@ -577,7 +778,6 @@ def run(
     wanted = set(ctx.packages)
     unmatched = set(wanted)
     findings: list[Finding] = []
-    offline = ctx.offline or os.environ.get("DEVIN_DOCTOR_OFFLINE") == "1"
     for pkg in dirs:
         meta, err = _load_pyproject(pkg)
         name = _project_name(meta)
@@ -587,7 +787,8 @@ def run(
         unmatched -= {pkg.name} | ({name} if name else set())
         findings += _check_package(
             ctx, pkg, meta, err,
-            offline=offline, build_probe=build_probe, builder=builder,
+            build_probe=build_probe, builder=builder,
+            dist_version=dist_version,
         )
     for name in sorted(unmatched):
         findings.append(Finding(

@@ -19,14 +19,6 @@ from devin_doctor.cli import main
 from devin_doctor.model import Context, Status
 
 
-@pytest.fixture(autouse=True)
-def _builds_allowed(monkeypatch):
-    """conftest pins DEVIN_DOCTOR_OFFLINE=1 for the updates check; the
-    publish check reads the same flag for its real-build leg, so tests
-    that inject a builder must see the env as online."""
-    monkeypatch.delenv("DEVIN_DOCTOR_OFFLINE", raising=False)
-
-
 def _ctx(cwd: Path, packages: tuple[str, ...] = ()) -> Context:
     return Context(data_dir=cwd, cwd=cwd, packages=packages)
 
@@ -41,6 +33,8 @@ def write_pkg(
     scripts: dict[str, str] | None = None,
     src_layout: bool = True,
     build_system: bool = True,
+    requires: str = "setuptools>=68",
+    dynamic: list[str] | None = None,
 ) -> Path:
     """A synthetic src-layout package: pyproject + src/<mod>/{__init__,cli}."""
     if scripts is None:
@@ -51,13 +45,16 @@ def write_pkg(
     if build_system:
         lines += [
             "[build-system]",
-            'requires = ["setuptools>=68"]',
+            f'requires = ["{requires}"]',
             'build-backend = "setuptools.build_meta"',
             "",
         ]
     lines += ["[project]", f'name = "{name}"']
     if version is not None:
         lines.append(f'version = "{version}"')
+    if dynamic:
+        items = ", ".join(f'"{d}"' for d in dynamic)
+        lines.append(f"dynamic = [{items}]")
     if scripts:
         lines += ["", "[project.scripts]"]
         lines += [f'{k} = "{v}"' for k, v in scripts.items()]
@@ -108,7 +105,7 @@ def write_repo(root: Path, names=("foo", "bar")) -> Path:
     return root
 
 
-def _ok(_pkg: Path) -> None:
+def _ok(_pkg: Path, _expect: publish._BuildExpect) -> None:
     return None
 
 
@@ -145,7 +142,9 @@ def test_fanout_repo_root(tmp_path):
 
 
 def test_nothing_package_shaped_is_pass(tmp_path):
-    findings = publish.run(_ctx(tmp_path))
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+    )
     assert _statuses(findings) == [Status.PASS]
     assert "nothing to verify" in findings[0].message
 
@@ -167,7 +166,9 @@ def test_cwd_can_be_the_packages_container(tmp_path):
 def test_missing_pyproject_fails(tmp_path):
     pkg = tmp_path / "noproj"
     (pkg / "src").mkdir(parents=True)  # package-shaped, no pyproject
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert _statuses(findings) == [Status.FAIL]
     assert "no pyproject.toml" in findings[0].message
 
@@ -175,7 +176,9 @@ def test_missing_pyproject_fails(tmp_path):
 def test_missing_pyproject_under_packages_fails(tmp_path):
     write_repo(tmp_path)
     (tmp_path / "packages" / "noproj").mkdir()
-    findings = publish.run(_ctx(tmp_path))
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, builder=_ok
+    )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
         "packages/noproj" in f.message and "no pyproject.toml" in f.message
@@ -187,7 +190,9 @@ def test_invalid_toml_fails(tmp_path):
     pkg = tmp_path / "bad"
     pkg.mkdir()
     (pkg / "pyproject.toml").write_text("this is = = not toml\n")
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert _statuses(findings) == [Status.FAIL]
     assert "does not parse" in findings[0].message
 
@@ -198,7 +203,9 @@ def test_missing_name_and_version_fails(tmp_path):
     (pkg / "pyproject.toml").write_text(
         '[project]\ndescription = "x"\n'
     )
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
         "missing name" in f.message and "version" in f.message
@@ -208,9 +215,28 @@ def test_missing_name_and_version_fails(tmp_path):
 
 def test_missing_version_only_fails(tmp_path):
     pkg = write_pkg(tmp_path / "nover", version=None)
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any("missing version" in f.message for f in fails)
+
+
+def test_dynamic_version_does_not_exempt_fails(tmp_path):
+    """Regression (review): dynamic = ["version"] used to waive the
+    missing literal version. This fan-out's verify gate compares a built
+    wheel against [project].version — absent means FAIL either way."""
+    pkg = write_pkg(tmp_path / "dynver", version=None, dynamic=["version"])
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any("missing version" in f.message for f in fails), findings
+    # and no stray WARN pretending the dynamic version was checked
+    assert not any(
+        "dynamic" in f.message and f.status is Status.WARN
+        for f in findings
+    )
 
 
 # --- src layout / version sync ----------------------------------------------
@@ -219,7 +245,9 @@ def test_missing_version_only_fails(tmp_path):
 def test_no_src_layout_names_flat_module(tmp_path):
     pkg = write_pkg(tmp_path / "flat", src_layout=False)
     (pkg / "devin_foo.py").write_text('__version__ = "1.2.3"\n')
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any("no src/ layout" in f.message for f in fails)
     assert any("devin_foo.py" in f.message for f in fails)
@@ -231,7 +259,9 @@ def test_src_without_package_fails(tmp_path):
         p.unlink()
     (pkg / "src" / "devin_foo").rmdir()
     (pkg / "src" / "notes.txt").write_text("not a package")
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert any(
         "holds no package" in f.message and f.status is Status.FAIL
         for f in findings
@@ -240,7 +270,9 @@ def test_src_without_package_fails(tmp_path):
 
 def test_version_mismatch_fails_naming_both(tmp_path):
     pkg = write_pkg(tmp_path / "skew", version="1.2.3", init_version="9.9.9")
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     fails = [f for f in findings if f.status is Status.FAIL]
     assert any(
         "9.9.9" in f.message and "1.2.3" in f.message for f in fails
@@ -249,7 +281,9 @@ def test_version_mismatch_fails_naming_both(tmp_path):
 
 def test_missing_dunder_version_fails(tmp_path):
     pkg = write_pkg(tmp_path / "noversion", init_version=None)
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert any(
         "no __version__" in f.message and f.status is Status.FAIL
         for f in findings
@@ -264,7 +298,9 @@ def test_script_module_missing_fails(tmp_path):
         tmp_path / "badscript",
         scripts={"devin-foo": "devin_foo.nope:main"},
     )
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert any(
         "'devin-foo'" in f.message and "devin_foo.nope" in f.message
         and f.status is Status.FAIL
@@ -276,7 +312,9 @@ def test_script_not_module_attr_fails(tmp_path):
     pkg = write_pkg(
         tmp_path / "badfmt", scripts={"devin-foo": "devin_foo.cli"}
     )
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert any(
         "'module:attr'" in f.message and f.status is Status.FAIL
         for f in findings
@@ -287,7 +325,9 @@ def test_script_attr_not_found_warns(tmp_path):
     pkg = write_pkg(
         tmp_path / "noattr", scripts={"devin-foo": "devin_foo.cli:run"}
     )
-    findings = publish.run(_ctx(pkg))
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
     assert any(
         "devin_foo.cli:run" in f.message and f.status is Status.WARN
         for f in findings
@@ -312,7 +352,7 @@ def test_build_failure_fails_with_detail(tmp_path):
     findings = publish.run(
         _ctx(pkg),
         build_probe=lambda: True,
-        builder=lambda p: "setuptools died",
+        builder=lambda _p, _e: "setuptools died",
     )
     assert any(
         "wheel build failed" in f.message
@@ -322,26 +362,79 @@ def test_build_failure_fails_with_detail(tmp_path):
     )
 
 
-def test_build_static_when_tooling_absent(tmp_path):
+def test_build_unverified_when_tooling_absent(tmp_path):
+    """No local build tooling → WARN 'unverified', never a PASS that
+    pretends the wheel was exercised."""
     pkg = write_pkg(tmp_path / "static")
     findings = publish.run(_ctx(pkg), build_probe=lambda: False)
-    assert all(f.status is Status.PASS for f in findings)
-    assert any("skipped" in f.message for f in findings)
+    assert any(
+        "unverified" in f.message and f.status is Status.WARN
+        for f in findings
+    )
+    assert not any("wheel builds" in f.message for f in findings)
 
 
-def test_build_skipped_offline(tmp_path, monkeypatch):
+def test_build_runs_offline_when_tooling_exists(tmp_path, monkeypatch):
+    """Regression (review): offline mode used to skip the build leg,
+    letting broken wheels PASS the offline gate. --no-isolation needs
+    no network, so offline must still build."""
     monkeypatch.setenv("DEVIN_DOCTOR_OFFLINE", "1")
     called = []
 
-    def spy(_pkg):
+    def spy(_pkg, _expect):
         called.append(1)
+        return "boom"
 
     pkg = write_pkg(tmp_path / "offline")
     findings = publish.run(
         _ctx(pkg), build_probe=lambda: True, builder=spy
     )
-    assert called == []  # offline never spawns the builder
-    assert any("offline mode" in f.message for f in findings)
+    assert called == [1]
+    assert any(
+        "wheel build failed" in f.message and f.status is Status.FAIL
+        for f in findings
+    )
+
+
+def test_no_wheel_build_env_optout(tmp_path, monkeypatch):
+    """DEVIN_DOCTOR_NO_WHEEL_BUILD=1 documents the trust boundary —
+    PEP 517 hooks execute the checkout's backend — and reports WARN."""
+    monkeypatch.setenv("DEVIN_DOCTOR_NO_WHEEL_BUILD", "1")
+    called = []
+
+    def spy(_pkg, _expect):
+        called.append(1)
+
+    pkg = write_pkg(tmp_path / "optout")
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=spy
+    )
+    assert called == []
+    assert any(
+        "unverified" in f.message
+        and "DEVIN_DOCTOR_NO_WHEEL_BUILD" in f.message
+        and f.status is Status.WARN
+        for f in findings
+    )
+
+
+def test_old_local_backend_warns_unverified(tmp_path):
+    """A local setuptools older than the declared requires floor would
+    fail the no-isolation build for environment reasons — report the
+    env problem, not a package FAIL."""
+    pkg = write_pkg(tmp_path / "oldback", requires="setuptools>=68")
+    findings = publish.run(
+        _ctx(pkg),
+        build_probe=lambda: True,
+        builder=lambda _p, _e: None,
+        dist_version=lambda _name: "61.0",
+    )
+    assert any(
+        "unverified" in f.message
+        and "setuptools 61.0" in f.message
+        and f.status is Status.WARN
+        for f in findings
+    ), [f.message for f in findings]
 
 
 def test_missing_build_system_fails(tmp_path):
@@ -351,6 +444,81 @@ def test_missing_build_system_fails(tmp_path):
         "[build-system]" in f.message and f.status is Status.FAIL
         for f in findings
     )
+
+
+# --- wheel artifact contents -------------------------------------------------
+
+
+def _fake_wheel(path: Path, members: dict[str, str]) -> Path:
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as zf:
+        for arc, body in members.items():
+            zf.writestr(arc, body)
+    return path
+
+
+def test_wheel_missing_module_fails(tmp_path):
+    """Regression (review): a wheel that built but shipped without the
+    declared import module used to PASS — existence was all we checked."""
+    wheel = _fake_wheel(
+        tmp_path / "devin_foo-1.2.3-py3-none-any.whl",
+        {"other/__init__.py": ""},
+    )
+    err = publish._wheel_errors(
+        wheel, publish._BuildExpect(modules=("devin_foo",))
+    )
+    assert err is not None and "devin_foo" in err
+
+
+def test_wheel_version_mismatch_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "devin_foo-9.9.9-py3-none-any.whl",
+        {"devin_foo/__init__.py": '__version__ = "9.9.9"\n'},
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+        ),
+    )
+    assert err is not None and "9.9.9" in err and "1.2.3" in err
+
+
+def test_wheel_missing_script_module_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "devin_foo-1.2.3-py3-none-any.whl",
+        {"devin_foo/__init__.py": '__version__ = "1.2.3"\n'},
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+        ),
+    )
+    assert err is not None and "devin_foo.cli" in err
+
+
+def test_wheel_ok_returns_none(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "devin_foo-1.2.3-py3-none-any.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+        },
+    )
+    assert publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+        ),
+    ) is None
 
 
 # --- pypi-publish.yml fan-out coverage ---------------------------------------
@@ -378,6 +546,81 @@ def test_coverage_miss_warns(tmp_path):
         "not covered" in f.message and f.status is Status.WARN
         for f in mine
     )
+
+
+def test_dispatch_option_without_arm_warns(tmp_path):
+    """Regression (review): coverage used to union dispatch options with
+    resolve arms, so a package listed in options but with no arm read as
+    covered — publishing it would exit 'unknown package'."""
+    root = tmp_path
+    write_pkg(root / "packages" / "foo", name="devin-foo")
+    write_pkg(root / "packages" / "ghost", name="devin-ghost")
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "pypi-publish.yml").write_text(
+        """name: publish
+on:
+  push:
+    tags: ['foo-v*', 'ghost-v*']
+  workflow_dispatch:
+    inputs:
+      package:
+        type: choice
+        options:
+          - foo
+          - ghost
+jobs:
+  resolve:
+    steps:
+      - run: |
+          case "$base" in
+            foo)  echo "dir=packages/foo" >> "$GITHUB_OUTPUT"; echo "mod=devin_foo" ;;
+          esac
+""",
+        encoding="utf-8",
+    )
+    findings = publish.run(
+        _ctx(root), build_probe=lambda: True, builder=_ok
+    )
+    mine = [f for f in findings if f.message.startswith("packages/ghost")]
+    assert any(
+        "no resolve arm" in f.message and f.status is Status.WARN
+        for f in mine
+    ), [f.message for f in mine]
+    assert not any(
+        "resolve covers 'ghost'" in f.message for f in mine
+    )
+
+
+def test_arm_wrong_module_warns(tmp_path):
+    """Regression (review): an arm mapping the right dir but the wrong
+    mod makes the verify job check a module that isn't the package's."""
+    root = tmp_path
+    write_pkg(root / "packages" / "foo", name="devin-foo")
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "pypi-publish.yml").write_text(
+        """name: publish
+jobs:
+  resolve:
+    steps:
+      - run: |
+          case "$base" in
+            foo)  echo "dir=packages/foo" >> "$GITHUB_OUTPUT"; echo "mod=devin_wrong" ;;
+          esac
+""",
+        encoding="utf-8",
+    )
+    findings = publish.run(
+        _ctx(root), build_probe=lambda: True, builder=_ok
+    )
+    mine = [f for f in findings if f.message.startswith("packages/foo")]
+    assert any(
+        "mod=devin_wrong" in f.message
+        and "devin_foo" in f.message
+        and f.status is Status.WARN
+        for f in mine
+    ), [f.message for f in mine]
 
 
 def test_coverage_not_applicable_passes(tmp_path):
@@ -426,7 +669,11 @@ def test_package_scope_unknown_name_warns(tmp_path):
 
 
 def test_package_scope_on_empty_dir_warns(tmp_path):
-    findings = publish.run(_ctx(tmp_path, packages=("ghost",)))
+    findings = publish.run(
+        _ctx(tmp_path, packages=("ghost",)),
+        build_probe=lambda: True,
+        builder=_ok,
+    )
     assert _statuses(findings) == [Status.WARN]
 
 
@@ -495,7 +742,10 @@ def test_cli_json_lists_findings(tmp_path, capsys):
         f for f in payload["findings"]
         if f["check"] == "publish-readiness"
     ]
-    assert mine and all(f["status"] == "PASS" for f in mine)
+    # the build leg is PASS where build+setuptools exist, WARN
+    # 'unverified' elsewhere — never FAIL on this healthy package
+    assert mine and all(f["status"] != "FAIL" for f in mine)
+    assert any(f["status"] == "PASS" for f in mine)
 
 
 def test_cli_package_flag_scopes(tmp_path, capsys):
@@ -548,7 +798,27 @@ def test_builder_called_with_package_dir(tmp_path):
     findings = publish.run(
         _ctx(pkg),
         build_probe=lambda: True,
-        builder=lambda p: seen.append(p) or None,
+        builder=lambda p, _e: seen.append(p) or None,
     )
     assert seen == [pkg]
     assert findings
+
+
+@pytest.mark.skipif(
+    not _BUILD_TOOLS, reason="python -m build + setuptools not installed"
+)
+def test_real_wheel_missing_declared_module_fails(tmp_path):
+    """End-to-end regression: the wheel builds fine but ships without a
+    declared script module — the artifact check must FAIL it."""
+    pkg = write_pkg(
+        tmp_path / "halfbaked",
+        scripts={"devin-foo": "devin_foo.cli:main",
+                 "devin-foo-alt": "devin_foo.missing:main"},
+    )
+    findings = publish.run(_ctx(pkg), build_probe=lambda: True)
+    assert any(
+        "does not contain" in f.message
+        and "devin_foo.missing" in f.message
+        and f.status is Status.FAIL
+        for f in findings
+    ), [f.message for f in findings]
