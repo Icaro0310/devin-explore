@@ -245,6 +245,75 @@ def test_setup_py_signals_still_fails_without_pyproject(tmp_path):
     )
 
 
+def test_flat_layout_member_still_fails(tmp_path):
+    """``packages/tool/tool/__init__.py`` with no project metadata is a
+    flat-layout package in progress — FAIL, not skipped."""
+    write_repo(tmp_path)
+    mod = tmp_path / "packages" / "tool" / "tool"
+    mod.mkdir(parents=True)
+    (mod / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/tool" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_nested_namespace_member_still_fails(tmp_path):
+    """``src/acme/tools/__init__.py`` — a deeper src nesting — still
+    counts as Python intent."""
+    write_repo(tmp_path)
+    ns = tmp_path / "packages" / "ns" / "src" / "acme" / "tools"
+    ns.mkdir(parents=True)
+    (ns / "__init__.py").write_text("", encoding="utf-8")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/ns" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
+def test_dangling_pyproject_symlink_fails(tmp_path):
+    """A broken ``pyproject.toml`` symlink is publish intent gone wrong
+    — the metadata leg reports it instead of the skip hiding it."""
+    write_repo(tmp_path)
+    broken = tmp_path / "packages" / "broken"
+    broken.mkdir()
+    (broken / "pyproject.toml").symlink_to(broken / "gone.toml")
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any("packages/broken" in f.message for f in fails)
+
+
+def test_publish_target_never_skipped(tmp_path):
+    """A resolve arm mapping ``dir=packages/<name>`` makes the member a
+    publish target: gutted of Python files it must FAIL, not skip."""
+    write_repo(tmp_path)
+    gutted = tmp_path / "packages" / "foo"
+    for child in list(gutted.iterdir()):
+        if child.is_dir():
+            import shutil
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    findings = publish.run(
+        _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
+    )
+    fails = [f for f in findings if f.status is Status.FAIL]
+    assert any(
+        "packages/foo" in f.message and "no pyproject.toml" in f.message
+        for f in fails
+    )
+
+
 def test_invalid_toml_fails(tmp_path):
     pkg = tmp_path / "bad"
     pkg.mkdir()

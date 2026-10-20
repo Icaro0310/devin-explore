@@ -518,31 +518,57 @@ def _build_wheel(pkg: Path, expect: _BuildExpect) -> str | None:
 
 def _python_signals(pkg: Path) -> bool:
     """Does the dir intend to be a Python package? ``setup.py``/
-    ``setup.cfg``, any top-level ``*.py``, or a ``src/`` tree holding a
-    ``.py`` file up to one level deep (flat module or import package).
+    ``setup.cfg``, any top-level ``*.py``, a top-level import-package
+    dir (``<name>/__init__.py``, the flat layout), or any ``.py``
+    anywhere under ``src/`` — including nested namespace packages.
     A ``packages/*`` member with none of these — an npm bridge, a VS
     Code extension, a docs dir — is not a PyPI candidate, so its missing
-    pyproject.toml is skipped, not failed."""
+    pyproject.toml is skipped, not failed. The scan never descends
+    outside ``src/`` or below the root level, so ``node_modules`` and
+    build outputs cannot trigger a false positive."""
     if (pkg / "setup.py").is_file() or (pkg / "setup.cfg").is_file():
         return True
     try:
-        if any(c.suffix == ".py" for c in pkg.iterdir()):
-            return True
+        for child in pkg.iterdir():
+            if child.suffix == ".py":
+                return True
+            if child.is_dir() and (child / "__init__.py").is_file():
+                return True
     except OSError:
         pass
     src = pkg / "src"
     if src.is_dir():
         try:
-            for child in src.iterdir():
-                if child.suffix == ".py":
-                    return True
-                if child.is_dir() and any(
-                    p.suffix == ".py" for p in child.iterdir()
-                ):
-                    return True
+            return any(p.suffix == ".py" for p in src.rglob("*.py"))
         except OSError:
-            pass
+            return False
     return False
+
+
+def _has_pyproject(pkg: Path) -> bool:
+    """A ``pyproject.toml`` *entry* exists — file, directory or even a
+    dangling symlink. Any of those is publish intent: the metadata leg
+    reports what is wrong with it instead of the dir riding the
+    non-Python skip."""
+    path = pkg / "pyproject.toml"
+    return path.exists() or path.is_symlink()
+
+
+def _is_publish_target(pkg: Path) -> bool:
+    """A ``pypi-publish.yml`` resolve arm mapping ``dir=packages/<pkg>``
+    — or a dispatch-option/tag reference to it — makes this dir a real
+    publish target: a missing pyproject there fails the release, so the
+    non-Python skip must not apply."""
+    workflow = _find_publish_workflow(pkg)
+    if workflow is None:
+        return False
+    parsed = _publish_coverage(workflow)
+    if parsed is None:
+        return False
+    arms, referenced = parsed
+    if pkg.name in referenced:
+        return True
+    return any(adir == pkg.name for adir, _mod in arms.values())
 
 
 def _metadata_findings(label: str, meta: dict[str, Any] | None, err: str | None):
@@ -909,7 +935,11 @@ def _check_package(
     dist_version: Callable[[str], str | None],
 ) -> list[Finding]:
     label = _label(ctx.cwd, pkg)
-    if not (pkg / "pyproject.toml").is_file() and not _python_signals(pkg):
+    if (
+        not _has_pyproject(pkg)
+        and not _python_signals(pkg)
+        and not _is_publish_target(pkg)
+    ):
         return [Finding(
             CHECK_ID, Status.PASS,
             f"{label}: not a Python package (no .py/setup files) — "
