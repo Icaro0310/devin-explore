@@ -22,6 +22,7 @@ def test_check_healthy_exit_0(ctx, capsys):
         "hooks-windows",
         "disk",
         "automation",
+        "path-check",
     ):
         assert check_id in out
 
@@ -82,6 +83,7 @@ def test_check_json_schema(ctx, capsys):
         "disk",
         "updates",
         "automation",
+        "path-check",
     }
     # Extension contract: the VS Code adapter gates on a parseable version
     # and renders all three summary counters.
@@ -160,6 +162,7 @@ def test_surface_scope_filters_surface_checks(ctx, capsys):
     assert "not detected" not in out  # only the scoped surface ran
     for check_id in (
         "health-of-data", "config", "disk", "updates", "automation",
+        "path-check",
     ):
         assert check_id in out  # devin checks always run
 

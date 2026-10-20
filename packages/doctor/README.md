@@ -136,6 +136,7 @@ than hard failures, so the tool is still useful on agent-only machines:
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
 | `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
 | `automation` | scheduled tasks per surface — user crontab, `systemd --user` services/timers (loaded units plus installed unit files, so unloaded timers are still seen), Windows Task Scheduler: referenced paths/binaries that no longer exist (**FAIL**), tasks removed since the last run (**FAIL**, via a snapshot at `<data-dir>/doctor/automation-snapshot.json` — the only file the tool writes, its own state), and targets inside repo checkouts the ecosystem registry marks as absorbed. Surfaces that don't exist on the host report `surface unavailable` — never an error |
+| `path-check` | `[project.scripts]`/`[project.gui-scripts]` declared by the packages under `--cwd` (`packages/*` fan-out or one package dir) vs `shutil.which` reachability — each unreachable command is a named **FAIL** (with 'installed but not linked' vs 'not installed' via `importlib.metadata`), and a command resolving to another distribution's entry point or sitting behind extra same-named PATH hits reports **WARN** shadowed |
 
 The `automation` check's semantics are deliberately conservative:
 
@@ -281,7 +282,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 ## When to use this
 
 - Devin misbehaves — missing history, auth errors, disk pressure — and you want one command to localize the cause.
-- You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates, automation), each with a `fix:` suggestion.
+- You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates, automation, path-check), each with a `fix:` suggestion.
 - You need a paste-able report for a bug report: `devin-doctor report --md`.
 - You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (otherwise only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable).
 

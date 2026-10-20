@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `path-check` — declared console scripts vs PATH reachability. For each
+  package dir in scope (`--cwd` pointing at a `packages/` fan-out root or
+  at a single package dir) the check reads `[project.scripts]` /
+  `[project.gui-scripts]`, unions in entry points a same-named installed
+  distribution provides, and probes `shutil.which`: an unreachable
+  command is a FAIL naming it (plus whether a distribution claims it or
+  the package is installed at all); a command resolving through another
+  distribution's entry point, or shadowed by further same-named
+  executables deeper on PATH, is a WARN. Read-only — PATH probing and
+  `importlib.metadata` introspection only.
+
 - `automation` check — scheduled automation that silently broke. The
   check enumerates the user crontab, `systemd --user` services/timers
   (loaded units plus installed unit files, so unloaded timers are still
