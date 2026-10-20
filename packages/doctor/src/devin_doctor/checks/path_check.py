@@ -317,6 +317,10 @@ def run(
     unmatched = set(wanted)
     expected: dict[str, tuple[str, str | None]] = {}  # cmd → (label, project)
     declarers: dict[str, list[str]] = {}  # cmd → every declarer, in order
+    # cmd → normalized project names that declared it — a provider from
+    # the installed index is an extra declarer only when it isn't one
+    # already (expected keeps just the first, so compare against this).
+    declared_projects: dict[str, set[str]] = {}
     projects: dict[str, str] = {}  # normalized project name → display name
     for pkg in dirs:
         meta = _load_pyproject(pkg)
@@ -327,20 +331,22 @@ def run(
         label = _label(ctx.cwd, pkg)
         for cmd in _declared_scripts(meta):
             declarers.setdefault(cmd, []).append(label)
+            if name:
+                declared_projects.setdefault(cmd, set()).add(_norm(name))
             expected.setdefault(cmd, (label, name))
         if name:
             projects[_norm(name)] = name
 
     idx = index()
     # Union in entry points a same-named installed dist provides — the
-    # "given installed package" half of the contract. A provider other
-    # than the declaring project counts as an extra declarer.
+    # "given installed package" half of the contract. A provider that
+    # did not declare the command in any scanned pyproject counts as an
+    # extra declarer; one that did is already listed.
     for cmd, provider in idx.items():
         if _norm(provider) not in projects:
             continue
-        existing = expected.get(cmd)
         expected.setdefault(cmd, (provider, provider))
-        if existing is not None and _norm(existing[1]) != _norm(provider):
+        if _norm(provider) not in declared_projects.get(cmd, set()):
             declarers.setdefault(cmd, []).append(provider)
 
     findings: list[Finding] = [

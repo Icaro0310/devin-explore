@@ -430,6 +430,34 @@ def test_installed_provider_of_shared_cmd_counts_as_declarer(tmp_path):
     assert "devin-bbb" in shared[0].message
 
 
+def test_provider_already_declarer_not_double_counted(tmp_path):
+    """Regression (re-review): when the installed index names the SECOND
+    declaring project, it must not be appended again — `expected` keeps
+    only the first declarer, so comparing the provider against it alone
+    would report '3 package(s)' and repeat the name."""
+    write_pkg(
+        tmp_path / "packages" / "aaa",
+        name="devin-aaa",
+        scripts={"devin-shared": "devin_aaa.cli:main"},
+    )
+    write_pkg(
+        tmp_path / "packages" / "bbb",
+        name="devin-bbb",
+        scripts={"devin-shared": "devin_bbb.cli:main"},
+    )
+    findings = path_check.run(
+        _ctx(tmp_path),
+        which=_fake_which({"devin-shared": "/x/bin/devin-shared"}),
+        hits=_fake_hits({"devin-shared": ["/x/bin/devin-shared"]}),
+        index=lambda: {"devin-shared": "devin-bbb"},
+        dist_version=lambda n: "1.0.0",
+    )
+    shared = [f for f in findings if "declared by" in f.message]
+    assert len(shared) == 1
+    assert "2 package(s)" in shared[0].message, shared[0].message
+    assert shared[0].message.count("bbb") == 1
+
+
 def test_foreign_shim_not_blamed_on_provider_dist(tmp_path):
     """A uv-tool/pipx-style shim resolving outside this interpreter's
     scripts dirs must not be attributed to the indexed provider."""
