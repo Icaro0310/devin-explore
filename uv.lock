@@ -297,7 +297,7 @@ dev = [
 
 [[package]]
 name = "devin-graph"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/graph" }
 dependencies = [
     { name = "devin-internals-spec" },
@@ -323,7 +323,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-history"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/history" }
 dependencies = [
     { name = "devin-internals-spec" },
@@ -358,7 +358,7 @@ wheels = [
 
 [[package]]
 name = "devin-pm"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/pm" }
 dependencies = [
     { name = "devin-internals-spec" },
