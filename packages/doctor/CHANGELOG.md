@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `path-check` — declared console scripts vs PATH reachability. For each
+  package dir in scope (`--cwd` pointing at a `packages/` fan-out root or
+  at a single package dir) the check reads `[project.scripts]` /
+  `[project.gui-scripts]`, unions in entry points (`console_scripts` +
+  `gui_scripts` groups) a same-named installed distribution provides,
+  and probes `shutil.which`: an unreachable command is a FAIL naming it
+  (with 'installed but not linked' vs 'not installed in this
+  interpreter' — the metadata index cannot see isolated uv tool / pipx
+  environments, so the wording says so); a command resolving through
+  another distribution's entry point is a WARN only when the resolved
+  executable actually lives in this interpreter's scripts dirs — a hit
+  elsewhere reports ambiguous 'foreign executable' ownership instead of
+  blaming the wrong dist. A command declared by more than one package
+  WARNs as a collision even when a provider is reachable, PATH hits are
+  deduplicated by real path (a repeated or symlink-aliased PATH entry is
+  not a second executable), and on Windows the probe mirrors
+  `shutil.which` probing the current directory first under `PATHEXT`.
+  Read-only — PATH probing and `importlib.metadata` introspection only.
+
 - `automation` check — scheduled automation that silently broke. The
   check enumerates the user crontab, `systemd --user` services/timers
   (loaded units plus installed unit files, so unloaded timers are still

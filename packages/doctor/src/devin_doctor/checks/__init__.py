@@ -12,6 +12,7 @@ from devin_doctor.checks import (
     disk,
     health,
     hooks_windows,
+    path_check,
     updates,
 )
 from devin_doctor.checks.surfaces import SURFACE_NAMES, SURFACES
@@ -19,7 +20,15 @@ from devin_doctor.checks.surfaces import SURFACE_NAMES, SURFACES
 # Devin-context checks — they diagnose the Devin install, not a session
 # surface, and report 'not detected' rather than FAIL when no Devin store
 # exists at all.
-DEVIN_CHECKS = [health, config, hooks_windows, disk, updates, automation]
+DEVIN_CHECKS = [
+    health,
+    config,
+    hooks_windows,
+    disk,
+    updates,
+    automation,
+    path_check,
+]
 
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
 
@@ -33,5 +42,6 @@ __all__ = [
     "disk",
     "health",
     "hooks_windows",
+    "path_check",
     "updates",
 ]
