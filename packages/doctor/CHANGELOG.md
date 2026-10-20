@@ -43,6 +43,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential-shaped fragments are redacted to `***` before findings and
   snapshot writes. Motivated by a real incident: a cron line vanished
   for ~3.5 days before anyone noticed.
+- New `publish-readiness` check: verifies a package dir can ship through
+  the repo's PyPI fan-out (`pypi-publish.yml`). Per package under
+  `--cwd`'s `packages/` (or a single package dir passed as `--cwd`) it
+  fails loud on: missing/unparseable `pyproject.toml`, `[project]`
+  without a literal `name`/`version` (`dynamic = ["version"]` cannot
+  stand in — the fan-out's verify job compares a built wheel against the
+  field), flat (non-`src/`) layout, `__version__` in
+  `src/<mod>/__init__.py` diverging from `[project].version`, and
+  console-script entry points that resolve to nothing under `src/`. The
+  wheel build is exercised for real via `python -m build --wheel
+  --no-isolation` against a temp-dir copy — the package dir is never
+  written to — whenever `build`/`setuptools` are importable (`--offline`
+  included; it needs no network), and the produced wheel is opened:
+  declared import/script modules must ship and the packaged
+  `__version__` must match `[project].version`. When no verification can
+  run — missing tooling or a local backend older than the declared
+  `requires` floor — the build reports WARN `unverified`, never a
+  rubber-stamp PASS. `DEVIN_DOCTOR_NO_WHEEL_BUILD=1` opts out of the
+  build leg (PEP 517 hooks execute the checkout's declared backend).
+  `pypi-publish.yml` coverage tracks `resolve` arms — a package listed
+  only in dispatch options/tag patterns would die at publish with
+  'unknown package' — and validates the arm's `dir=`/`mod=` outputs;
+  coverage findings are WARN-only (not every package publishes). New
+  `--package NAME` flag (repeatable, also `package` on the MCP
+  `doctor_check` tool) narrows the fan-out by dir or project name.
 
 ## [0.3.1] - 2026-10-17
 

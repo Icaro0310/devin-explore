@@ -71,6 +71,10 @@ class Context:
     # process-wide DEVIN_DOCTOR_OFFLINE env so the MCP server can scope
     # it to one request instead of mutating os.environ.
     offline: bool = False
+    # Restricts the publish-readiness fan-out to named packages under
+    # ``cwd/packages`` (``--package NAME``, repeatable; matches the dir
+    # or the project name). Empty tuple = check every package found.
+    packages: tuple[str, ...] = ()
 
     def now(self) -> int:
         if self.now_ms is not None:
