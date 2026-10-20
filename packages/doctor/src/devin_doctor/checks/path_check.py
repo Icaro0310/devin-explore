@@ -22,8 +22,9 @@ Verdicts per command:
 - FAIL — not on ``PATH`` at all (named explicitly, with whether a
   distribution claims it or the package is even installed);
 - WARN — reachable but a *different* installed distribution provides
-  the same entry point, or further same-named executables sit deeper
-  on ``PATH`` (shadowing);
+  the same entry point, a foreign executable (uv tool / pipx / other
+  prefix) shadows it, more than one package declares the same command,
+  or further same-named executables sit deeper on ``PATH``;
 - PASS — ``which()`` resolves it.
 
 Read-only: PATH probing and ``importlib.metadata`` introspection only.
@@ -34,6 +35,8 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import shutil
+import sys
+import sysconfig
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -121,11 +124,15 @@ def _declared_scripts(meta: dict[str, Any] | None) -> dict[str, str]:
 
 
 def _console_script_index() -> dict[str, str]:
-    """Installed console-script name → providing distribution name
-    (current interpreter's environment only — uv/pipx shims correctly
-    report no provider)."""
+    """Installed script name → providing distribution name, unioning the
+    ``console_scripts`` and ``gui_scripts`` entry-point groups (current
+    interpreter's environment only — uv/pipx shims correctly report no
+    provider)."""
     try:
-        eps = importlib.metadata.entry_points(group="console_scripts")
+        eps = [
+            *importlib.metadata.entry_points(group="console_scripts"),
+            *importlib.metadata.entry_points(group="gui_scripts"),
+        ]
     except Exception:  # noqa: BLE001 — metadata quirks must not kill doctor
         return {}
     out: dict[str, str] = {}
@@ -148,18 +155,45 @@ def _dist_version(name: str) -> str | None:
         return None
 
 
+def _current_scripts_dirs() -> frozenset[str]:
+    """Real paths of this interpreter's script dirs (every sysconfig
+    scheme's ``scripts`` plus the interpreter's own dir) — the only
+    places a provider from the entry-point index can own an executable.
+    Normalized via ``normcase`` + ``realpath`` for comparison."""
+    dirs: set[str] = set()
+    for scheme in sysconfig.get_scheme_names():
+        try:
+            raw = sysconfig.get_path("scripts", scheme=scheme)
+        except (KeyError, ValueError):
+            continue
+        if raw:
+            dirs.add(os.path.normcase(os.path.realpath(raw)))
+    if sys.executable:
+        dirs.add(os.path.normcase(
+            os.path.realpath(os.path.dirname(sys.executable))
+        ))
+    return frozenset(dirs)
+
+
 def _path_hits(command: str) -> list[str]:
     """Every executable named ``command`` on PATH, in resolution order —
-    hits past the first are shadowed. Honors ``PATHEXT`` on Windows."""
+    hits past the first are shadowed. Honors ``PATHEXT`` on Windows and
+    mirrors ``shutil.which`` probing CWD first there. Hits are deduped
+    by real path so a repeated (or symlink-aliased) PATH entry never
+    counts as a competing executable."""
     path_env = os.environ.get("PATH", "")
     extensions = [""]
+    directories = path_env.split(os.pathsep)
     if os.name == "nt":
         extensions = [
             e.lower() for e in
             os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
         ]
+        if not os.environ.get("NoDefaultCurrentDirectoryInExePath"):
+            directories.insert(0, os.curdir)
     hits: list[str] = []
-    for directory in path_env.split(os.pathsep):
+    seen: set[str] = set()
+    for directory in directories:
         if not directory:
             continue
         base = Path(directory) / command
@@ -171,7 +205,10 @@ def _path_hits(command: str) -> list[str]:
             )
             try:
                 if candidate.is_file() and os.access(candidate, os.X_OK):
-                    hits.append(str(candidate))
+                    real = os.path.normcase(os.path.realpath(candidate))
+                    if real not in seen:
+                        seen.add(real)
+                        hits.append(str(candidate))
                     break
             except OSError:
                 continue
@@ -189,6 +226,7 @@ def _command_finding(
     hits: Callable[[str], list[str]],
     provider: str | None,
     dist_version: Callable[[str], str | None],
+    scripts_dirs: frozenset[str],
 ) -> Finding:
     resolved = which(cmd)
     if resolved is None:
@@ -204,7 +242,8 @@ def _command_finding(
         if canonical:
             version = dist_version(canonical)
             hint = (
-                f" — '{canonical}' is not installed"
+                f" — '{canonical}' is not installed in this interpreter "
+                "(an isolated uv tool / pipx install may exist off-PATH)"
                 if version is None
                 else f" — '{canonical}' {version} is installed but its "
                 "script is not linked"
@@ -218,10 +257,25 @@ def _command_finding(
     if provider is not None and canonical is not None and (
         _norm(provider) != _norm(canonical)
     ):
+        # The entry-point index describes this interpreter only — blame
+        # 'provider' for the resolved executable just when that exe
+        # actually lives in one of its scripts dirs; a hit elsewhere
+        # (uv tool, pipx, another prefix) is a foreign shim.
+        owner_dir = os.path.normcase(
+            os.path.realpath(os.path.dirname(resolved))
+        )
+        if owner_dir in scripts_dirs:
+            return Finding(
+                CHECK_ID, Status.WARN,
+                f"'{cmd}' resolves to {resolved} — provided by "
+                f"'{provider}', not '{canonical}' (shadowed)",
+                fix="Check which install should own this command.",
+            )
         return Finding(
             CHECK_ID, Status.WARN,
-            f"'{cmd}' resolves to {resolved} — provided by "
-            f"'{provider}', not '{canonical}' (shadowed)",
+            f"'{cmd}' resolves to {resolved} — a foreign executable "
+            f"shadowing '{canonical}'; '{provider}' claims the entry "
+            "point in this interpreter but does not own that path",
             fix="Check which install should own this command.",
         )
     extra = hits(cmd)[1:]
@@ -247,6 +301,7 @@ def run(
     hits: Callable[[str], list[str]] = _path_hits,
     index: Callable[[], dict[str, str]] = _console_script_index,
     dist_version: Callable[[str], str | None] = _dist_version,
+    scripts_dirs: Callable[[], frozenset[str]] = _current_scripts_dirs,
 ) -> list[Finding]:
     dirs = _package_dirs(ctx.cwd)
     if not dirs:
@@ -261,6 +316,7 @@ def run(
     wanted = set(getattr(ctx, "packages", ()) or ())
     unmatched = set(wanted)
     expected: dict[str, tuple[str, str | None]] = {}  # cmd → (label, project)
+    declarers: dict[str, list[str]] = {}  # cmd → every declarer, in order
     projects: dict[str, str] = {}  # normalized project name → display name
     for pkg in dirs:
         meta = _load_pyproject(pkg)
@@ -270,16 +326,22 @@ def run(
         unmatched -= {pkg.name} | ({name} if name else set())
         label = _label(ctx.cwd, pkg)
         for cmd in _declared_scripts(meta):
+            declarers.setdefault(cmd, []).append(label)
             expected.setdefault(cmd, (label, name))
         if name:
             projects[_norm(name)] = name
 
     idx = index()
     # Union in entry points a same-named installed dist provides — the
-    # "given installed package" half of the contract.
+    # "given installed package" half of the contract. A provider other
+    # than the declaring project counts as an extra declarer.
     for cmd, provider in idx.items():
-        if _norm(provider) in projects:
-            expected.setdefault(cmd, (provider, provider))
+        if _norm(provider) not in projects:
+            continue
+        existing = expected.get(cmd)
+        expected.setdefault(cmd, (provider, provider))
+        if existing is not None and _norm(existing[1]) != _norm(provider):
+            declarers.setdefault(cmd, []).append(provider)
 
     findings: list[Finding] = [
         Finding(
@@ -296,10 +358,19 @@ def run(
             "nothing to probe",
         ))
         return findings
+    sdirs = scripts_dirs()
     for cmd in sorted(expected):
         label, canonical = expected[cmd]
+        owners = declarers.get(cmd, [])
+        if len(owners) > 1:
+            findings.append(Finding(
+                CHECK_ID, Status.WARN,
+                f"'{cmd}' is declared by {len(owners)} package(s): "
+                f"{', '.join(owners)} — same-name scripts race on PATH",
+                fix="Keep a single declarer or rename the command.",
+            ))
         findings.append(_command_finding(
             cmd, label, canonical, which, hits,
-            idx.get(cmd), dist_version,
+            idx.get(cmd), dist_version, sdirs,
         ))
     return findings

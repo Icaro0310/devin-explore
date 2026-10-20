@@ -7,10 +7,12 @@ installed or probed.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 from pathlib import Path
 
+import pytest
 from devin_doctor import doctor
 from devin_doctor.checks import path_check
 from devin_doctor.cli import main
@@ -367,3 +369,218 @@ def test_every_failure_names_its_command(tmp_path):
     assert {f.message.split("'")[1] for f in fails} == {"alpha", "gamma"}
     passes = _status(findings, Status.PASS)
     assert {f.message.split("'")[1] for f in passes} == {"beta"}
+
+
+# --- review regressions --------------------------------------------------------
+
+
+def test_shared_command_declaration_warns(tmp_path):
+    """Two packages declaring the same command is a conflict — warn
+    naming every declarer while the command still gets its normal
+    per-command verdict."""
+    write_pkg(
+        tmp_path / "packages" / "aaa",
+        name="devin-aaa",
+        scripts={"devin-shared": "devin_aaa.cli:main"},
+    )
+    write_pkg(
+        tmp_path / "packages" / "bbb",
+        name="devin-bbb",
+        scripts={"devin-shared": "devin_bbb.cli:main"},
+    )
+    findings = path_check.run(
+        _ctx(tmp_path),
+        which=_fake_which({"devin-shared": "/x/bin/devin-shared"}),
+        hits=_fake_hits({"devin-shared": ["/x/bin/devin-shared"]}),
+        index=dict,
+        dist_version=lambda n: None,
+    )
+    shared = [f for f in findings if "declared by" in f.message]
+    assert len(shared) == 1
+    assert shared[0].status is Status.WARN
+    assert "packages/aaa" in shared[0].message
+    assert "packages/bbb" in shared[0].message
+    # the normal per-command path still ran
+    assert any(
+        f.status is Status.PASS and "'devin-shared'" in f.message
+        for f in findings
+    )
+
+
+def test_installed_provider_of_shared_cmd_counts_as_declarer(tmp_path):
+    """A same-named installed dist providing a command another package
+    declares is a second declarer — still warned."""
+    write_pkg(
+        tmp_path / "packages" / "aaa",
+        name="devin-aaa",
+        scripts={"devin-shared": "devin_aaa.cli:main"},
+    )
+    write_pkg(tmp_path / "packages" / "bbb", name="devin-bbb", scripts={})
+    findings = path_check.run(
+        _ctx(tmp_path),
+        which=_fake_which({"devin-shared": "/x/bin/devin-shared"}),
+        hits=_fake_hits({"devin-shared": ["/x/bin/devin-shared"]}),
+        index=lambda: {"devin-shared": "devin-bbb"},
+        dist_version=lambda n: "1.0.0",
+    )
+    shared = [f for f in findings if "declared by" in f.message]
+    assert len(shared) == 1
+    assert shared[0].status is Status.WARN
+    assert "packages/aaa" in shared[0].message
+    assert "devin-bbb" in shared[0].message
+
+
+def test_foreign_shim_not_blamed_on_provider_dist(tmp_path):
+    """A uv-tool/pipx-style shim resolving outside this interpreter's
+    scripts dirs must not be attributed to the indexed provider."""
+    pkg = write_pkg(tmp_path / "mypkg")
+    findings = path_check.run(
+        _ctx(pkg),
+        which=_fake_which({"devin-foo": "/uv/tools/bin/devin-foo"}),
+        hits=_fake_hits({"devin-foo": ["/uv/tools/bin/devin-foo"]}),
+        index=lambda: {"devin-foo": "other-tool"},
+        dist_version=lambda n: "1.0.0",
+        scripts_dirs=lambda: frozenset({"/cur/venv/bin"}),
+    )
+    assert [f.status for f in findings] == [Status.WARN]
+    msg = findings[0].message
+    assert "foreign" in msg
+    assert "other-tool" in msg
+    assert "provided by 'other-tool'" not in msg
+
+
+def test_shim_inside_scripts_dir_is_attributed(tmp_path):
+    """When the resolved exe lives in this interpreter's scripts dir the
+    provider genuinely owns it — keep the classic shadow warning."""
+    pkg = write_pkg(tmp_path / "mypkg")
+    resolved = "/cur/venv/bin/devin-foo"
+    sdir = os.path.normcase(os.path.realpath("/cur/venv/bin"))
+    findings = path_check.run(
+        _ctx(pkg),
+        which=_fake_which({"devin-foo": resolved}),
+        hits=_fake_hits({"devin-foo": [resolved]}),
+        index=lambda: {"devin-foo": "other-tool"},
+        dist_version=lambda n: "1.0.0",
+        scripts_dirs=lambda: frozenset({sdir}),
+    )
+    assert [f.status for f in findings] == [Status.WARN]
+    assert "provided by 'other-tool'" in findings[0].message
+    assert "shadowed" in findings[0].message
+
+
+def test_script_index_includes_gui_scripts(monkeypatch):
+    """Installed gui_scripts must surface in the provider index too —
+    they are real launchers on PATH."""
+
+    class _EP:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.dist = None
+
+    def fake_entry_points(*, group: str):
+        return [_EP(f"{group}-cmd")]
+
+    monkeypatch.setattr(
+        importlib.metadata, "entry_points", fake_entry_points
+    )
+    idx = path_check._console_script_index()
+    assert idx["console_scripts-cmd"] == "?"
+    assert idx["gui_scripts-cmd"] == "?"
+
+
+def test_path_hits_dedupes_repeated_path_entry(tmp_path, monkeypatch):
+    """A PATH component listed twice must not count its own hit as a
+    competing executable (false shadowing)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "devin-foo"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(exe, 0o755)
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(bindir), str(bindir)])
+    )
+    assert path_check._path_hits("devin-foo") == [str(exe)]
+
+
+def test_path_hits_dedupes_symlinked_dirs(tmp_path, monkeypatch):
+    """Two PATH entries resolving to the same dir (e.g. /bin → /usr/bin)
+    produce one hit, not a phantom shadow."""
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    exe = real_dir / "devin-foo"
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(exe, 0o755)
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(real_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(real_dir), str(alias)])
+    )
+    assert path_check._path_hits("devin-foo") == [str(exe)]
+
+
+def test_not_installed_hint_allows_isolated_installs(tmp_path):
+    """'not installed' must not overstate — an isolated uv tool / pipx
+    install may exist off-PATH and still own the command."""
+    pkg = write_pkg(tmp_path / "mypkg")
+    findings = path_check.run(
+        _ctx(pkg),
+        which=_fake_which({}),
+        hits=_fake_hits({}),
+        index=dict,
+        dist_version=lambda n: None,
+    )
+    assert "not installed in this interpreter" in findings[0].message
+    assert "off-PATH" in findings[0].message
+
+
+class _FakeWindowsOS:
+    """os-module stand-in flipping only ``name`` — lets ``_path_hits``
+    take the Windows branch while every other call (env, path, access)
+    delegates to the real os, keeping POSIX paths stat-able."""
+
+    name = "nt"
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def test_path_hits_includes_cwd_hit_on_windows(tmp_path, monkeypatch):
+    """shutil.which probes CWD first on Windows — _path_hits must too,
+    or a PATH copy competing with the CWD exe looks unshadowed."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for d in (tmp_path, bindir):
+        exe = d / "devin-foo.exe"
+        exe.write_text("@exit /b 0\r\n")
+        os.chmod(exe, 0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+    monkeypatch.setattr(path_check, "os", _FakeWindowsOS())
+    assert path_check._path_hits("devin-foo") == [
+        "devin-foo.exe",
+        str(bindir / "devin-foo.exe"),
+    ]
+
+
+def test_path_hits_cwd_hit_respects_nodefaultcwd(tmp_path, monkeypatch):
+    """NoDefaultCurrentDirectoryInExePath=1 disables the CWD probe, same
+    as shutil.which."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for d in (tmp_path, bindir):
+        exe = d / "devin-foo.exe"
+        exe.write_text("@exit /b 0\r\n")
+        os.chmod(exe, 0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.setenv("NoDefaultCurrentDirectoryInExePath", "1")
+    monkeypatch.setattr(path_check, "os", _FakeWindowsOS())
+    assert path_check._path_hits("devin-foo") == [
+        str(bindir / "devin-foo.exe"),
+    ]
