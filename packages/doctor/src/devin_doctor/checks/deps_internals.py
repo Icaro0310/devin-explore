@@ -210,7 +210,8 @@ def _pth_targets(pth: Path, site_dir: Path) -> list[str] | None:
     Path-style editable installs (uv, setuptools compat mode) carry the
     target on the first meaningful line; setuptools' finder mode carries
     an ``import __editable___*_finder`` line instead — then the targets
-    are the absolute paths quoted in the companion module. ``None``
+    are the absolute paths quoted in the companion module. Every
+    meaningful line is considered, so mixed files still verify. ``None``
     means the .pth could not be read; an empty list means it was read
     but no target resolved.
     """
@@ -218,15 +219,17 @@ def _pth_targets(pth: Path, site_dir: Path) -> list[str] | None:
         text = pth.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    targets: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         m = _IMPORT_LINE_RE.match(line)
         if m:
-            return _finder_targets(site_dir / f"{m.group(1)}.py")
-        return [line]
-    return []
+            targets += _finder_targets(site_dir / f"{m.group(1)}.py")
+        else:
+            targets.append(line)
+    return targets
 
 
 # --- installed distributions (injectable; never imported) ---------------
