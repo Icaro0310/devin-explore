@@ -15,6 +15,7 @@ from devin_doctor.checks import (
     hooks_windows,
     path_check,
     publish,
+    toolchain,
     updates,
 )
 from devin_doctor.checks.surfaces import SURFACE_NAMES, SURFACES
@@ -32,6 +33,7 @@ DEVIN_CHECKS = [
     path_check,
     publish,
     deps_internals,
+    toolchain,
 ]
 
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
@@ -49,5 +51,6 @@ __all__ = [
     "hooks_windows",
     "path_check",
     "publish",
+    "toolchain",
     "updates",
 ]

@@ -37,6 +37,8 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 - **Long paths:** keep checkout/install roots short (`C:\dev`), MAX_PATH (260 chars) can still bite inside virtualenvs; `LongPathsEnabled` needs admin, short roots do not.
 - **EDR/antivirus:** if a scan kills the install, retry with an exclusion or ask IT to allowlist `%LOCALAPPDATA%\uv` and `%USERPROFILE%\.local\bin`. These tools never elevate or listen on the network by default.
 - **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel`), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
+- **Toolchain check:** `devin-doctor check` names missing test/build tools with `winget install` commands; behind blocked winget/Store policy the same checks tell you which piece (`python`/`node`/`git`) is absent so IT can allowlist or provision it.
+
 - **Fully local runtime:** installed tools make no required network calls, they read `sessions.db` and local stores only. Two exceptions, both disableable: devin-doctor's update check (fetches the DevKit manifest) self-skips when unreachable or with `DEVIN_DOCTOR_OFFLINE=1`, and `capabilities --probe-network` dials out only when the flag is passed.
 
 ## Zscaler

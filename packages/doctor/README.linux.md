@@ -35,6 +35,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 - **Headless and minimal environments:** no display is needed, every CLI is text-only. In containers or WSL, install `uv` and Git and follow the same steps; `XDG_*` paths resolve normally.
 - **Permissions:** tools read Devin data under `$XDG_DATA_HOME/devin` and write only their own config/state, no root or sudo is required.
 - **Scheduling:** optional recurring work belongs to `systemd --user` timers or cron; installation never creates jobs.
+- **Toolchain check:** `devin-doctor check` names each missing test/build tool with a concrete install command — `apt` on Debian/Ubuntu (`sudo apt install python3-pip python3-venv nodejs npm git`), `dnf` on Fedora, `pacman` on Arch; other distros get a generic package-name hint. A `nodejs`-only box reports node as **WARN** — scripts invoking `node` still fail until the real name exists.
 
 ## Recurring runs (optional)
 
