@@ -35,10 +35,12 @@ from devin_search.extract import (
     extract_chat_message,
     extract_payload,
     extract_strings,
+    extract_tool_name,
     normalize_role,
+    parse_payload,
 )
 
-INDEX_SCHEMA_VERSION = 3
+INDEX_SCHEMA_VERSION = 4
 
 _INDEX_DDL = """
 CREATE TABLE IF NOT EXISTS index_meta (
@@ -54,6 +56,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
   session_title UNINDEXED,
   source UNINDEXED,
   ref UNINDEXED,
+  tool UNINDEXED,
   tokenize = 'unicode61'
 );
 """
@@ -150,11 +153,22 @@ def _insert_doc(
     session_title: str | None,
     source: str,
     ref: str,
+    tool: str | None = None,
 ) -> None:
     con.execute(
         "INSERT INTO docs(text, session_id, role, ts, project, session_title,"
-        " source, ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (text, session_id, role, ts, project, session_title, source, ref),
+        " source, ref, tool) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            text,
+            session_id,
+            role,
+            ts,
+            project,
+            session_title,
+            source,
+            ref,
+            tool,
+        ),
     )
 
 
@@ -330,6 +344,14 @@ def _index_sessions_db(
                 parts.append(extracted[1])
         if not parts:
             continue
+        # Merge update then call payloads (call wins on conflict) — the
+        # same precedence devin-graph's extract_session uses — and lift
+        # the tool name into docs.tool for `query --tool`.
+        merged: dict[str, Any] = {}
+        for raw in (tc.tool_call_update_json, tc.tool_call_json):
+            data = parse_payload(raw)
+            if data:
+                merged = {**merged, **data}
         project, title, created = sessions.get(tc.session_id, ("", None, 0))
         _insert_doc(
             con,
@@ -341,6 +363,7 @@ def _index_sessions_db(
             session_title=title,
             source=SOURCE_DEVIN_CLI,
             ref=ref,
+            tool=extract_tool_name(merged) if merged else None,
         )
         inserted_tool_refs.add(ref)
         stats.tool_calls += 1

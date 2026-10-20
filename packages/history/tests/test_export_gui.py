@@ -79,6 +79,82 @@ def test_export_gui_note_frontmatter_and_body(vstore, tmp_path):
     assert "last_accessed:" not in body  # not derivable → omitted
 
 
+def test_export_gui_notes_carry_evidence_anchors(vstore, tmp_path):
+    """SESSION-EVIDENCE anchors on every GUI note (spec §1 + SURFACES §4)."""
+    out = tmp_path / "out"
+    res = export_gui_sessions(vstore, out)
+
+    name = next(n for n in res.written if "canyon-newspaper" in n)
+    body = (out / name).read_text(encoding="utf-8")
+    ws_hash = hashlib.sha256(b"/work/alpha").hexdigest()[:16]
+    assert "surface: devin-chat" in body
+    assert "native_id: canyon-newspaper" in body
+    assert f"ref: devin-chat:{ws_hash}:native:canyon-newspaper" in body
+
+    otter = next(n for n in res.written if "river-otter" in n)
+    body = (out / otter).read_text(encoding="utf-8")
+    ws_hash = hashlib.sha256(b"/srv/beta").hexdigest()[:16]
+    assert "surface: devin-chat" in body
+    assert "native_id: river-otter" in body
+    assert f"ref: devin-chat:{ws_hash}:native:river-otter" in body
+
+
+def test_export_gui_evidence_ref_ephemeral_without_workspace(vstore, tmp_path):
+    """A binding with no workspaceId keeps a hashless native id → the ref is
+    the ephemeral display key (SURFACES §4), never a canonical-looking id."""
+    out = tmp_path / "out"
+    res = export_gui_sessions(vstore, out)
+    name = next(n for n in res.written if "broken-json" in n)
+    body = (out / name).read_text(encoding="utf-8")
+    assert "surface: devin-chat" in body
+    assert "native_id: broken-json" in body
+    # broken-json has no timestamps → sorts first in the export listing
+    assert "ref: devin-chat:ephemeral:0" in body
+
+
+def test_export_gui_index_entries_carry_anchors(vstore, tmp_path):
+    out = tmp_path / "out"
+    export_gui_sessions(vstore, out)
+    index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    rows = {s["slug"]: s for s in index["sessions"]}
+    ws_hash = hashlib.sha256(b"/work/alpha").hexdigest()[:16]
+    canyon = rows["canyon-newspaper"]
+    assert canyon["surface"] == "devin-chat"
+    assert canyon["native_id"] == "canyon-newspaper"
+    assert canyon["ref"] == (
+        f"devin-chat:{ws_hash}:native:canyon-newspaper")
+    # workspace-less binding → ephemeral display key, never a native ref
+    assert rows["broken-json"]["ref"] == "devin-chat:ephemeral:0"
+
+
+def test_export_gui_heals_pre_anchor_notes(vstore, tmp_path):
+    """Pre-anchor GUI notes are re-rendered on the next run — an unchanged
+    last_activity marker alone is not up-to-date."""
+    out = tmp_path / "out"
+    res = export_gui_sessions(vstore, out)
+    for name in res.written:  # strip the anchor lines → pre-upgrade note
+        p = out / name
+        body = p.read_text(encoding="utf-8")
+        body = "\n".join(
+            ln for ln in body.splitlines()
+            if not ln.startswith(("surface:", "native_id:", "ref:"))
+        ) + "\n"
+        p.write_text(body, encoding="utf-8")
+
+    res2 = export_gui_sessions(vstore, out)
+    assert len(res2.written) == 3
+    assert res2.skipped_unchanged == []
+    for name in res2.written:
+        body = (out / name).read_text(encoding="utf-8")
+        assert "surface: devin-chat" in body
+        assert "native_id:" in body
+        assert "ref: devin-chat:" in body
+
+    res3 = export_gui_sessions(vstore, out)
+    assert res3.written == []
+    assert len(res3.skipped_unchanged) == 3
+
+
 def test_export_gui_index_json_has_provenance_and_stats(vstore, tmp_path):
     out = tmp_path / "out"
     res = export_gui_sessions(vstore, out)

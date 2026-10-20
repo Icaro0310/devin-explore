@@ -21,6 +21,9 @@ def test_check_healthy_exit_0(ctx, capsys):
         "config",
         "hooks-windows",
         "disk",
+        "automation",
+        "path-check",
+        "publish-readiness",
     ):
         assert check_id in out
 
@@ -80,6 +83,9 @@ def test_check_json_schema(ctx, capsys):
         "hooks-windows",
         "disk",
         "updates",
+        "automation",
+        "path-check",
+        "publish-readiness",
     }
     # Extension contract: the VS Code adapter gates on a parseable version
     # and renders all three summary counters.
@@ -155,8 +161,15 @@ def test_surface_scope_filters_surface_checks(ctx, capsys):
     assert rc == 0
     assert "devin-cli — PASS" in out
     assert "devin-chat" not in out
-    assert "not detected" not in out  # only the scoped surface ran
-    for check_id in ("health-of-data", "config", "disk", "updates"):
+    # other surfaces never run — not even 'not detected' (deps-internals
+    # can still sit in the devin-environment 'not detected' line: ctx.cwd
+    # here has no .venv for it to inspect)
+    surfaces_out = out.split("devin environment")[0]
+    assert "not detected" not in surfaces_out
+    for check_id in (
+        "health-of-data", "config", "disk", "updates", "automation",
+        "path-check",
+    ):
         assert check_id in out  # devin checks always run
 
 

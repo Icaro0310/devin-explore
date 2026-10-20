@@ -34,6 +34,9 @@ class Hit:
     ref: str
     snippet: str
     rank: float
+    # Indexed tool name for tool-call docs (the ``query --tool`` filter's
+    # ground truth); ``None`` for docs that carry no tool name.
+    tool: str | None = None
     # Optional: path of the devin-history export note for this session
     # (filled by devin_search.history.attach_history_notes).
     history_note: str | None = None
@@ -58,15 +61,21 @@ def search(
     role: str | None = None,
     project: str | None = None,
     since: int | None = None,
+    tool: str | None = None,
     limit: int = 20,
 ) -> list[Hit]:
     """Search ``index_path`` for ``term``; returns BM25-ranked hits.
 
     ``role`` is an exact match on the normalized role; ``project`` is a
     substring match on the session working directory; ``since`` keeps hits
-    with ``ts >= since`` (epoch milliseconds).
+    with ``ts >= since`` (epoch milliseconds); ``tool`` is an exact match
+    on the tool name indexed from tool-call payloads — a blank value
+    means no filter (same as not passing it).
     """
     index_path = Path(index_path).expanduser()
+    # Blank == absent: CLI `--tool ""` and MCP `tool=""` both mean
+    # "no filter" — never an exact match against the empty string.
+    tool = (tool or "").strip() or None
     if not index_path.exists():
         raise FileNotFoundError(
             f"{index_path}: no index — run `devin-search index` first"
@@ -89,6 +98,7 @@ def search(
     try:
         sql = (
             "SELECT session_id, role, ts, project, session_title, source, ref,"
+            " tool,"
             f" snippet(docs, 0, '{_SNIP_OPEN}', '{_SNIP_CLOSE}',"
             f" '{_SNIP_ELLIPSIS}', {_SNIP_TOKENS}) AS snip,"
             " bm25(docs) AS rank"
@@ -104,6 +114,9 @@ def search(
         if since is not None:
             sql += " AND ts >= ?"
             args.append(since)
+        if tool is not None:
+            sql += " AND tool = ?"
+            args.append(tool)
         sql += " ORDER BY rank LIMIT ?"
         args.append(limit)
         return [
@@ -117,6 +130,7 @@ def search(
                 ref=r["ref"],
                 snippet=r["snip"],
                 rank=r["rank"],
+                tool=r["tool"],
             )
             for r in con.execute(sql, args)
         ]

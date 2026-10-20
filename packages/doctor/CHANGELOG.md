@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `publish-readiness` — a `packages/*` member without `pyproject.toml`
+  no longer fails when the dir carries no Python-package signals (npm
+  bridges, VS Code extensions, docs dirs). Missing pyproject still
+  fails for dirs that look like in-progress Python packages
+  (`setup.py`/`setup.cfg`, top-level `.py`, or `.py` under `src/`).
+
+### Added
+
+- `deps-internals` — silently stale internal deps inside `<cwd>/.venv`.
+  Editable installs (`__editable__*.pth`, both the plain-path and the
+  setuptools `*_finder.py` form) are FAILed when their target no longer
+  exists — the repo moved or absorbed the package — and WARNed when the
+  target resolves outside the checkout (a venv bound to a different
+  workspace) or cannot be read. Non-editable `devin_*` dists (read from
+  `*.dist-info` metadata, never imported) are compared against the
+  same-named `packages/*/pyproject.toml` version — PEP 440-aware, so
+  `1.0.0-rc1` matches `1.0.0rc1` — and a drift is a WARN (stale wheel
+  shadowing fresh source); dists with no checkout match are foreign
+  tooling and ignored. `direct_url.json` `dir_info.editable` plus the
+  `__editable__*` .pth set keep editable dist-infos out of the wheel
+  comparison. site-packages resolves via `lib/python*/site-packages`,
+  `lib64/…` and `Lib/site-packages` (Windows), first sorted match.
+  `.venv` only — a checkout without one reports 'not detected'.
+  Read-only — venv/site-packages introspection only.
+
+- `path-check` — declared console scripts vs PATH reachability. For each
+  package dir in scope (`--cwd` pointing at a `packages/` fan-out root or
+  at a single package dir) the check reads `[project.scripts]` /
+  `[project.gui-scripts]`, unions in entry points (`console_scripts` +
+  `gui_scripts` groups) a same-named installed distribution provides,
+  and probes `shutil.which`: an unreachable command is a FAIL naming it
+  (with 'installed but not linked' vs 'not installed in this
+  interpreter' — the metadata index cannot see isolated uv tool / pipx
+  environments, so the wording says so); a command resolving through
+  another distribution's entry point is a WARN only when the resolved
+  executable actually lives in this interpreter's scripts dirs — a hit
+  elsewhere reports ambiguous 'foreign executable' ownership instead of
+  blaming the wrong dist. A command declared by more than one package
+  WARNs as a collision even when a provider is reachable, PATH hits are
+  deduplicated by real path (a repeated or symlink-aliased PATH entry is
+  not a second executable), and on Windows the probe mirrors
+  `shutil.which` probing the current directory first under `PATHEXT`.
+  Read-only — PATH probing and `importlib.metadata` introspection only.
+
+- `automation` check — scheduled automation that silently broke. The
+  check enumerates the user crontab, `systemd --user` services/timers
+  (loaded units plus installed unit files, so unloaded timers are still
+  seen) and Windows Task Scheduler (`schtasks`), extracts the
+  script/binary each task references and FAILs on: referenced paths that
+  no longer exist, tasks removed since the previous run (tracked via a
+  JSON snapshot at `<data-dir>/doctor/automation-snapshot.json` — the
+  tool's own state file, the only thing it writes), and targets inside
+  repo checkouts the ecosystem registry (`devin-powerups/registry.json`)
+  marks as absorbed/archived. Unavailable surfaces carry their history
+  forward instead of reading as empty; removal FAILs persist until the
+  task returns or its snapshot entry is deleted by hand;
+  credential-shaped fragments are redacted to `***` before findings and
+  snapshot writes. Motivated by a real incident: a cron line vanished
+  for ~3.5 days before anyone noticed.
+- New `publish-readiness` check: verifies a package dir can ship through
+  the repo's PyPI fan-out (`pypi-publish.yml`). Per package under
+  `--cwd`'s `packages/` (or a single package dir passed as `--cwd`) it
+  fails loud on: missing/unparseable `pyproject.toml`, `[project]`
+  without a literal `name`/`version` (`dynamic = ["version"]` cannot
+  stand in — the fan-out's verify job compares a built wheel against the
+  field), flat (non-`src/`) layout, `__version__` in
+  `src/<mod>/__init__.py` diverging from `[project].version`, and
+  console-script entry points that resolve to nothing under `src/`. The
+  wheel build is exercised for real via `python -m build --wheel
+  --no-isolation` against a temp-dir copy — the package dir is never
+  written to — whenever `build`/`setuptools` are importable (`--offline`
+  included; it needs no network), and the produced wheel is opened:
+  declared import/script modules must ship and the packaged
+  `__version__` must match `[project].version`. When no verification can
+  run — missing tooling or a local backend older than the declared
+  `requires` floor — the build reports WARN `unverified`, never a
+  rubber-stamp PASS. `DEVIN_DOCTOR_NO_WHEEL_BUILD=1` opts out of the
+  build leg (PEP 517 hooks execute the checkout's declared backend).
+  `pypi-publish.yml` coverage tracks `resolve` arms — a package listed
+  only in dispatch options/tag patterns would die at publish with
+  'unknown package' — and validates the arm's `dir=`/`mod=` outputs;
+  coverage findings are WARN-only (not every package publishes). New
+  `--package NAME` flag (repeatable, also `package` on the MCP
+  `doctor_check` tool) narrows the fan-out by dir or project name.
+
 ## [0.3.1] - 2026-10-17
 
 ### Fixed

@@ -148,10 +148,12 @@ DDL, synthetic rows) — no binary fixtures are committed. See
 `devin plugins install
 Icaro0310/devin-explore#packages/graph/adapters` — it ships in the
 repo, not inside the wheel. The manifest launches the server through
-`uvx --from 'devin-graph[mcp]' devin-graph-mcp`, which resolves once
-the matching PyPI release ships; until then run the source-installed
-`devin-graph-mcp` directly or point a local manifest copy at the
-checkout (`uvx --from './packages/graph[mcp]' devin-graph-mcp`).
+`uvx --from 'devin-graph[mcp]' devin-graph-mcp`, which resolves the
+published PyPI release — no local install needed. To run the server
+from a source checkout instead, install it editable
+(`pip install -e '.[mcp]'`) and call `devin-graph-mcp` directly, or
+point a local manifest copy at the checkout
+(`uvx --from './packages/graph[mcp]' devin-graph-mcp`).
 
 ### MCP host configs
 

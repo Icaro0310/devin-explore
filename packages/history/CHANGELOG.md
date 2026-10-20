@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
 ### Fixed
 
 - `devin-history-mcp` keeps the traceback on `.run()` `ImportError`s; the
@@ -25,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Install section now recommends pypi `uv tool install devin-history` as the primary route, with `pipx`/source installs documented as alternatives.
 
 ### Added
+
+- SESSION-EVIDENCE anchors (`devin-internals-spec`
+  `docs/SESSION-EVIDENCE.md` §1 + SESSION-SURFACES §4): every exported
+  session note and JSON record now carries `surface` (`devin-cli` for
+  `sessions.db` rows, `devin-chat` for `state.vscdb` GUI bindings),
+  `native_id` (the store's own session id) and `ref` (the §4 canonical id
+  `<surface>:<workspace-hash>:native:<id>` when a workspace identity
+  exists, else the ephemeral `<surface>:ephemeral:<index>` display key).
+  The workspace path itself is hashed (`sha256[:16]`), never emitted.
 
 - `index.<fmt>` stats block: total sessions, date span, per-project and
   per-format session counts, and user/assistant/tool message totals

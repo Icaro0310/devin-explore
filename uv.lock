@@ -254,6 +254,7 @@ version = "0.3.1"
 source = { editable = "packages/doctor" }
 dependencies = [
     { name = "devin-internals-spec" },
+    { name = "packaging" },
 ]
 
 [package.optional-dependencies]
@@ -271,6 +272,7 @@ requires-dist = [
     { name = "devin-internals-spec", specifier = ">=0.3.0,<0.4.0" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
+    { name = "packaging", specifier = ">=23" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
 ]
@@ -297,7 +299,7 @@ dev = [
 
 [[package]]
 name = "devin-graph"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/graph" }
 dependencies = [
     { name = "devin-internals-spec" },
@@ -323,7 +325,7 @@ provides-extras = ["dev", "mcp"]
 
 [[package]]
 name = "devin-history"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/history" }
 dependencies = [
     { name = "devin-internals-spec" },
@@ -358,7 +360,7 @@ wheels = [
 
 [[package]]
 name = "devin-pm"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/pm" }
 dependencies = [
     { name = "devin-internals-spec" },
