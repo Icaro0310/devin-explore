@@ -521,7 +521,7 @@ def test_path_hits_dedupes_repeated_path_entry(tmp_path, monkeypatch):
     competing executable (false shadowing)."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    exe = bindir / "devin-foo"
+    exe = bindir / ("devin-foo.exe" if os.name == "nt" else "devin-foo")
     exe.write_text("#!/bin/sh\nexit 0\n")
     os.chmod(exe, 0o755)
     monkeypatch.setenv(
@@ -535,7 +535,7 @@ def test_path_hits_dedupes_symlinked_dirs(tmp_path, monkeypatch):
     produce one hit, not a phantom shadow."""
     real_dir = tmp_path / "real"
     real_dir.mkdir()
-    exe = real_dir / "devin-foo"
+    exe = real_dir / ("devin-foo.exe" if os.name == "nt" else "devin-foo")
     exe.write_text("#!/bin/sh\nexit 0\n")
     os.chmod(exe, 0o755)
     alias = tmp_path / "alias"
