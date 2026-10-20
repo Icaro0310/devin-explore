@@ -308,13 +308,55 @@ class _BuildExpect:
     init_module: str | None = None  # whose __init__.py carries __version__
     version: str | None = None  # expected __version__ (None when dynamic)
     dist_name: str | None = None  # [project].name for METADATA Name:
-    scripts: tuple[str, ...] = ()  # script names expected in
-    # entry_points.txt
+    # (entry_points group, command, "module:callable") — group keeps a
+    # [project.scripts] entry from passing when it lands in gui_scripts.
+    scripts: tuple[tuple[str, str, str], ...] = ()
 
 
 def _norm_dist(name: str) -> str:
     """PEP 503 normalization for dist-name comparison."""
     return re.sub(r"[-_.]+", "-", name.strip()).lower()
+
+
+def _same_version(a: str, b: str) -> bool:
+    """PEP 440-aware equality: wheels normalize ``1.0.0-rc1`` to
+    ``1.0.0rc1`` in METADATA while ``__version__`` keeps the literal
+    spelling. Prefers ``packaging`` (present wherever ``build`` is);
+    falls back to a separator/case-insensitive compare."""
+    if a == b:
+        return True
+    try:
+        from packaging.version import Version
+
+        return Version(a) == Version(b)
+    except Exception:  # noqa: BLE001 — packaging absent or a bad version
+        squash = lambda v: re.sub(r"[-_.]+", "", v.strip().lower())
+        return squash(a) == squash(b)
+
+
+def _squash_target(target: str) -> str:
+    """``mod : attr`` and ``mod:attr`` are the same entry point."""
+    return re.sub(r"\s+", "", target)
+
+
+def _entry_point_groups(text: str) -> dict[str, dict[str, str]]:
+    """``entry_points.txt`` → ``{section: {name: target}}`` — minimal
+    INI scan (setuptools writes plain ``[group]`` sections, ``name =
+    module:callable`` lines)."""
+    out: dict[str, dict[str, str]] = {}
+    section: dict[str, str] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = out.setdefault(line[1:-1].strip(), {})
+            continue
+        if section is None or "=" not in line:
+            continue
+        name, _, target = line.partition("=")
+        section.setdefault(name.strip(), target.strip())
+    return out
 
 
 def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
@@ -345,7 +387,7 @@ def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
                 match = _VERSION_RE.search(text)
                 if match is None:
                     return f"wheel {init_rel} has no __version__"
-                if match.group(1) != expect.version:
+                if not _same_version(match.group(1), expect.version):
                     return (
                         f"wheel {init_rel} __version__ "
                         f"'{match.group(1)}' != pyproject version "
@@ -366,21 +408,29 @@ def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
                 m_ver = re.search(
                     r"^Version:\s*(.+?)\s*$", meta_text, re.MULTILINE
                 )
-                if expect.dist_name and m_name and (
-                    _norm_dist(m_name.group(1))
-                    != _norm_dist(expect.dist_name)
-                ):
-                    return (
-                        f"wheel METADATA Name '{m_name.group(1)}' != "
-                        f"project name '{expect.dist_name}'"
-                    )
-                if expect.version and m_ver and (
-                    m_ver.group(1) != expect.version
-                ):
-                    return (
-                        f"wheel METADATA Version '{m_ver.group(1)}' != "
-                        f"pyproject version '{expect.version}'"
-                    )
+                # Absent headers are a FAIL, not a skipped comparison —
+                # a wheel without Name/Version has no usable identity.
+                if expect.dist_name:
+                    if m_name is None:
+                        return "wheel METADATA lacks a Name header"
+                    if _norm_dist(m_name.group(1)) != _norm_dist(
+                        expect.dist_name
+                    ):
+                        return (
+                            f"wheel METADATA Name '{m_name.group(1)}' "
+                            f"!= project name '{expect.dist_name}'"
+                        )
+                if expect.version:
+                    if m_ver is None:
+                        return "wheel METADATA lacks a Version header"
+                    if not _same_version(
+                        m_ver.group(1), expect.version
+                    ):
+                        return (
+                            f"wheel METADATA Version "
+                            f"'{m_ver.group(1)}' != pyproject version "
+                            f"'{expect.version}'"
+                        )
             if expect.scripts:
                 ep_files = [
                     n for n in names
@@ -390,18 +440,29 @@ def _wheel_errors(wheel: Path, expect: _BuildExpect) -> str | None:
                     zf.read(ep_files[0]).decode("utf-8", errors="replace")
                     if ep_files else ""
                 )
-                missing_eps = [
-                    cmd for cmd in expect.scripts
-                    if not re.search(
-                        rf"^{re.escape(cmd)}\s*=",
-                        ep_text,
-                        re.MULTILINE,
-                    )
-                ]
-                if missing_eps:
+                groups = _entry_point_groups(ep_text)
+                problems: list[str] = []
+                for group, cmd, target in expect.scripts:
+                    got = groups.get(group, {}).get(cmd)
+                    if got is None:
+                        elsewhere = [
+                            g for g, m in groups.items() if cmd in m
+                        ]
+                        problems.append(
+                            f"'{cmd}' is in [{elsewhere[0]}], not "
+                            f"[{group}]"
+                            if elsewhere
+                            else f"'{cmd}' missing from [{group}]"
+                        )
+                    elif _squash_target(got) != _squash_target(target):
+                        problems.append(
+                            f"'{cmd}' points to '{got}', not "
+                            f"declared '{target}'"
+                        )
+                if problems:
                     return (
-                        "wheel entry_points.txt lacks declared "
-                        "script(s): " + ", ".join(missing_eps)
+                        "wheel entry_points.txt mismatch: "
+                        + "; ".join(problems)
                     )
             return None
     except (zipfile.BadZipFile, OSError, KeyError) as exc:
@@ -551,7 +612,7 @@ def _version_findings(
             fix=f'Add __version__ = "{version}" — the wheel gate '
             "compares it to [project].version.",
         )]
-    if match.group(1) != version:
+    if not _same_version(match.group(1), version):
         return [Finding(
             CHECK_ID, Status.FAIL,
             f"{label}: __version__ '{match.group(1)}' != pyproject "
@@ -570,42 +631,58 @@ def _scripts_findings(
 ) -> list[Finding]:
     if project is None:
         return []
-    scripts = project.get("scripts")
-    if scripts is None:
-        return [Finding(
-            CHECK_ID, Status.PASS,
-            f"{label}: no [project.scripts] — library-only package",
-        )]
-    if not isinstance(scripts, dict) or not scripts:
-        return [Finding(
-            CHECK_ID, Status.WARN,
-            f"{label}: [project.scripts] is empty or not a table",
-        )]
-    src = pkg / "src"
     findings: list[Finding] = []
+    tables: list[dict[str, Any]] = []
+    for key, display in (
+        ("scripts", "[project.scripts]"),
+        ("gui-scripts", "[project.gui-scripts]"),
+    ):
+        table = project.get(key)
+        if table is None:
+            continue
+        if not isinstance(table, dict) or not table:
+            findings.append(Finding(
+                CHECK_ID, Status.WARN,
+                f"{label}: {display} is empty or not a table",
+            ))
+            continue
+        tables.append(table)
+    if not tables:
+        if not findings:
+            findings.append(Finding(
+                CHECK_ID, Status.PASS,
+                f"{label}: no [project.scripts]/[project.gui-scripts] "
+                "— library-only package",
+            ))
+        return findings
+    src = pkg / "src"
     unverifiable: list[str] = []
-    for command, target in scripts.items():
-        module, sep, attr = str(target).partition(":")
-        if not sep or not module or not attr:
-            findings.append(Finding(
-                CHECK_ID, Status.FAIL,
-                f"{label}: script '{command} = {target}' is not "
-                "'module:attr'",
-                fix="Entry points must read 'module.path:callable'.",
-            ))
-            continue
-        module_file = _module_file(src, module) if src.is_dir() else None
-        if module_file is None:
-            findings.append(Finding(
-                CHECK_ID, Status.FAIL,
-                f"{label}: script '{command}' → '{module}' resolves to "
-                "nothing under src/",
-                fix="Fix the entry point or add the module — the "
-                "console script would be dead on install.",
-            ))
-            continue
-        if not _attr_declared(module_file, attr):
-            unverifiable.append(f"{command} ({module}:{attr})")
+    for table in tables:
+        for command, target in table.items():
+            module, sep, attr = str(target).partition(":")
+            if not sep or not module or not attr:
+                findings.append(Finding(
+                    CHECK_ID, Status.FAIL,
+                    f"{label}: script '{command} = {target}' is not "
+                    "'module:attr'",
+                    fix="Entry points must read "
+                    "'module.path:callable'.",
+                ))
+                continue
+            module_file = (
+                _module_file(src, module) if src.is_dir() else None
+            )
+            if module_file is None:
+                findings.append(Finding(
+                    CHECK_ID, Status.FAIL,
+                    f"{label}: script '{command}' → '{module}' resolves "
+                    "to nothing under src/",
+                    fix="Fix the entry point or add the module — the "
+                    "script would be dead on install.",
+                ))
+                continue
+            if not _attr_declared(module_file, attr):
+                unverifiable.append(f"{command} ({module}:{attr})")
     if unverifiable:
         findings.append(Finding(
             CHECK_ID, Status.WARN,
@@ -614,10 +691,12 @@ def _scripts_findings(
             "found statically",
         ))
     if not findings:
+        total = sum(len(t) for t in tables)
+        all_cmds = sorted(c for t in tables for c in t)
         findings.append(Finding(
             CHECK_ID, Status.PASS,
-            f"{label}: {len(scripts)} console script(s) resolve "
-            f"({', '.join(sorted(scripts))})",
+            f"{label}: {total} console script(s) resolve "
+            f"({', '.join(all_cmds)})",
         ))
     return findings
 
@@ -795,13 +874,16 @@ def _check_package(
     findings += _version_findings(label, pkg, project, mod)
     findings += _scripts_findings(label, pkg, project)
     version = project.get("version")
-    script_names: tuple[str, ...] = ()
-    scripts = project.get("scripts")
-    if isinstance(scripts, dict):
-        script_names = tuple(str(k) for k in scripts)
-    gui = project.get("gui-scripts")
-    if isinstance(gui, dict):
-        script_names += tuple(str(k) for k in gui)
+    script_decls: list[tuple[str, str, str]] = []
+    for key, group in (
+        ("scripts", "console_scripts"),
+        ("gui-scripts", "gui_scripts"),
+    ):
+        table = project.get(key)
+        if isinstance(table, dict):
+            script_decls += [
+                (group, str(k), str(v)) for k, v in table.items()
+            ]
     expect = _BuildExpect(
         modules=tuple(
             dict.fromkeys(
@@ -815,7 +897,7 @@ def _check_package(
             if isinstance(project.get("name"), str)
             else None
         ),
-        scripts=script_names,
+        scripts=tuple(script_decls),
     )
     findings += _build_findings(
         label, pkg, meta, expect, build_probe, builder, dist_version

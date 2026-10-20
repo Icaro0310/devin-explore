@@ -35,6 +35,7 @@ def write_pkg(
     build_system: bool = True,
     requires: str = "setuptools>=68",
     dynamic: list[str] | None = None,
+    gui_scripts: dict[str, str] | None = None,
 ) -> Path:
     """A synthetic src-layout package: pyproject + src/<mod>/{__init__,cli}."""
     if scripts is None:
@@ -58,6 +59,9 @@ def write_pkg(
     if scripts:
         lines += ["", "[project.scripts]"]
         lines += [f'{k} = "{v}"' for k, v in scripts.items()]
+    if gui_scripts:
+        lines += ["", "[project.gui-scripts]"]
+        lines += [f'{k} = "{v}"' for k, v in gui_scripts.items()]
     (pkg / "pyproject.toml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -524,9 +528,179 @@ def test_wheel_ok_returns_none(tmp_path):
             init_module="devin_foo",
             version="1.2.3",
             dist_name="devin-foo",
-            scripts=("devin-foo",),
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
         ),
     ) is None
+
+
+def test_wheel_entry_point_wrong_group_fails(tmp_path):
+    """Regression (re-review): a console script landing in [gui_scripts]
+    means no console launcher is installed — name-alone matching missed
+    it."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": (
+                "[gui_scripts]\ndevin-foo = devin_foo.cli:main\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
+        ),
+    )
+    assert err is not None and "gui_scripts" in err
+
+
+def test_wheel_entry_point_wrong_target_fails(tmp_path):
+    """Same name, different callable — the installed command runs the
+    wrong function."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo/cli.py": "def main():\n    return 0\n",
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.2.3\n"
+            ),
+            "devin_foo-1.2.3.dist-info/entry_points.txt": (
+                "[console_scripts]\ndevin-foo = devin_foo.cli:other\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo", "devin_foo.cli"),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
+        ),
+    )
+    assert err is not None and "cli:other" in err
+
+
+def test_wheel_metadata_missing_name_header_fails(tmp_path):
+    """Regression (re-review): a METADATA file without a Name header
+    used to skip the comparison and pass."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Metadata-Version: 2.1\nVersion: 1.2.3\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "Name" in err
+
+
+def test_wheel_metadata_missing_version_header_fails(tmp_path):
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.2.3"\n',
+            "devin_foo-1.2.3.dist-info/METADATA": (
+                "Metadata-Version: 2.1\nName: devin-foo\n"
+            ),
+        },
+    )
+    err = publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.2.3",
+            dist_name="devin-foo",
+        ),
+    )
+    assert err is not None and "Version" in err
+
+
+def test_wheel_prerelease_version_passes(tmp_path):
+    """Regression (re-review): '1.0.0-rc1' in pyproject is the same
+    release as normalized '1.0.0rc1' in METADATA — PEP 440, not raw
+    string equality."""
+    wheel = _fake_wheel(
+        tmp_path / "w.whl",
+        {
+            "devin_foo/__init__.py": '__version__ = "1.0.0-rc1"\n',
+            "devin_foo-1.0.0rc1.dist-info/METADATA": (
+                "Name: devin-foo\nVersion: 1.0.0rc1\n"
+            ),
+        },
+    )
+    assert publish._wheel_errors(
+        wheel,
+        publish._BuildExpect(
+            modules=("devin_foo",),
+            init_module="devin_foo",
+            version="1.0.0-rc1",
+            dist_name="devin-foo",
+        ),
+    ) is None
+
+
+def test_gui_script_dead_callable_fails(tmp_path):
+    """Regression (re-review): gui-scripts targets get the same
+    module+attr verification as console scripts."""
+    pkg = write_pkg(
+        tmp_path / "guimod",
+        scripts={"devin-foo": "devin_foo.cli:main"},
+        gui_scripts={"devin-foo-gui": "devin_foo.nope:main"},
+    )
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
+    assert any(
+        "'devin-foo-gui'" in f.message
+        and "devin_foo.nope" in f.message
+        and f.status is Status.FAIL
+        for f in findings
+    ), [f.message for f in findings]
+
+
+def test_gui_script_missing_attr_warns(tmp_path):
+    pkg = write_pkg(
+        tmp_path / "guiattr",
+        scripts={"devin-foo": "devin_foo.cli:main"},
+        gui_scripts={"devin-foo-gui": "devin_foo.cli:run"},
+    )
+    findings = publish.run(
+        _ctx(pkg), build_probe=lambda: True, builder=_ok
+    )
+    assert any(
+        "devin_foo.cli:run" in f.message and f.status is Status.WARN
+        for f in findings
+    )
+    assert not any(f.status is Status.FAIL for f in findings)
 
 
 def test_wheel_metadata_name_mismatch_fails(tmp_path):
@@ -611,7 +785,9 @@ def test_wheel_entry_point_missing_fails(tmp_path):
             init_module="devin_foo",
             version="1.2.3",
             dist_name="devin-foo",
-            scripts=("devin-foo",),
+            scripts=(
+                ("console_scripts", "devin-foo", "devin_foo.cli:main"),
+            ),
         ),
     )
     assert err is not None and "entry_points" in err and "devin-foo" in err
