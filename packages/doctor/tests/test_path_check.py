@@ -30,12 +30,22 @@ def write_pkg(
     scripts: dict[str, str] | None = None,
     gui_scripts: dict[str, str] | None = None,
 ) -> Path:
-    """Minimal package dir — path-check only reads pyproject scripts."""
+    """Publish-ready package dir — path-check only reads pyproject
+    scripts, but the shared ``check`` command also runs
+    publish-readiness, so the fixture must satisfy both checks."""
     if scripts is None:
         mod = name.replace("-", "_")
         scripts = {name: f"{mod}.cli:main"}
     pkg.mkdir(parents=True)
-    lines = ["[project]", f'name = "{name}"', 'version = "1.0.0"']
+    lines = [
+        "[build-system]",
+        'requires = ["setuptools>=68"]',
+        'build-backend = "setuptools.build_meta"',
+        "",
+        "[project]",
+        f'name = "{name}"',
+        'version = "1.0.0"',
+    ]
     if scripts:
         lines += ["", "[project.scripts]"]
         lines += [f'{k} = "{v}"' for k, v in scripts.items()]
@@ -44,6 +54,14 @@ def write_pkg(
         lines += [f'{k} = "{v}"' for k, v in gui_scripts.items()]
     (pkg / "pyproject.toml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    mod_dir = pkg / "src" / name.replace("-", "_")
+    mod_dir.mkdir(parents=True)
+    (mod_dir / "__init__.py").write_text(
+        '__version__ = "1.0.0"\n', encoding="utf-8"
+    )
+    (mod_dir / "cli.py").write_text(
+        "def main():\n    return 0\n", encoding="utf-8"
     )
     return pkg
 

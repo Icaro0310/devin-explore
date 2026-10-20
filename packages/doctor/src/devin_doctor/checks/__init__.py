@@ -29,8 +29,8 @@ DEVIN_CHECKS = [
     updates,
     automation,
     path_check,
+    publish,
 ]
-DEVIN_CHECKS = [health, config, hooks_windows, disk, updates, automation, publish]
 
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
 

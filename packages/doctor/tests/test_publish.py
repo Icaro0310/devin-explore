@@ -982,7 +982,26 @@ def test_run_all_includes_check(ctx, tmp_path):
     assert "publish-readiness" in report.check_status()
 
 
-def test_cli_single_package_exit_0(tmp_path, capsys):
+def _devin_foo_on_path(tmp_path: Path, monkeypatch) -> None:
+    """Put a `devin-foo` executable on PATH so `path-check` stays green.
+
+    The shared `check` command runs every devin-environment check, so a
+    synthetic package with a declared `devin-foo` console script would
+    otherwise fail `path-check` (not installed) inside publish tests.
+    """
+    bindir = tmp_path / "path-bin"
+    bindir.mkdir(exist_ok=True)
+    script = bindir / "devin-foo"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    import os
+
+    os.chmod(script, 0o755)  # shutil.which requires X_OK on POSIX
+    (bindir / "devin-foo.cmd").write_text("@exit /b 0\r\n")
+    monkeypatch.setenv("PATH", str(bindir))
+
+
+def test_cli_single_package_exit_0(tmp_path, monkeypatch, capsys):
+    _devin_foo_on_path(tmp_path, monkeypatch)
     pkg = write_pkg(tmp_path / "mypkg")
     rc = main([
         "check", "--data-dir", str(tmp_path), "--cwd", str(pkg),
@@ -1002,7 +1021,8 @@ def test_cli_broken_package_exit_1(tmp_path, capsys):
     assert "9.9.9" in out
 
 
-def test_cli_json_lists_findings(tmp_path, capsys):
+def test_cli_json_lists_findings(tmp_path, monkeypatch, capsys):
+    _devin_foo_on_path(tmp_path, monkeypatch)
     pkg = write_pkg(tmp_path / "mypkg")
     rc = main([
         "check", "--data-dir", str(tmp_path), "--cwd", str(pkg),
@@ -1020,7 +1040,8 @@ def test_cli_json_lists_findings(tmp_path, capsys):
     assert any(f["status"] == "PASS" for f in mine)
 
 
-def test_cli_package_flag_scopes(tmp_path, capsys):
+def test_cli_package_flag_scopes(tmp_path, monkeypatch, capsys):
+    _devin_foo_on_path(tmp_path, monkeypatch)
     write_repo(tmp_path)
     rc = main([
         "check", "--data-dir", str(tmp_path), "--cwd", str(tmp_path),
