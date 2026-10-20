@@ -1388,9 +1388,10 @@ def test_real_wheel_missing_declared_module_fails(tmp_path):
     ), [f.message for f in findings]
 
 
-def test_hybrid_member_module_still_checked(tmp_path):
-    """``widget/widget.py`` beside ``package.json`` is a hybrid single-
-    module distribution — the JS manifest does not hide it."""
+def test_hybrid_member_module_warns_not_fails(tmp_path):
+    """``widget/widget.py`` beside ``package.json`` may be a single-
+    module dist or a name-matched helper — WARN ambiguous, never FAIL
+    and never silently skipped."""
     write_repo(tmp_path)
     widget = tmp_path / "packages" / "widget"
     widget.mkdir()
@@ -1402,15 +1403,19 @@ def test_hybrid_member_module_still_checked(tmp_path):
         _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/widget" in f.message for f in fails)
     assert any(
-        "packages/widget" in f.message and "no pyproject.toml" in f.message
-        for f in fails
+        "packages/widget" in f.message
+        and "ambiguous hybrid member" in f.message
+        and f.status is Status.WARN
+        for f in findings
     )
 
 
-def test_broken_manifest_does_not_prove_foreign(tmp_path):
-    """An unparseable ``package.json`` proves nothing — a loose ``.py``
-    beside it is still a Python signal, not npm tooling."""
+def test_broken_manifest_stays_foreign_but_warns(tmp_path):
+    """A malformed ``package.json`` does not flip the member to a
+    Python candidate — it is skipped as foreign tooling and the broken
+    manifest is its own WARN."""
     write_repo(tmp_path)
     member = tmp_path / "packages" / "npm-tools"
     member.mkdir()
@@ -1422,7 +1427,10 @@ def test_broken_manifest_does_not_prove_foreign(tmp_path):
         _ctx(tmp_path), build_probe=lambda: True, dist_version=lambda _n: None, builder=_ok
     )
     fails = [f for f in findings if f.status is Status.FAIL]
+    assert not any("packages/npm-tools" in f.message for f in fails)
     assert any(
-        "packages/npm-tools" in f.message and "no pyproject.toml" in f.message
-        for f in fails
+        "packages/npm-tools" in f.message
+        and "unparseable" in f.message
+        and f.status is Status.WARN
+        for f in findings
     )

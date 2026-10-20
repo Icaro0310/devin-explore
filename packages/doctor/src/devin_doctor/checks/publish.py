@@ -530,28 +530,21 @@ def _python_signals(pkg: Path) -> bool:
 
     The loose-root-``.py`` signal is the ambiguous one: it may be a
     single-module flat distribution or just a maintenance helper. A
-    foreign manifest (``package.json``) beside it means the script is
-    tooling for that ecosystem, so it is not counted — unless the file
-    matches the member name (``widget/widget.py`` is a hybrid
-    distribution, not a helper) or the manifest is unparseable (a
-    broken or dangling entry proves nothing about foreign tooling)."""
+    foreign manifest file (``package.json`` — present or dangling,
+    parseable or not) means the scripts are tooling for that
+    ecosystem, so loose ``.py`` files are not counted. Ambiguity a
+    name-matched ``<pkg>/<pkg>.py`` may still carry is surfaced by the
+    caller as a WARN, not silently skipped — and never a FAIL."""
     if (pkg / "setup.py").is_file() or (pkg / "setup.cfg").is_file():
         return True
     manifest = pkg / "package.json"
-    try:
-        foreign = manifest.is_file()
-        if foreign:
-            json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        foreign = False
+    foreign = manifest.exists() or manifest.is_symlink()
     try:
         for child in pkg.iterdir():
             if child.is_dir():
                 if (child / "__init__.py").is_file():
                     return True
-            elif child.suffix == ".py" and (
-                not foreign or child.stem == pkg.name
-            ):
+            elif child.suffix == ".py" and not foreign:
                 return True
     except OSError:
         pass
@@ -959,11 +952,29 @@ def _check_package(
         and not _python_signals(pkg)
         and not _is_publish_target(pkg)
     ):
-        return [Finding(
+        findings = [Finding(
             CHECK_ID, Status.PASS,
             f"{label}: not a Python package (no packaging signals) — "
             "skipped",
         )]
+        manifest = pkg / "package.json"
+        if manifest.exists() or manifest.is_symlink():
+            try:
+                json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                findings.append(Finding(
+                    CHECK_ID, Status.WARN,
+                    f"{label}: package.json unparseable — member still "
+                    "read as foreign tooling",
+                ))
+            if (pkg / f"{pkg.name}.py").is_file():
+                findings.append(Finding(
+                    CHECK_ID, Status.WARN,
+                    f"{label}: {pkg.name}.py beside package.json — "
+                    "ambiguous hybrid member skipped; name it in "
+                    "pypi-publish.yml to force metadata checks",
+                ))
+        return findings
     findings, project = _metadata_findings(label, meta, err)
     if project is None:
         return findings
