@@ -653,3 +653,22 @@ def test_dist_findings_invalid_version_is_unverifiable(tmp_path):
     findings = deps_internals.run(_ctx(tmp_path))
     assert _statuses(findings) == [Status.WARN]
     assert "unverifiable" in findings[0].message
+
+
+def test_finder_keeps_raw_capture_on_invalid_escapes(tmp_path, monkeypatch):
+    """A hand-written finder with an unescaped Windows path — 'C:\\\\x'
+    inside the literal — is not valid Python, so ast fails and the raw
+    quoted capture must be kept instead of dropped."""
+    import ntpath
+
+    finder = tmp_path / "__editable___devin_foo_1_2_3_finder.py"
+    # Single backslashes: an invalid \\U escape for Python parsers but a
+    # plausible hand-edited file on a Windows box.
+    finder.write_text(
+        "MAPPING = {'devin_foo': 'C:\\work\\repo\\src\\devin_foo'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deps_internals.os.path, "isabs", ntpath.isabs)
+    assert deps_internals._finder_targets(finder) == [
+        "C:\\work\\repo\\src\\devin_foo"
+    ]

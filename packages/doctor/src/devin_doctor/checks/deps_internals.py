@@ -246,22 +246,35 @@ def _finder_targets(finder: Path) -> list[str]:
                 )
             ):
                 continue
+            seg = ast.get_source_segment(text, node.value) or ""
             try:
                 value = ast.literal_eval(node.value)
             except (ValueError, TypeError, SyntaxError, MemoryError):
+                value = None
+            if "\\\\" not in seg or value is None:
+                # No real escapes to decode (or an unparsable literal):
+                # quoted text is verbatim path text — decoding single-
+                # backslash pseudo-escapes like \r or \t would mangle it.
+                entries = [m.group(1) for m in _QUOTED_RE.finditer(seg)]
+            elif isinstance(value, dict):
+                entries = value.values()
+            else:
                 continue
-            entries = value.values() if isinstance(value, dict) else ()
             for entry in entries:
                 for path in [entry] if isinstance(entry, str) else entry:
                     if isinstance(path, str) and os.path.isabs(path):
                         targets.append(path)
     if not targets:  # nonstandard finder — decode bare literals instead
         for m in _QUOTED_RE.finditer(text):
-            try:
-                decoded = ast.literal_eval(m.group(0))
-            except (ValueError, TypeError, SyntaxError, MemoryError):
-                continue
-            if isinstance(decoded, str) and os.path.isabs(decoded):
+            decoded = m.group(1)
+            if "\\\\" in m.group(0):
+                try:
+                    value = ast.literal_eval(m.group(0))
+                    if isinstance(value, str):
+                        decoded = value
+                except (ValueError, TypeError, SyntaxError, MemoryError):
+                    pass
+            if os.path.isabs(decoded):
                 targets.append(decoded)
     return targets
 
