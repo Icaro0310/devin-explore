@@ -43,4 +43,4 @@ jobs:
       pull-requests: write
     # v1.1 -> v1.3: the referenced reusable workflow is identical at both
     # tags; the bump keeps the caller on a current pin (see CHANGELOG).
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.5
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.6

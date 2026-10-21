@@ -3,8 +3,10 @@
 ## Unreleased
 
 - **CI** — `auto-approve` now calls the shared `pr-approve` reusable
-  workflow at v1.3 (was v1.1), keeping the Devin Review gate on the
-  current head commit.
+  workflow at v1.6 (was v1.1) and also triggers on
+  `pull_request_review_comment[created]`, so fix-commit replies
+  re-evaluate the gate on the same head; the v1.6 gate adds cross-repo
+  fix anchors and gate-eligible concurrency.
 - **Feature** — `devin-doctor` gains an `automation` check for silently
   broken scheduled tasks: per-surface enumeration (user crontab,
   `systemd --user` units/timers including unloaded unit files, Windows
