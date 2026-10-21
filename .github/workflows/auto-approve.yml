@@ -22,6 +22,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   status: {}
 
 permissions:
@@ -41,4 +43,4 @@ jobs:
       pull-requests: write
     # v1.1 -> v1.3: the referenced reusable workflow is identical at both
     # tags; the bump keeps the caller on a current pin (see CHANGELOG).
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.3
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.5
