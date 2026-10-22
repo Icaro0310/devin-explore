@@ -985,39 +985,24 @@ def test_vanished_source_root_drops_stale_docs(tmp_path):
 _DEEP_JSON_LINE = "[" * 200_000 + "]" * 200_000
 
 
-def test_vscode_deep_content_nesting_indexes(tmp_path):
-    """~5000 nested ``content`` fields must not RecursionError the
-    collector — one such doc previously aborted the whole index run
-    (devin-review on #82)."""
-    user_dir = tmp_path / "Code" / "User"
-    leaf = "vscode deepnest leaf"
-    # Built as a JSON string: json.dumps of a 5000-deep dict would itself
-    # RecursionError during encoding, before the collector ever runs.
-    message_json = '{"content":' * 5_000 + json.dumps(leaf) + "}" * 5_000
-    doc_json = (
-        '{"version": 3, "sessionId": "vs-deep", "creationDate": '
-        + str(BASE_MS)
-        + ', "lastMessageDate": '
-        + str(BASE_MS + 5_000)
-        + ', "requests": [{"message": '
-        + message_json
-        + ', "response": [{"value": "vscode deepnest answer"}],'
-        + '"timestamp": '
-        + str(BASE_MS)
-        + ', "responseTimestamp": '
-        + str(BASE_MS + 5_000)
-        + "}]}"
-    )
-    base = (
-        user_dir / "workspaceStorage" / "a1b2c3hash" / "chatSessions"
-    )
-    base.mkdir(parents=True)
-    (base / "vs-deep.json").write_text(doc_json)
-    idx = tmp_path / "search.db"
-    stats = build_index(idx, vscode_chat_dirs=[user_dir])
+def test_vscode_deep_content_nesting_field_walk():
+    """~5000 nested ``content`` fields must not RecursionError the walk —
+    a recursive traversal dies on every supported Python at this depth
+    (devin-review on #82). Called directly because json.loads of a
+    5000-deep doc itself RecursionErrors on 3.11, before the walk ever
+    runs — the file-level deep-JSON path is covered by
+    test_vscode_deep_json_files_skipped."""
+    from devin_search.index import _vscode_field_text
 
-    assert stats.vscode_chat_messages == 2
-    assert search(idx, "deepnest")
+    node = "vscode deepnest leaf"
+    for _ in range(5_000):
+        node = {"content": node}
+    assert _vscode_field_text(node) == "vscode deepnest leaf"
+    # Lists and interleaved keys survive too, in traversal order.
+    node = {"content": [{"content": "a"}, {"text": "b"}]}
+    for _ in range(2_000):
+        node = {"content": node}
+    assert _vscode_field_text(node) == "a\nb"
 
 
 def test_vscode_deep_json_files_skipped(tmp_path):
