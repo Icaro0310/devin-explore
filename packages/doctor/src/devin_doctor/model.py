@@ -65,6 +65,7 @@ class Context:
     now_ms: int | None = None
     acp_warn_bytes: int = 512 * 1024**2
     store_warn_bytes: int = 256 * 1024**2
+    sessions_db_warn_bytes: int = 2 * 1024**3
     total_warn_bytes: int = 4 * 1024**3
     config_dir: Path | None = None
     # Per-call offline switch for the updates check; complements the

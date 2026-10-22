@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `disk` — a dedicated `sessions.db` size finding: an exact stat outside
+  the bounded walk reports the store's size and warns over
+  `ctx.sessions_db_warn_bytes` (default 2 GiB) with the file's path and
+  an export-then-prune pointer (devin-history, devin-janitor). A huge
+  sessions.db is the top cause of slow Devin starts and previously only
+  surfaced if it happened to make the top-3 stores listing.
+
 ### Fixed
 
 - `publish-readiness` — a `packages/*` member without `pyproject.toml`
