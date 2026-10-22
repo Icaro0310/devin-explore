@@ -601,7 +601,7 @@ def _yaml_scalars(text: str) -> dict[str, str]:
         if value.startswith('"') and value.endswith('"') and len(value) >= 2:
             try:
                 value = str(json.loads(value))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 value = value[1:-1]
         elif value.startswith("'") and value.endswith("'") and len(value) >= 2:
             value = value[1:-1].replace("''", "'")
@@ -810,14 +810,18 @@ def _index_copilot_dirs(
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 stats.skipped_records += 1  # malformed — may complete later
                 continue
             last_complete = i + 1  # well-formed record — safe to cover
             if not isinstance(event, dict):
                 stats.skipped_records += 1
                 continue
-            role = _COPILOT_MESSAGE_ROLES.get(event.get("type"))
+            etype = event.get("type")
+            if not isinstance(etype, str):
+                stats.skipped_records += 1  # array/object type — unhashable
+                continue
+            role = _COPILOT_MESSAGE_ROLES.get(etype)
             if role is None:
                 continue  # non-message event type — metadata only
             text = _copilot_event_text(event.get("data"))
@@ -988,9 +992,9 @@ def _index_codex_state_db(
         db.close()
     prefix = f"{SOURCE_CODEX}:{file_key}:"
     indexed = {
-        r["ref"]: r["text"]
+        r["ref"]: (r["text"], r["ts"], r["project"])
         for r in con.execute(
-            "SELECT ref, text FROM docs WHERE source = ?"
+            "SELECT ref, text, ts, project FROM docs WHERE source = ?"
             " AND substr(ref, 1, ?) = ?",
             (SOURCE_CODEX, len(prefix), prefix),
         )
@@ -1017,7 +1021,7 @@ def _index_codex_state_db(
                 continue
             ref = f"{prefix}{tid}/{field_name}"
             seen_refs.add(ref)
-            if indexed.get(ref) == value:
+            if indexed.get(ref) == (value, created, cwd):
                 continue  # unchanged — nothing to do
             if ref in indexed:
                 stats.removed += con.execute(
@@ -1070,7 +1074,7 @@ def _index_codex_rollout(
             continue
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             continue
         if not isinstance(record, dict):
             continue
@@ -1109,7 +1113,7 @@ def _index_codex_rollout(
                 continue
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, RecursionError):
                 stats.skipped_records += 1
                 continue
             last_complete = i + 1
@@ -1219,20 +1223,28 @@ _VSCODE_CONTENT_KEYS = ("text", "value", "content", "parts")
 def _vscode_field_text(node: Any) -> str:
     """Text under a vscode-chat content field: strings pass through and
     containers are walked through the content keys only, so metadata
-    (agent ids, ranges, extension info) never reaches the index."""
-    if isinstance(node, str):
-        return node
-    if isinstance(node, list):
-        return "\n".join(
-            t for t in (_vscode_field_text(x) for x in node) if t
-        )
-    if isinstance(node, dict):
-        return "\n".join(
-            t
-            for key in _VSCODE_CONTENT_KEYS
-            if (t := _vscode_field_text(node.get(key)))
-        )
-    return ""
+    (agent ids, ranges, extension info) never reaches the index.
+
+    Iterative — a chat doc can nest ``content`` hundreds of levels deep
+    and a recursive walk would RecursionError, aborting the whole index
+    run (devin-review on #82). Joining is associative over the flat leaf
+    sequence, so traversal order matches the old recursive walk: lists
+    in order, dicts in ``_VSCODE_CONTENT_KEYS`` order, empties dropped."""
+    parts: list[str] = []
+    stack: list[Any] = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            if cur:
+                parts.append(cur)
+        elif isinstance(cur, list):
+            stack.extend(reversed(cur))
+        elif isinstance(cur, dict):
+            for key in reversed(_VSCODE_CONTENT_KEYS):
+                child = cur.get(key)
+                if child is not None:
+                    stack.append(child)
+    return "\n".join(parts)
 
 
 def _vscode_chat_files(
@@ -1323,7 +1335,7 @@ def _vscode_rebuild(text: str) -> tuple[dict[str, Any], int]:
     if trimmed.startswith("{"):
         try:
             whole = json.loads(trimmed)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             whole = None
         if isinstance(whole, dict) and not isinstance(whole.get("kind"), int):
             return whole, 0
@@ -1335,7 +1347,7 @@ def _vscode_rebuild(text: str) -> tuple[dict[str, Any], int]:
             continue
         try:
             record = json.loads(stripped)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             bad_lines += 1  # truncated tail or malformed mid-line
             continue
         if not isinstance(record, dict):
@@ -1532,12 +1544,24 @@ def build_index(
                 _drop_vanished_files(con, SOURCE_DEVIN_CHAT, set(), stats)
         if copilot_dirs is not None:
             copilot_roots = [Path(d).expanduser() for d in copilot_dirs]
-            _index_copilot_dirs(con, copilot_roots, stats)
+            if any(r.is_dir() for r in copilot_roots):
+                _index_copilot_dirs(con, copilot_roots, stats)
+            else:
+                # Managed-but-gone: files under the configured roots
+                # vanished upstream — skipping the collector silently
+                # would leave stale hits forever.
+                _drop_vanished_files(con, SOURCE_COPILOT, set(), stats)
         if codex_dir is not None:
-            _index_codex_root(con, Path(codex_dir), stats)
+            if Path(codex_dir).is_dir():
+                _index_codex_root(con, Path(codex_dir), stats)
+            else:
+                _drop_vanished_files(con, SOURCE_CODEX, set(), stats)
         if vscode_chat_dirs is not None:
             vscode_dirs = [Path(d).expanduser() for d in vscode_chat_dirs]
-            _index_vscode_chat_dirs(con, vscode_dirs, stats)
+            if any(d.is_dir() for d in vscode_dirs):
+                _index_vscode_chat_dirs(con, vscode_dirs, stats)
+            else:
+                _drop_vanished_files(con, SOURCE_VSCODE_CHAT, set(), stats)
         con.commit()
     finally:
         con.close()

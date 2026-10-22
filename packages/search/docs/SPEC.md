@@ -153,7 +153,11 @@ devin-search query "<term>" [--role R] [--project P] [--since DATE]
   `Code - Insiders` `User` dirs + `~/.vscode-server/data/User` merged);
   `--index` defaults to `<app-dir>/devin-search/search.db`. Each
   `--<surface>-dir` flag pins that surface to one root; each
-  `--no-<surface>` flag disables it entirely.
+  `--no-<surface>` flag disables it entirely. Every managed surface —
+  pinned or auto-detected — sweeps stale docs when its store is gone:
+  a root configured-but-absent counts as vanished and its docs/markers
+  are removed (`stats.removed`); `--no-<surface>` makes the surface
+  unmanaged for the run and preserves its docs.
 - `index` prints a one-line stats summary (or JSON); exit 0.
 - `query` prints a fixed-width table (`WHEN · ROLE · PROJECT · SESSION ·
   SNIPPET`, matches wrapped in `«»`) or `--json`; exit 0 with hits, 1 on
