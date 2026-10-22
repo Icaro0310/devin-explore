@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `search_query` MCP tool and `do_query()` accept `tool` for CLI parity;
   the local query log records the filter when set.
 
+### Fixed
+
+- `json.loads` `RecursionError`s are treated like `JSONDecodeError` so a
+  pathological record is skipped instead of aborting the run (vscode
+  snapshot, mutations log, copilot, codex rollout).
+- `_vscode_field_text` walks containers iteratively, so a chat doc with
+  deeply nested `content` fields no longer RecursionErrors the whole
+  index run.
+- copilot records whose `type` is not a string are skipped instead of
+  raising `TypeError`.
+- codex `threads` docs re-index when only `cwd`/`created_at` metadata
+  changes — the indexed comparison was text-only, so metadata edits
+  were invisible.
+- Managed collector surfaces whose roots are all gone (copilot, codex,
+  vscode-chat) sweep their stale docs/markers — the documented
+  vanished-source contract from 0.2.1 now applies to every surface, not
+  only `sessions_db` and ACP. `--no-<surface>` still preserves docs.
+
 ## [0.2.1] - 2026-10-17
 
 ### Fixed
