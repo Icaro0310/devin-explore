@@ -53,6 +53,19 @@ def test_acp_accumulation_warns(ctx):
     assert f.status is Status.WARN
 
 
+def test_oversized_sessions_db_warns(ctx):
+    """sessions.db over its threshold warns with path + janitor pointer."""
+    ctx.sessions_db_warn_bytes = 1
+    f = _finding(disk.run(ctx), "sessions.db is")
+    assert f.status is Status.WARN
+    assert "devin-janitor" in (f.fix or "")
+
+
+def test_sessions_db_within_threshold_passes(ctx):
+    f = _finding(disk.run(ctx), "sessions.db:")
+    assert f.status is Status.PASS
+
+
 def test_missing_data_dir_is_not_detected(tmp_path):
     """No Devin data at all — the check emits nothing and the report lists
     it under 'not detected' instead of hard-failing."""
@@ -64,7 +77,7 @@ def test_missing_data_dir_is_not_detected(tmp_path):
 
 def test_uncapped_run_has_no_cap_markers(ctx):
     findings = disk.run(ctx)
-    assert len(findings) == 3
+    assert len(findings) == 4
     assert all("(scan capped)" not in f.message for f in findings)
     assert all("≥" not in f.message for f in findings)
     total = _finding(findings, "data dir")
@@ -107,12 +120,14 @@ def test_findings_never_restat_walked_files(ctx, monkeypatch):
     those records and never call ``Path.stat`` on a file under the data dir
     again (the old code stat'ed every file up to 5 times). The one allowed
     exception is acp-messages DBs, which get a single fresh stat so live
-    growth during the walk cannot hide a threshold breach."""
+    growth during the walk cannot hide a threshold breach. The same
+    exception applies to sessions.db, which gets its own exact finding."""
     from devin_doctor.paths import locate_stores
 
     known_files = {p for p in ctx.data_dir.rglob("*") if p.is_file()}
     assert known_files
-    acp_dbs = set(locate_stores(ctx.data_dir).acp_dbs)
+    exempt = set(locate_stores(ctx.data_dir).acp_dbs)
+    exempt.add(ctx.data_dir / "cli" / "sessions.db")
     seen = []
     orig = Path.stat
 
@@ -122,8 +137,8 @@ def test_findings_never_restat_walked_files(ctx, monkeypatch):
 
     monkeypatch.setattr(Path, "stat", spy)
     findings = disk.run(ctx)
-    assert len(findings) == 3
-    assert [p for p in seen if p in known_files and p not in acp_dbs] == []
+    assert len(findings) == 4
+    assert [p for p in seen if p in known_files and p not in exempt] == []
 
 
 def test_acp_stats_are_fresh_not_scan_records(ctx, monkeypatch):

@@ -153,6 +153,36 @@ def _largest_finding(ctx: Context, files: list[_ScannedFile], capped: bool) -> F
     return Finding(CHECK_ID, Status.PASS, f"largest stores: {listing}{marker}")
 
 
+def _sessions_db_finding(ctx: Context, capped: bool) -> Finding:
+    """Exact sessions.db size finding — a targeted stat outside the
+    bounded walk, like acp-messages: the number is never a lower bound,
+    live growth during the walk cannot hide a threshold breach, and the
+    check fires even when the file would not make the top-3 listing."""
+    marker = " (scan capped)" if capped else ""
+    path = ctx.data_dir / "cli" / "sessions.db"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return Finding(
+            CHECK_ID,
+            Status.PASS,
+            f"sessions.db: absent — nothing to size{marker}",
+        )
+    if size > ctx.sessions_db_warn_bytes:
+        return Finding(
+            CHECK_ID,
+            Status.WARN,
+            f"sessions.db is {human_size(size)} "
+            f"(>{human_size(ctx.sessions_db_warn_bytes)}): {path}{marker}",
+            fix="A huge sessions.db slows Devin starts — export old "
+            "sessions with devin-history, then prune them with "
+            "devin-janitor.",
+        )
+    return Finding(
+        CHECK_ID, Status.PASS, f"sessions.db: {human_size(size)}{marker}"
+    )
+
+
 def _acp_finding(ctx: Context, capped: bool) -> Finding:
     # locate_stores is a targeted glob outside the bounded walk and every db
     # is stat'ed fresh here — acp numbers stay exact (never lower bounds),
@@ -209,5 +239,6 @@ def run(ctx: Context) -> list[Finding]:
     return [
         _total_finding(ctx, total, len(files), capped),
         _largest_finding(ctx, files, capped),
+        _sessions_db_finding(ctx, capped),
         _acp_finding(ctx, capped),
     ]
