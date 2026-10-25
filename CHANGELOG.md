@@ -15,11 +15,23 @@
   `systemd --user` units/timers including unloaded unit files, Windows
   Task Scheduler), FAIL on referenced paths that no longer exist or that
   point into registry-absorbed repo checkouts, and FAIL on tasks removed
-  since the last run via a persisted snapshot (`<data-dir>/doctor/
-  automation-snapshot.json`). Unavailable surfaces carry their recorded
+  since the last run via a persisted snapshot
+  (`<state-dir>/automation-snapshot.json`, resolved to the platform
+  `devin-doctor` dir so a `--data-dir` pointed at a repo checkout can
+  never write the baseline inside it). Unavailable surfaces carry their
+  recorded
   tasks forward instead of reading as empty; removal FAILs persist until
   the task returns or its snapshot entry is deleted by hand; credential-
   shaped arguments are redacted to `***` before output and storage.
+- **Fix** — the `automation` snapshot no longer lives under the
+  inspected `--data-dir` (where a run pointed at a repo checkout wrote
+  `doctor/automation-snapshot.json` into it — absolute paths and cron
+  commands were swept into a public commit by `git add -A`). Doctor's
+  own state now resolves to a dedicated `devin-doctor` dir
+  (`$XDG_DATA_HOME` / `%LOCALAPPDATA%` / Application Support,
+  `DEVIN_DOCTOR_STATE_DIR` to override), and a `.gitignore` written
+  beside the snapshot keeps the baseline out of `git add -A` even when
+  the override points inside a checkout.
 - **Feature** — `devin-history` exports now carry the SESSION-EVIDENCE
   anchor triple (`surface`/`native_id`/`ref`) in Markdown frontmatter and
   JSON, per `devin-internals-spec` `docs/SESSION-EVIDENCE.md`.

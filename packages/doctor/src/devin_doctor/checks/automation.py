@@ -14,8 +14,15 @@ task references and reports:
 
 - a FAIL per referenced path that no longer exists;
 - a FAIL per task that disappeared since the last run, via a snapshot
-  persisted at ``<data-dir>/doctor/automation-snapshot.json`` (the only
-  file this check writes — doctor's own state, never the system's).
+  persisted at ``<state-dir>/automation-snapshot.json`` (the only data
+  this check writes — doctor's own state, never the system's; a
+  ``.gitignore`` beside it keeps the baseline out of ``git add -A``
+  even when ``DEVIN_DOCTOR_STATE_DIR`` points inside a checkout).
+  ``<state-dir>`` is ``paths.default_state_dir()`` (Linux
+  ``$XDG_DATA_HOME/devin-doctor``, Windows ``%LOCALAPPDATA%`` +
+  ``devin-doctor``) — deliberately NOT under ``ctx.data_dir``:
+  ``--data-dir`` names the install being inspected and can point at a
+  repo checkout, and the baseline must never be written inside one.
   Removed tasks stay in the baseline and keep failing until they are
   restored or the entry is deleted from the snapshot — a silent removal
   is not acknowledged by one report;
@@ -51,11 +58,11 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from devin_doctor.model import Context, Finding, Status, platform_name
+from devin_doctor.paths import default_state_dir
 
 CHECK_ID = "automation"
 
 SNAPSHOT_NAME = "automation-snapshot.json"
-SNAPSHOT_DIRNAME = "doctor"
 
 _CMD_TIMEOUT = 20
 _MAX_SCHTASKS = 200
@@ -759,7 +766,11 @@ def _absorbed_repos(
 
 
 def _snapshot_path(ctx: Context) -> Path:
-    return ctx.data_dir / SNAPSHOT_DIRNAME / SNAPSHOT_NAME
+    """The baseline lives in doctor's own state dir, never inside the
+    inspected ``data_dir`` (which ``--data-dir`` can point at any dir —
+    a ``doctor/`` folder written into a repo checkout once got swept
+    into a public commit)."""
+    return (ctx.state_dir or default_state_dir()) / SNAPSHOT_NAME
 
 
 def _load_snapshot(
@@ -825,6 +836,37 @@ def _write_snapshot(path: Path, rows: list[dict[str, str]]) -> None:
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    _gitignore_state_dir(path.parent)
+
+
+def _gitignore_state_dir(state_dir: Path) -> None:
+    """Keep the baseline out of ``git add -A`` wherever the state dir
+    lands. The default ``devin-doctor`` dir can never sit inside a
+    checkout, but the ``DEVIN_DOCTOR_STATE_DIR`` override can — and the
+    snapshot holds absolute paths and scheduled commands a public
+    commit must never see. A ``.gitignore`` only governs its own dir
+    and below, so this cannot hide anything outside the state dir.
+    Best-effort: a guard failure never outranks the baseline write that
+    already happened."""
+    ignore = state_dir / ".gitignore"
+    try:
+        try:
+            existing = ignore.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            existing = ""
+        covered = {
+            line.strip().lstrip("/")
+            for line in existing.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if covered & {SNAPSHOT_NAME, "*", "*.json"}:
+            return
+        sep = "" if not existing or existing.endswith("\n") else "\n"
+        ignore.write_text(
+            existing + sep + SNAPSHOT_NAME + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1113,7 +1155,7 @@ def run(
                 Status.WARN,
                 f"automation snapshot could not be written ({exc})",
                 fix="Removal detection resets next run — check write "
-                "permissions on the data dir.",
+                "permissions on the state dir.",
             )
         )
     return findings

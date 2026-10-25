@@ -36,7 +36,12 @@ def _no_surfaces(argv):
 
 
 def _snapshot(ctx):
-    return ctx.data_dir / "doctor" / "automation-snapshot.json"
+    """The baseline lives in doctor's own state dir — never under the
+    inspected ``data_dir``/``cwd`` (see the ``--data-dir``-as-repo
+    incident regression test below)."""
+    return (
+        ctx.state_dir or automation.default_state_dir()
+    ) / "automation-snapshot.json"
 
 
 def _seed_snapshot(ctx, tasks):
@@ -158,6 +163,87 @@ def test_first_run_records_baseline(ctx):
     removed = _find(findings, "removed since last check")
     assert not any(f.status is Status.FAIL for f in removed)
     assert _find(findings, "no scheduled tasks removed since last check")
+
+
+def test_snapshot_never_written_inside_inspected_dirs(ctx, tmp_path):
+    """Regression: the baseline used to live at ``<data-dir>/doctor/``
+    — pointing ``--data-dir`` (or a MCP ``data_dir`` arg) at a repo
+    checkout wrote ``doctor/automation-snapshot.json`` inside it, and a
+    ``git add -A`` swept absolute paths + cron commands into a public
+    commit. The state dir is now resolved independently of the
+    inspected dirs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ctx.data_dir = repo
+    ctx.cwd = repo  # 'devin-doctor check' run from inside the repo
+    script = tmp_path / "job.sh"
+    script.write_text("#!/bin/sh\n")
+    table = {
+        ("crontab", "-l"): (0, f"0 8 * * * {script}\n"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+
+    assert _find(findings, "baseline snapshot recorded")
+    snapshot = ctx.state_dir / "automation-snapshot.json"
+    assert snapshot.is_file()
+    assert json.loads(snapshot.read_text())["tasks"]
+    # the inspected tree stays pristine — nothing for git add -A to eat
+    assert not (repo / "doctor").exists()
+    assert not (repo / "automation-snapshot.json").exists()
+
+
+def test_state_dir_gitignore_covers_snapshot(ctx):
+    """``DEVIN_DOCTOR_STATE_DIR`` can point inside a repo checkout —
+    the writer drops a ``.gitignore`` next to the baseline so
+    ``git add -A`` there still cannot publish scheduled commands."""
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+
+    assert _find(findings, "baseline snapshot recorded")
+    ignore = ctx.state_dir / ".gitignore"
+    assert ignore.is_file()
+    assert "automation-snapshot.json" in ignore.read_text().splitlines()
+
+
+def test_state_dir_gitignore_appends_without_clobbering(ctx):
+    """A pre-existing ``.gitignore`` in an overridden state dir keeps
+    its rules — the snapshot name is appended, not the file replaced."""
+    ctx.state_dir.mkdir(parents=True)
+    ignore = ctx.state_dir / ".gitignore"
+    ignore.write_text("# mine\n*.log", encoding="utf-8")
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    automation.run(ctx, runner=make_runner(table))
+
+    assert ignore.read_text().splitlines() == [
+        "# mine",
+        "*.log",
+        "automation-snapshot.json",
+    ]
+
+
+def test_state_dir_gitignore_already_covered(ctx):
+    """A ``.gitignore`` that already ignores everything is left alone."""
+    ctx.state_dir.mkdir(parents=True)
+    ignore = ctx.state_dir / ".gitignore"
+    ignore.write_text("*\n", encoding="utf-8")
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    automation.run(ctx, runner=make_runner(table))
+
+    assert ignore.read_text() == "*\n"
 
 
 def test_absorbed_repo_target_is_fail(ctx, tmp_path):

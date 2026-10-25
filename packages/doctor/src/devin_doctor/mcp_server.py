@@ -19,7 +19,11 @@ from pathlib import Path
 
 from devin_doctor import doctor
 from devin_doctor.model import Context
-from devin_doctor.paths import default_config_dir, default_data_dir
+from devin_doctor.paths import (
+    default_config_dir,
+    default_data_dir,
+    default_state_dir,
+)
 
 
 def do_check(
@@ -32,6 +36,7 @@ def do_check(
     *,
     offline: bool = False,
     now_ms: int | None = None,
+    state_dir: str | None = None,
 ) -> dict:
     """Run all checks; return the ``check --json`` payload as a dict.
 
@@ -46,11 +51,14 @@ def do_check(
     scopes the agent-surface checks the way ``--surface`` does (one name
     or a comma-separated list); the Devin-environment checks always run
     unscoped. ``now_ms`` is injectable so tests can pin "today"; unlike
-    ``offline`` it is not exposed through the MCP tool.
+    ``offline`` it is not exposed through the MCP tool. ``state_dir``
+    is likewise test-only: it relocates the automation check's snapshot
+    so a test run never writes doctor's own baseline.
     """
     ctx = Context(
         data_dir=Path(data_dir) if data_dir else default_data_dir(),
         cwd=Path(cwd) if cwd else Path.cwd(),
+        state_dir=Path(state_dir) if state_dir else default_state_dir(),
         stale_days=stale_days,
         now_ms=now_ms,
         config_dir=(

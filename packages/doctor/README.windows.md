@@ -21,6 +21,8 @@ uv tool install "devin-doctor"
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
+devin-doctor's own state (the `automation` check's snapshot baseline) lives under `%LOCALAPPDATA%\devin-doctor\` (machine-local, not Roaming — a per-host scheduler baseline must not roam) — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
+
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.

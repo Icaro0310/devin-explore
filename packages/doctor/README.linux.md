@@ -21,6 +21,8 @@ uv tool install 'devin-doctor'
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
+devin-doctor's own state (the `automation` check's snapshot baseline) lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin-doctor/` — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
+
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.

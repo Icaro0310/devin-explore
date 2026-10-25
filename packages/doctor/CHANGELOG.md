@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails for dirs that look like in-progress Python packages
   (`setup.py`/`setup.cfg`, top-level `.py`, or `.py` under `src/`).
 
+- `automation` — the removed-task baseline snapshot moved out of the
+  inspected data dir (`<data-dir>/doctor/automation-snapshot.json`)
+  into doctor's own state dir: `$XDG_DATA_HOME/devin-doctor/` on Linux,
+  `%LOCALAPPDATA%\devin-doctor\` on Windows,
+  `~/Library/Application Support/devin-doctor/` on macOS, overridable
+  via `DEVIN_DOCTOR_STATE_DIR`. `--data-dir` names the install under
+  inspection and can point at an arbitrary dir — a run pointed at a
+  repo checkout wrote `doctor/automation-snapshot.json` inside it and
+  `git add -A` swept absolute paths and cron commands into a public
+  commit. A `.gitignore` written beside the snapshot keeps the
+  baseline out of `git add -A` even when `DEVIN_DOCTOR_STATE_DIR`
+  points inside a checkout. The baseline rebuilds on the next run; a
+  stale copy under an old `<data-dir>/doctor/` can be deleted by hand.
+
 ### Added
 
 - `toolchain` — missing test/build tools named per-OS with concrete
@@ -81,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seen) and Windows Task Scheduler (`schtasks`), extracts the
   script/binary each task references and FAILs on: referenced paths that
   no longer exist, tasks removed since the previous run (tracked via a
-  JSON snapshot at `<data-dir>/doctor/automation-snapshot.json` — the
+  JSON snapshot at `<state-dir>/automation-snapshot.json` — the
   tool's own state file, the only thing it writes), and targets inside
   repo checkouts the ecosystem registry (`devin-powerups/registry.json`)
   marks as absorbed/archived. Unavailable surfaces carry their history

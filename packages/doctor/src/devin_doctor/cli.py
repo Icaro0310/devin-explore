@@ -28,7 +28,11 @@ from pathlib import Path
 from devin_doctor import capabilities, doctor
 from devin_doctor.checks.surfaces import SURFACE_NAMES
 from devin_doctor.model import Context
-from devin_doctor.paths import default_config_dir, default_data_dir
+from devin_doctor.paths import (
+    default_config_dir,
+    default_data_dir,
+    default_state_dir,
+)
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -159,6 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         data_dir=args.data_dir or default_data_dir(),
         cwd=args.cwd,
         stale_days=args.stale_days,
+        state_dir=default_state_dir(),
         config_dir=(
             args.config_dir
             if args.config_dir is not None
