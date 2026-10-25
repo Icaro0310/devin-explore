@@ -14,8 +14,10 @@ task references and reports:
 
 - a FAIL per referenced path that no longer exists;
 - a FAIL per task that disappeared since the last run, via a snapshot
-  persisted at ``<state-dir>/automation-snapshot.json`` (the only file
-  this check writes — doctor's own state, never the system's).
+  persisted at ``<state-dir>/automation-snapshot.json`` (the only data
+  this check writes — doctor's own state, never the system's; a
+  ``.gitignore`` beside it keeps the baseline out of ``git add -A``
+  even when ``DEVIN_DOCTOR_STATE_DIR`` points inside a checkout).
   ``<state-dir>`` is ``paths.default_state_dir()`` (Linux
   ``$XDG_DATA_HOME/devin-doctor``, Windows ``%LOCALAPPDATA%`` +
   ``devin-doctor``) — deliberately NOT under ``ctx.data_dir``:
@@ -834,6 +836,37 @@ def _write_snapshot(path: Path, rows: list[dict[str, str]]) -> None:
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    _gitignore_state_dir(path.parent)
+
+
+def _gitignore_state_dir(state_dir: Path) -> None:
+    """Keep the baseline out of ``git add -A`` wherever the state dir
+    lands. The default ``devin-doctor`` dir can never sit inside a
+    checkout, but the ``DEVIN_DOCTOR_STATE_DIR`` override can — and the
+    snapshot holds absolute paths and scheduled commands a public
+    commit must never see. A ``.gitignore`` only governs its own dir
+    and below, so this cannot hide anything outside the state dir.
+    Best-effort: a guard failure never outranks the baseline write that
+    already happened."""
+    ignore = state_dir / ".gitignore"
+    try:
+        try:
+            existing = ignore.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            existing = ""
+        covered = {
+            line.strip().lstrip("/")
+            for line in existing.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        if covered & {SNAPSHOT_NAME, "*", "*.json"}:
+            return
+        sep = "" if not existing or existing.endswith("\n") else "\n"
+        ignore.write_text(
+            existing + sep + SNAPSHOT_NAME + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------

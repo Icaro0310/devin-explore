@@ -33,8 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inspection and can point at an arbitrary dir — a run pointed at a
   repo checkout wrote `doctor/automation-snapshot.json` inside it and
   `git add -A` swept absolute paths and cron commands into a public
-  commit. The baseline rebuilds on the next run; a stale copy under an
-  old `<data-dir>/doctor/` can be deleted by hand.
+  commit. A `.gitignore` written beside the snapshot keeps the
+  baseline out of `git add -A` even when `DEVIN_DOCTOR_STATE_DIR`
+  points inside a checkout. The baseline rebuilds on the next run; a
+  stale copy under an old `<data-dir>/doctor/` can be deleted by hand.
 
 ### Added
 

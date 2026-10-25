@@ -29,7 +29,9 @@
   commands were swept into a public commit by `git add -A`). Doctor's
   own state now resolves to a dedicated `devin-doctor` dir
   (`$XDG_DATA_HOME` / `%LOCALAPPDATA%` / Application Support,
-  `DEVIN_DOCTOR_STATE_DIR` to override).
+  `DEVIN_DOCTOR_STATE_DIR` to override), and a `.gitignore` written
+  beside the snapshot keeps the baseline out of `git add -A` even when
+  the override points inside a checkout.
 - **Feature** — `devin-history` exports now carry the SESSION-EVIDENCE
   anchor triple (`surface`/`native_id`/`ref`) in Markdown frontmatter and
   JSON, per `devin-internals-spec` `docs/SESSION-EVIDENCE.md`.

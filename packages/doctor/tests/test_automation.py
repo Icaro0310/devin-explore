@@ -194,6 +194,58 @@ def test_snapshot_never_written_inside_inspected_dirs(ctx, tmp_path):
     assert not (repo / "automation-snapshot.json").exists()
 
 
+def test_state_dir_gitignore_covers_snapshot(ctx):
+    """``DEVIN_DOCTOR_STATE_DIR`` can point inside a repo checkout —
+    the writer drops a ``.gitignore`` next to the baseline so
+    ``git add -A`` there still cannot publish scheduled commands."""
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+
+    assert _find(findings, "baseline snapshot recorded")
+    ignore = ctx.state_dir / ".gitignore"
+    assert ignore.is_file()
+    assert "automation-snapshot.json" in ignore.read_text().splitlines()
+
+
+def test_state_dir_gitignore_appends_without_clobbering(ctx):
+    """A pre-existing ``.gitignore`` in an overridden state dir keeps
+    its rules — the snapshot name is appended, not the file replaced."""
+    ctx.state_dir.mkdir(parents=True)
+    ignore = ctx.state_dir / ".gitignore"
+    ignore.write_text("# mine\n*.log", encoding="utf-8")
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    automation.run(ctx, runner=make_runner(table))
+
+    assert ignore.read_text().splitlines() == [
+        "# mine",
+        "*.log",
+        "automation-snapshot.json",
+    ]
+
+
+def test_state_dir_gitignore_already_covered(ctx):
+    """A ``.gitignore`` that already ignores everything is left alone."""
+    ctx.state_dir.mkdir(parents=True)
+    ignore = ctx.state_dir / ".gitignore"
+    ignore.write_text("*\n", encoding="utf-8")
+    table = {
+        ("crontab", "-l"): (0, ""),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    automation.run(ctx, runner=make_runner(table))
+
+    assert ignore.read_text() == "*\n"
+
+
 def test_absorbed_repo_target_is_fail(ctx, tmp_path):
     """devin-history was absorbed into devin-explore/packages/history —
     a cron entry still pointing at the stale checkout must FAIL."""
