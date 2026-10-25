@@ -5,6 +5,16 @@ Windows stores use ``%APPDATA%/devin`` for sessions and
 session data and ``$XDG_CONFIG_HOME/Devin`` for UI stores; defaults are
 ``~/.local/share/devin`` and ``~/.config/Devin`` respectively.
 
+devin-doctor's own state (the ``automation`` check's snapshot) lives
+apart in a ``devin-doctor`` dir — ``$XDG_DATA_HOME/devin-doctor`` on
+Linux, ``%LOCALAPPDATA%\\devin-doctor`` on Windows, ``~/Library/
+Application Support/devin-doctor`` on macOS. It is deliberately NOT
+under ``default_data_dir``: ``--data-dir`` names the Devin install
+being *inspected* and may point at a repo checkout, and the tool's own
+baseline must never be written inside one (a ``doctor/`` dir swept up
+by ``git add -A`` once leaked absolute paths and cron commands into a
+public repo).
+
 The non-Devin agent surfaces (copilot-cli, codex-cli, vscode-chat —
 SESSION-SURFACES.md §6.3–§6.5) get the same candidate treatment as
 ``devin-search/paths.py``: every documented root is listed, callers test
@@ -65,6 +75,41 @@ def default_config_dir(
         Path.home() / "devin",
     ]
     return next((root for root in candidates if (root / "User").is_dir()), candidates[0])
+
+
+STATE_DIR_ENV_VAR = "DEVIN_DOCTOR_STATE_DIR"
+STATE_DIRNAME = "devin-doctor"
+
+
+def default_state_dir(
+    environ: dict[str, str] | None = None, platform: str | None = None
+) -> Path:
+    """Where devin-doctor keeps its OWN state (the ``automation`` check's
+    snapshot baseline). ``DEVIN_DOCTOR_STATE_DIR`` overrides; otherwise
+    the platform data dir's ``devin-doctor`` subdir — ``%LOCALAPPDATA%``
+    on Windows (machine-local: a per-host scheduler baseline must not
+    roam), Application Support on macOS, ``$XDG_DATA_HOME`` elsewhere.
+
+    Never derived from ``default_data_dir``: that root names the Devin
+    install under inspection and can be pointed at an arbitrary dir via
+    ``--data-dir`` — writing state there pollutes foreign checkouts.
+    """
+    env = os.environ if environ is None else environ
+    plat = sys.platform if platform is None else platform
+    override = env.get(STATE_DIR_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    if plat.startswith("win"):
+        local = env.get("LOCALAPPDATA")
+        if local:
+            return Path(local) / STATE_DIRNAME
+        return Path.home() / "AppData" / "Local" / STATE_DIRNAME
+    if plat == "darwin":
+        return Path.home() / "Library" / "Application Support" / STATE_DIRNAME
+    data_home = Path(
+        env.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    )
+    return data_home / STATE_DIRNAME
 
 
 def sessions_db_path(root: Path) -> Path:

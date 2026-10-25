@@ -43,10 +43,18 @@ def _hermetic_surfaces(tmp_path, monkeypatch):
         "DEVIN_DATA_DIR",
         "DEVIN_CONFIG_DIR",
         "APPDATA",
+        "LOCALAPPDATA",
         "XDG_DATA_HOME",
         "XDG_CONFIG_HOME",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Doctor's own state (the automation snapshot) also stays inside
+    # tmp_path — a test run must never write the real
+    # ~/.local/share/devin-doctor baseline, no matter which entry point
+    # (Context direct, cli.main, do_check) resolves the location.
+    monkeypatch.setenv(
+        "DEVIN_DOCTOR_STATE_DIR", str(tmp_path / "doctor-state")
+    )
     return home
 
 
@@ -101,8 +109,16 @@ def data_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def ctx(data_dir: Path, tmp_path: Path) -> Context:
     """Context pointed at the healthy fixture; ``now_ms`` pinned just after
-    the fixture's timestamps so nothing reads as stale by accident."""
-    return Context(data_dir=data_dir, cwd=tmp_path, now_ms=_BASE_TS_MS + 10**9)
+    the fixture's timestamps so nothing reads as stale by accident.
+    ``state_dir`` matches the ``DEVIN_DOCTOR_STATE_DIR`` the hermetic
+    fixture exports, so ``_snapshot`` helpers resolve the same path the
+    env-only entry points (cli.main, do_check) would."""
+    return Context(
+        data_dir=data_dir,
+        cwd=tmp_path,
+        state_dir=tmp_path / "doctor-state",
+        now_ms=_BASE_TS_MS + 10**9,
+    )
 
 
 @pytest.fixture

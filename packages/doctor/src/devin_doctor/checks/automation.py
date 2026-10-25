@@ -14,8 +14,13 @@ task references and reports:
 
 - a FAIL per referenced path that no longer exists;
 - a FAIL per task that disappeared since the last run, via a snapshot
-  persisted at ``<data-dir>/doctor/automation-snapshot.json`` (the only
-  file this check writes — doctor's own state, never the system's).
+  persisted at ``<state-dir>/automation-snapshot.json`` (the only file
+  this check writes — doctor's own state, never the system's).
+  ``<state-dir>`` is ``paths.default_state_dir()`` (Linux
+  ``$XDG_DATA_HOME/devin-doctor``, Windows ``%LOCALAPPDATA%`` +
+  ``devin-doctor``) — deliberately NOT under ``ctx.data_dir``:
+  ``--data-dir`` names the install being inspected and can point at a
+  repo checkout, and the baseline must never be written inside one.
   Removed tasks stay in the baseline and keep failing until they are
   restored or the entry is deleted from the snapshot — a silent removal
   is not acknowledged by one report;
@@ -51,11 +56,11 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from devin_doctor.model import Context, Finding, Status, platform_name
+from devin_doctor.paths import default_state_dir
 
 CHECK_ID = "automation"
 
 SNAPSHOT_NAME = "automation-snapshot.json"
-SNAPSHOT_DIRNAME = "doctor"
 
 _CMD_TIMEOUT = 20
 _MAX_SCHTASKS = 200
@@ -759,7 +764,11 @@ def _absorbed_repos(
 
 
 def _snapshot_path(ctx: Context) -> Path:
-    return ctx.data_dir / SNAPSHOT_DIRNAME / SNAPSHOT_NAME
+    """The baseline lives in doctor's own state dir, never inside the
+    inspected ``data_dir`` (which ``--data-dir`` can point at any dir —
+    a ``doctor/`` folder written into a repo checkout once got swept
+    into a public commit)."""
+    return (ctx.state_dir or default_state_dir()) / SNAPSHOT_NAME
 
 
 def _load_snapshot(
@@ -1113,7 +1122,7 @@ def run(
                 Status.WARN,
                 f"automation snapshot could not be written ({exc})",
                 fix="Removal detection resets next run — check write "
-                "permissions on the data dir.",
+                "permissions on the state dir.",
             )
         )
     return findings
