@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **CI** — repin the shared `pr-approve` gate to `devin-powerups`
+  `@v1.9`: self-cancel fix (a successful approval no longer renders as
+  a failed check), fresh-head recheck and paginated dedup.
 - **CI** — `auto-approve` now calls the shared `pr-approve` reusable
   workflow at v1.6 (was v1.1) and also triggers on
   `pull_request_review_comment[created]`, so fix-commit replies
