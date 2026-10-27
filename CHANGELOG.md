@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Feature** — `devin-doctor drift`: a bounded, privacy-safe local
+  snapshot for drift diagnosis. Four sections — tool versions vs
+  expected floors (plus installed `devin-*` dists vs declared pyproject
+  versions, `--package`-scopable), state-file presence + sha256 digest
+  prefixes (contents never emitted), scope-dir/PATH health, and curated
+  env key *names* (values never collected). Caps: ≤100 acp dbs digested,
+  >64 MiB files stat-only, PATH/env listings bounded. File expectations
+  follow the anchor doctrine (`sessions.db` only required on CLI
+  installs, `state.vscdb` only on Desktop). Exit `1` on detected drift;
+  `--json` emits the whole snapshot.
 - **CI** — repin the shared `pr-approve` gate to `devin-powerups`
   `@v1.9`: self-cancel fix (a successful approval no longer renders as
   a failed check), fresh-head recheck and paginated dedup.
