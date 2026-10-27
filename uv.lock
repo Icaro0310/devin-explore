@@ -329,6 +329,7 @@ version = "0.1.1"
 source = { editable = "packages/history" }
 dependencies = [
     { name = "devin-internals-spec" },
+    { name = "devin-redact" },
 ]
 
 [package.optional-dependencies]
@@ -343,6 +344,7 @@ mcp = [
 [package.metadata]
 requires-dist = [
     { name = "devin-internals-spec", specifier = ">=0.3.1,<0.4.0" },
+    { name = "devin-redact", specifier = ">=0.2.0,<0.3.0" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -383,6 +385,15 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
 ]
 provides-extras = ["dev", "mcp"]
+
+[[package]]
+name = "devin-redact"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8b/5224851bc8486c05db2e77fac6c537b1019598a9badcf9edf5fd38c8e2c9/devin_redact-0.2.5.tar.gz", hash = "sha256:ff5330343fd684d46dc1904dbc0ee7109e7ad14c46861645671b27b89cece8a1", size = 83539, upload-time = "2026-10-23T08:05:34.317Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/2d/1158d89d2b4a7bb86df0de638e09eb3cfe1fa0bf2ef541a0d833aed61591/devin_redact-0.2.5-py3-none-any.whl", hash = "sha256:ee3a40c3a27e8aa4f68dc2bf05082306b12590caab73564a7cf25878ca2ebc45", size = 51531, upload-time = "2026-10-23T08:05:32.958Z" },
+]
 
 [[package]]
 name = "devin-search"

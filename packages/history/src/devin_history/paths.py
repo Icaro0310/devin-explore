@@ -90,3 +90,25 @@ def default_state_vscdb(
         if candidate.is_file():
             return candidate
     return None
+
+
+def acp_dir_candidates(
+    environ: dict[str, str] | None = None, platform: str | None = None
+) -> list[Path]:
+    """Candidate paths for ``User/acp-messages`` (the per-session
+    transcript dbs) — derived from each ``state.vscdb`` candidate's
+    ``User/`` parent."""
+    return [
+        c.parent.parent / "acp-messages"
+        for c in state_vscdb_candidates(environ=environ, platform=platform)
+    ]
+
+
+def default_acp_dir(
+    environ: dict[str, str] | None = None, platform: str | None = None
+) -> Path | None:
+    """First existing ``acp-messages`` dir candidate, or ``None``."""
+    for candidate in acp_dir_candidates(environ=environ, platform=platform):
+        if candidate.is_dir():
+            return candidate
+    return None

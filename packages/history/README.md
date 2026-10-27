@@ -96,8 +96,8 @@ devin-history export --out dump/ --format json
 # audit: status/type/project/period groupings + anomalies, optional CSV
 devin-history audit --csv audit.csv
 
-# GUI sessions: metadata notes (slug, workspace, folders, lastUpdated) +
-# index.json — the GUI keeps no local transcript, so metadata is all there is
+# GUI sessions: session↔workspace bindings + redacted transcripts from
+# acp-messages/*.db → one note each + index.json
 devin-history export-gui --out ~/ObsidianVault/Sessions/gui
 
 # everything has --json; point at a specific DB with --sessions-db/--vscdb
@@ -193,11 +193,20 @@ Each ended session then lands as a note automatically; a periodic full
   "interrupted" / "abandoned" are heuristics (see `docs/SPEC.md` §4).
 - **No billing.** Token/cost data is not stored locally; only
   `num_tokens_preceding` (context size) exists.
-- **GUI sessions are metadata-only.** `export-gui` exports the
-  session↔workspace bindings kept in `state.vscdb` (slug, label, folders,
-  timestamps) — the GUI stores no transcript locally. GUI transcripts under
-  `User/acp-messages/*.db`, session locks and log correlation are planned
-  for M2.
+- **GUI sessions export their real transcript, redacted.** `export-gui`
+  reads the session↔workspace bindings in `state.vscdb`, then correlates
+  each slug with `User/acp-messages/*.db` transcript stores
+  (meta session-id → filename stem → title). Transcript text is redacted
+  with `devin-redact` *before* rendering — a redaction failure means the
+  note is simply not written (and `export-gui` exits non-zero), never an
+  unredacted file. `--no-transcripts` falls back to the metadata-only
+  notes; `--vscdb none` exports orphaned acp transcripts on their own.
+- **`audit --fail-on-anomaly N`** exits non-zero when the anomaly count
+  reaches N. Anomalies are the three existing audit checks: `orphan`
+  (rows in `message_nodes`/`tool_call_state`/`prompt_history` referencing
+  a session absent from `sessions`), `empty` (a session row with no
+  message nodes) and `long-running` (active ≥ 480 min). Without the flag
+  `audit` always exits 0.
 - **Read-only by design** — the tool never writes to Devin's stores.
 
 ## Development
@@ -269,9 +278,9 @@ Same stdio server in other hosts — server name `devin-history`:
 - You need instant ranked search rather than a static export — use
   [`devin-search`](https://github.com/Icaro0310/devin-explore) on top of the
   same database.
-- You need GUI session *transcripts* — `export-gui` exports the metadata
-  bindings in `state.vscdb`; the `acp-messages/*.db` transcript stores are
-  M2.
+- You need *unredacted* GUI transcripts — `export-gui` always runs
+  `devin-redact` over transcript bodies; for raw forensics read the
+  `acp-messages/*.db` stores directly.
 - Your `sessions.db` schema is newer than v17 — the tool refuses loudly
   instead of misreading it; update `devin-internals-spec` first.
 

@@ -73,6 +73,40 @@ def test_cli_audit_json(db_path, capsys):
     assert "anomalies" in data
 
 
+def test_cli_audit_fail_on_anomaly_exits_nonzero(db_path, capsys):
+    """``--fail-on-anomaly N`` → rc 1 when anomaly count >= N."""
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])  # one "empty" anomaly
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "1"]) == 1
+    capsys.readouterr()
+
+
+def test_cli_audit_fail_on_anomaly_below_threshold(db_path, capsys):
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "2"]) == 0
+    capsys.readouterr()
+
+
+def test_cli_audit_fail_on_anomaly_clean_db(db_path, capsys):
+    # fixture sessions all have messages → 0 anomalies; any N >= 1 passes
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "1"]) == 0
+    capsys.readouterr()
+
+
+def test_cli_audit_no_flag_keeps_zero_exit(db_path, capsys):
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])
+    assert main(["audit", "--sessions-db", str(db_path)]) == 0
+    capsys.readouterr()
+
+
 def test_cli_unknown_schema_fails_loud(tmp_path, capsys):
     bad = create_sessions_db(tmp_path / "future.db", schema_version=18)
     with pytest.raises(SystemExit) as exc:
