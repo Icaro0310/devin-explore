@@ -1,0 +1,56 @@
+# Copy this file to .github/workflows/review-fallback.yml in YOUR repo.
+#
+# Prerequisites (one-time setup):
+#   1. A Tailscale-reachable Ollama endpoint (tailnet-only is the whole
+#      point — never expose it publicly).
+#   2. Repo secrets:  TS_AUTHKEY (Tailscale auth key, tagged tag:gh-ollama-review)
+#   3. Repo variables: OLLAMA_TAILNET_URL (e.g. http://<your-tailscale-ip>:11435)
+#                      OLLAMA_MODEL      (e.g. qwen2.5-coder:1.5b)
+#   4. For auto-merge: gh repo edit <you>/<repo> --enable-auto-merge
+#   5. Pin to a release tag (@v1) instead of @main for supply-chain safety.
+
+name: review-fallback
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
+  check_suite:
+    types: [completed]
+  status: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fallback:
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+      statuses: write
+      id-token: write
+    uses: Icaro0310/devin-review-fallback/.github/workflows/ai-review-fallback.yml@main
+    secrets: inherit
+
+  merge:
+    # Skip non-PR events early for the merge path.
+    if: >-
+      github.event_name != 'status' ||
+      (github.event.context == 'Review Coverage' && github.event.state == 'success')
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: Icaro0310/devin-review-fallback/.github/workflows/auto-merge.yml@main
+    secrets: inherit
+
+  # OPTIONAL complementary SAST layer (public repos — free tier).
+  # Needs secrets.SONAR_TOKEN + vars.SONAR_PROJECT_KEY; skips cleanly
+  # when unset. Trigger this one on pull_request (it scans the head).
+  sonar:
+    if: github.event_name == 'pull_request_target'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-review-fallback/.github/workflows/sonarcloud.yml@main
+    secrets: inherit
