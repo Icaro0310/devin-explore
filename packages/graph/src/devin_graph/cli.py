@@ -13,6 +13,8 @@ from devin_internals.parsers import SessionsStore
 from devin_graph import __version__
 from devin_graph.paths import default_sessions_db, default_state_vscdb
 from devin_graph.query import (
+    blame_session,
+    orphaned_nodes,
     project_detail,
     projects_graph,
     sessions_for_file,
@@ -109,6 +111,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_graph(sq)
     sq.add_argument("--json", action="store_true")
     sq.set_defaults(func=_cmd_query)
+
+    o = sub.add_parser(
+        "orphans", help="nodes with no incident edges — report-only, "
+        "never deletes (prunable flags what the next build would drop)")
+    _add_graph(o)
+    o.add_argument("--json", action="store_true")
+    o.set_defaults(func=_cmd_orphans)
+
+    bl = sub.add_parser(
+        "blame-session",
+        help="what a session produced/touched in the graph — owned "
+        "nodes and edges plus the files, tools, projects and commits "
+        "they reach")
+    bl.add_argument(
+        "session_id", help="session id or unique prefix")
+    _add_graph(bl)
+    bl.add_argument("--json", action="store_true")
+    bl.set_defaults(func=_cmd_blame)
 
     e = sub.add_parser("export", help="dump nodes+edges (D3-friendly)")
     e.add_argument("--format", choices=["json"], default="json")
@@ -224,6 +244,64 @@ def _print_query(what: str, data: dict) -> None:
     if what == "file":
         for t in data.get("tool_calls", []):
             print(f"call: {t['id']} → {t['file']}")
+
+
+def _cmd_orphans(args: argparse.Namespace) -> int:
+    with _open_graph(args.graph) as gs:
+        data = orphaned_nodes(gs)
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    if not data["nodes"]:
+        print("no orphaned nodes")
+        return 0
+    for n in data["nodes"]:
+        label = n.get("name") or ""
+        keep = "" if n["prunable"] else " (owned — kept by prune)"
+        print(f"{n['id']}  {label}{keep}".rstrip())
+    print(f"{data['count']} orphan(s)")
+    return 0
+
+
+def _cmd_blame(args: argparse.Namespace) -> int:
+    with _open_graph(args.graph) as gs:
+        data = blame_session(gs, args.session_id)
+    if data["session"] is None:
+        cand = data.get("candidates") or []
+        hint = f" — candidates: {', '.join(cand[:10])}" if cand else ""
+        print(
+            f"devin-graph: no session matches {args.session_id!r}{hint}",
+            file=sys.stderr,
+        )
+        return 2
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    s = data["session"]
+    print(f"session: {data['session_id']}  {s.get('title') or 'Untitled'}")
+    if data["projects"]:
+        print("project: " + ", ".join(data["projects"]))
+    c = data["counts"]
+    print(
+        f"produced: {c['nodes']} node(s), {c['edges']} edge(s) · "
+        f"touched: {c['files']} file(s), {c['tools']} tool(s), "
+        f"{c['commits']} commit(s)"
+    )
+    if data["nodes_owned"]:
+        owned = [n for n in data["nodes_owned"] if n["kind"] == "tool_call"]
+        if owned:
+            print(f"tool calls ({len(owned)}):")
+            for n in owned:
+                print(f"  {n['key']}")
+    if data["files"]:
+        print(f"files ({len(data['files'])}):")
+        for f in data["files"]:
+            print(f"  {f}")
+    if data["tools"]:
+        print("tools: " + ", ".join(data["tools"]))
+    for cm in data["commits"]:
+        print(f"commit {cm['sha'][:7]} ({cm['relation']})")
+    return 0
 
 
 def _cmd_export(args: argparse.Namespace) -> int:

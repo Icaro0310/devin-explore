@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Feature** — `devin-graph orphans` + `devin-graph blame-session`:
+  graph diagnostics. `orphans` lists nodes with no incident edges —
+  report-only, never deletes — flagging the subset the next `build`
+  would prune. `blame-session <id>` (unique prefix accepted, ambiguous
+  exits 2 with candidates) reports what a session produced — owned
+  nodes + edges — and touched: resolved files, tools, projects, commits
+  and the extraction-ledger timestamp. `StoredNode` gains `owner`;
+  `GraphStore` gains `extracted_at`. Both read via `mode=ro`.
 - **Feature** — `devin-search stats`: index health read straight from
   the index (opened `mode=ro`, never creates/mutates; missing index
   exits 2). Reports total/per-source/per-role doc counts, newest doc

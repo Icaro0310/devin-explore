@@ -80,6 +80,10 @@ devin-graph query projects-graph           --graph graph.db --json
 
 # D3-friendly dump: {"meta", "nodes", "edges"}
 devin-graph export --format json --graph graph.db --out graph.json
+
+# diagnostics: edge-less nodes (report-only) and per-session blame
+devin-graph orphans                      --graph graph.db
+devin-graph blame-session <id-or-prefix> --graph graph.db
 ```
 
 Matching is forgiving (`src/app.py` finds `/repo/alpha/src/app.py`);
@@ -87,6 +91,15 @@ everything has `--json`. `query shared-files` lists every file touched
 by two or more distinct projects, with the project and session lists —
 exportable as JSON like the other queries. The source DB is opened
 `mode=ro` and never written — tests assert its hash is unchanged.
+
+`orphans` lists nodes with no incident edges (id, kind, owner, a
+`prunable` flag marking the subset the next `build` would drop —
+shared, ownerless nodes; owned orphans persist with their owner). It is
+report-only and never deletes. `blame-session <id>` shows what a
+session produced and touched: its owned nodes and edges plus the
+resolved files, tools, projects and commits reachable through them,
+with the extraction-ledger timestamp. `<id>` accepts a unique prefix;
+a missing or ambiguous match exits 2 and lists candidates.
 
 ## Works with Devin alone (Devin-only mode)
 
