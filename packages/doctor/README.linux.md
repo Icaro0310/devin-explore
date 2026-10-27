@@ -21,8 +21,6 @@ uv tool install 'devin-doctor'
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
-devin-doctor's own state (the `automation` check's snapshot baseline) lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin-doctor/` — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
-
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.
@@ -37,7 +35,6 @@ devin-doctor's own state (the `automation` check's snapshot baseline) lives unde
 - **Headless and minimal environments:** no display is needed, every CLI is text-only. In containers or WSL, install `uv` and Git and follow the same steps; `XDG_*` paths resolve normally.
 - **Permissions:** tools read Devin data under `$XDG_DATA_HOME/devin` and write only their own config/state, no root or sudo is required.
 - **Scheduling:** optional recurring work belongs to `systemd --user` timers or cron; installation never creates jobs.
-- **Toolchain check:** `devin-doctor check` names each missing test/build tool with a concrete install command — `apt` on Debian/Ubuntu (`sudo apt install python3-pip python3-venv nodejs npm git`), `dnf` on Fedora, `pacman` on Arch; other distros get a generic package-name hint. A `nodejs`-only box reports node as **WARN** — scripts invoking `node` still fail until the real name exists.
 
 ## Recurring runs (optional)
 
@@ -49,24 +46,6 @@ _Weekly health sweep, read-only, safe to leave on._
 
 Equivalent `systemd --user` timer works too; enable lingering if it must run without a login session.
 
-
-
-## Adapters (MCP / Devin skill / plugin)
-
-- MCP server: `pip install 'devin-doctor[mcp]'` then run
-  `devin-doctor-mcp` (stdio). Read-only tools only.
-- Devin plugin + skill: `devin plugins install
-  Icaro0310/devin-explore#packages/doctor/adapters`. The manifest
-  launches the server through `uvx --from 'devin-doctor[mcp]'
-  devin-doctor-mcp`, which resolves once the matching PyPI release
-  ships. Until then, an editable install does not change what
-  `uvx --from` resolves — either run the source-installed
-  `devin-doctor-mcp` directly, or point a local manifest copy at the
-  checkout: `uvx --from './packages/doctor[mcp]' devin-doctor-mcp`.
-
-### MCP host configs
-
-Same stdio config in every host — see [README.md § MCP host configs](README.md#mcp-host-configs).
 
 ## Troubleshooting
 

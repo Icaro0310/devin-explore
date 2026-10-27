@@ -21,8 +21,6 @@ uv tool install "devin-doctor"
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
-devin-doctor's own state (the `automation` check's snapshot baseline) lives under `%LOCALAPPDATA%\devin-doctor\` (machine-local, not Roaming — a per-host scheduler baseline must not roam) — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
-
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.
@@ -35,7 +33,6 @@ devin-doctor's own state (the `automation` check's snapshot baseline) lives unde
 - **Shell:** PowerShell 7 + Windows Terminal is the recommended setup; every command also works in `cmd.exe` and Windows PowerShell 5.1, none require admin.
 - **Install location:** executables live under `%USERPROFILE%\.local\bin`; data under `%APPDATA%\devin`. Nothing touches `Program Files` or the registry.
 - **WSL:** treat it as a Linux machine, follow [README.linux.md](README.linux.md) inside it.
-- **Toolchain check:** `devin-doctor check` names missing test/build tools with `winget install` commands (`Python.Python.3`, `OpenJS.NodeJS`, `Git.Git`). A `python.exe` that resolves but opens the Microsoft Store is reported as a broken shim — and when the Store-alias stub is the only `python`, the pip fix names the interpreter that actually resolved (`python -m ensurepip`, not `py`).
 - **Uninstall:** `uv tool uninstall <package>` (or `npm uninstall -g` for a Node.js tool) removes the CLI; delete `%APPDATA%\devin` to remove local data. No services or scheduled tasks are left behind.
 
 ## Recurring runs (optional)
@@ -48,24 +45,6 @@ schtasks /create /tn "devin-explore" /tr "devin-doctor check" /sc weekly /d MON 
 
 Runs under your account, no admin needed. Adjust `/sc`/`/st` (or `/sc onlogon` for daemons) to taste.
 
-
-
-## Adapters (MCP / Devin skill / plugin)
-
-- MCP server: `pip install 'devin-doctor[mcp]'` then run
-  `devin-doctor-mcp` (stdio). Read-only tools only.
-- Devin plugin + skill: `devin plugins install
-  Icaro0310/devin-explore#packages/doctor/adapters`. The manifest
-  launches the server through `uvx --from 'devin-doctor[mcp]'
-  devin-doctor-mcp`, which resolves once the matching PyPI release
-  ships. Until then, an editable install does not change what
-  `uvx --from` resolves — either run the source-installed
-  `devin-doctor-mcp` directly, or point a local manifest copy at the
-  checkout: `uvx --from './packages/doctor[mcp]' devin-doctor-mcp`.
-
-### MCP host configs
-
-Same stdio config in every host — see [README.md § MCP host configs](README.md#mcp-host-configs).
 
 ## Troubleshooting
 

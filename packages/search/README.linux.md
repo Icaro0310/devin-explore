@@ -18,7 +18,7 @@ uv tool install 'devin-search'
 
 ## Devin paths
 
-The CLI session DB is auto-detected at `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/sessions.db`; ACP logs are searched under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/acp-messages`. A legacy `~/.config/devin` layout is also checked.
+Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
 Use `--sessions-db`/`--acp-dir` for non-default locations.
 
 ## Environment notes
