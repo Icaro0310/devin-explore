@@ -77,6 +77,7 @@ def stats_to_dict(stats: IndexStats) -> dict:
         "rebuilt": stats.rebuilt,
         "indexed": stats.indexed,
         "removed": stats.removed,
+        "swept_files": stats.swept_files,
         "sources": stats.sources,
         "skipped_records": stats.skipped_records,
         "by_source": {
@@ -99,5 +100,7 @@ def stats_line(stats: IndexStats) -> str:
         f" · tools {stats.tool_calls} · devin-chat {stats.devin_chat_messages}"
         f" · copilot {stats.copilot_messages} · codex {stats.codex_messages}"
         f" · vscode-chat {stats.vscode_chat_messages})"
-        f" · removed {stats.removed} → {stats.index_path}"
+        f" · removed {stats.removed}"
+        f"{f' · swept {stats.swept_files}' if stats.swept_files else ''}"
+        f" → {stats.index_path}"
     )

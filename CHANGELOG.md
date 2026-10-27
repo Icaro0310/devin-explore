@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Feature** — `devin-search stats`: index health read straight from
+  the index (opened `mode=ro`, never creates/mutates; missing index
+  exits 2). Reports total/per-source/per-role doc counts, newest doc
+  timestamps, devin-cli + per-file watermark positions, and
+  reconciliation counters — `build_index` now persists `run:*` and
+  `total:*` keys in `index_meta` (indexed/removed/swept/skipped per run,
+  cumulative totals that reset on `--rebuild`). `IndexStats` gains
+  `swept_files`; `index --json` and the stats line surface it.
 - **Feature** — `devin-doctor drift`: a bounded, privacy-safe local
   snapshot for drift diagnosis. Four sections — tool versions vs
   expected floors (plus installed `devin-*` dists vs declared pyproject
