@@ -7,6 +7,7 @@ only). Every probe seam is injectable so tests stay hermetic.
 
 import hashlib
 import json
+import os
 
 from devin_doctor import drift
 from devin_doctor.cli import main
@@ -214,7 +215,8 @@ def test_package_scoped_flag(tmp_path):
 def test_dead_path_entries_warn(ctx, tmp_path):
     report = _collect(
         ctx,
-        environ=_fake_env(PATH=f"{tmp_path}/gone:{tmp_path}/also-gone"),
+        environ=_fake_env(
+            PATH=f"{tmp_path}/gone{os.pathsep}{tmp_path}/also-gone"),
     )
     pinfo = report.snapshot["sections"]["paths"]["path"]
     assert len(pinfo["missing"]) == 2
