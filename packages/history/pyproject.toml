@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devin-history"
-version = "0.1.1"
+version = "0.1.2"
 description = "Export, audit and search Devin Desktop session history — Obsidian-ready markdown, JSON and SQLite-aware."
 readme = "README.md"
 license = { text = "MIT" }

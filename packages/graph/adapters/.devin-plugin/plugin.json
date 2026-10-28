@@ -1,6 +1,6 @@
 {
   "name": "devin-graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Knowledge graph over Devin sessions — projects, files, tools and decisions as queryable nodes. Read-only queries.",
   "author": { "name": "Icaro0310" },
   "repository": "https://github.com/Icaro0310/devin-explore",
