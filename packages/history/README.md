@@ -224,10 +224,12 @@ only inside the given `out_dir`, never to the source stores).
 `devin plugins install
 Icaro0310/devin-explore#packages/history/adapters` — it ships in the
 repo, not inside the wheel. The manifest launches the server through
-`uvx --from 'devin-history[mcp]' devin-history-mcp`, which resolves once
-the matching PyPI release ships; until then run the source-installed
-`devin-history-mcp` directly or point a local manifest copy at the
-checkout (`uvx --from './packages/history[mcp]' devin-history-mcp`).
+`uvx --from 'devin-history[mcp]' devin-history-mcp`, which resolves the
+published PyPI release — no local install needed. To run the server
+from a source checkout instead, install it editable
+(`pip install -e '.[mcp]'`) and call `devin-history-mcp` directly, or
+point a local manifest copy at the checkout
+(`uvx --from './packages/history[mcp]' devin-history-mcp`).
 
 ### MCP host configs
 

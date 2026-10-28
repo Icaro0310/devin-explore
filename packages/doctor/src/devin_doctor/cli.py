@@ -33,7 +33,11 @@ from pathlib import Path
 from devin_doctor import capabilities, doctor
 from devin_doctor.checks.surfaces import SURFACE_NAMES
 from devin_doctor.model import Context
-from devin_doctor.paths import default_config_dir, default_data_dir
+from devin_doctor.paths import (
+    default_config_dir,
+    default_data_dir,
+    default_state_dir,
+)
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -78,6 +82,15 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="scope the agent-surface checks to NAME (repeatable; one of "
         + ", ".join(SURFACE_NAMES)
         + "). Devin-environment checks always run unscoped.",
+    )
+    p.add_argument(
+        "--package",
+        action="append",
+        metavar="NAME",
+        help="scope the publish-readiness check to package NAME "
+        "(repeatable; matches the packages/NAME dir or the project "
+        "name in its pyproject). Pointing --cwd at a single package "
+        "dir scopes the same way.",
     )
     p.add_argument(
         "--integrations",
@@ -170,11 +183,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         data_dir=args.data_dir or default_data_dir(),
         cwd=args.cwd,
         stale_days=args.stale_days,
+        state_dir=default_state_dir(),
         config_dir=(
             args.config_dir
             if args.config_dir is not None
             else default_config_dir() if args.data_dir is None else None
         ),
+        packages=tuple(args.package or ()),
     )
     optional = [
         name

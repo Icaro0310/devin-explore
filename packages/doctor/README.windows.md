@@ -21,6 +21,8 @@ uv tool install "devin-doctor"
 Session data normally lives under `%APPDATA%\devin\cli\`; UI state and ACP stores under `%APPDATA%\Devin\User\`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
+devin-doctor's own state (the `automation` check's snapshot baseline) lives under `%LOCALAPPDATA%\devin-doctor\` (machine-local, not Roaming — a per-host scheduler baseline must not roam) — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
+
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.
@@ -33,6 +35,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 - **Shell:** PowerShell 7 + Windows Terminal is the recommended setup; every command also works in `cmd.exe` and Windows PowerShell 5.1, none require admin.
 - **Install location:** executables live under `%USERPROFILE%\.local\bin`; data under `%APPDATA%\devin`. Nothing touches `Program Files` or the registry.
 - **WSL:** treat it as a Linux machine, follow [README.linux.md](README.linux.md) inside it.
+- **Toolchain check:** `devin-doctor check` names missing test/build tools with `winget install` commands (`Python.Python.3`, `OpenJS.NodeJS`, `Git.Git`). A `python.exe` that resolves but opens the Microsoft Store is reported as a broken shim — and when the Store-alias stub is the only `python`, the pip fix names the interpreter that actually resolved (`python -m ensurepip`, not `py`).
 - **Uninstall:** `uv tool uninstall <package>` (or `npm uninstall -g` for a Node.js tool) removes the CLI; delete `%APPDATA%\devin` to remove local data. No services or scheduled tasks are left behind.
 
 ## Recurring runs (optional)

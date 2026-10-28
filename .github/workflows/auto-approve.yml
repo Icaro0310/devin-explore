@@ -22,6 +22,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   status: {}
 
 permissions:
@@ -39,4 +41,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.1
+    # v1.6 -> v1.9: self-cancel fix (a successful approval no longer
+    # renders as a failed check) + fresh-head recheck + paginated dedup.
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.9

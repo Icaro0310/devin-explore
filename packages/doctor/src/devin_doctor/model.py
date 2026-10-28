@@ -65,12 +65,23 @@ class Context:
     now_ms: int | None = None
     acp_warn_bytes: int = 512 * 1024**2
     store_warn_bytes: int = 256 * 1024**2
+    sessions_db_warn_bytes: int = 2 * 1024**3
     total_warn_bytes: int = 4 * 1024**3
     config_dir: Path | None = None
+    # devin-doctor's own state dir (the automation check's snapshot
+    # baseline). Deliberately NOT under ``data_dir`` — that names the
+    # install being inspected and ``--data-dir`` can point at a repo
+    # checkout; the tool's own baseline must never be written inside
+    # one. ``None`` resolves to ``paths.default_state_dir()``.
+    state_dir: Path | None = None
     # Per-call offline switch for the updates check; complements the
     # process-wide DEVIN_DOCTOR_OFFLINE env so the MCP server can scope
     # it to one request instead of mutating os.environ.
     offline: bool = False
+    # Restricts the publish-readiness fan-out to named packages under
+    # ``cwd/packages`` (``--package NAME``, repeatable; matches the dir
+    # or the project name). Empty tuple = check every package found.
+    packages: tuple[str, ...] = ()
 
     def now(self) -> int:
         if self.now_ms is not None:

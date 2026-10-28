@@ -21,6 +21,8 @@ uv tool install 'devin-doctor'
 Session data normally lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin/cli/`; UI state and ACP stores under `${XDG_CONFIG_HOME:-$HOME/.config}/Devin/User/`.
 Use `--data-dir`/`--config-dir` for non-default locations.
 
+devin-doctor's own state (the `automation` check's snapshot baseline) lives under `${XDG_DATA_HOME:-$HOME/.local/share}/devin-doctor/` — never inside the inspected data dir; `DEVIN_DOCTOR_STATE_DIR` overrides.
+
 ## Environment notes
 
 - Delegated runtime is optional; this guide installs local tooling only.
@@ -35,6 +37,7 @@ Use `--data-dir`/`--config-dir` for non-default locations.
 - **Headless and minimal environments:** no display is needed, every CLI is text-only. In containers or WSL, install `uv` and Git and follow the same steps; `XDG_*` paths resolve normally.
 - **Permissions:** tools read Devin data under `$XDG_DATA_HOME/devin` and write only their own config/state, no root or sudo is required.
 - **Scheduling:** optional recurring work belongs to `systemd --user` timers or cron; installation never creates jobs.
+- **Toolchain check:** `devin-doctor check` names each missing test/build tool with a concrete install command — `apt` on Debian/Ubuntu (`sudo apt install python3-pip python3-venv nodejs npm git`), `dnf` on Fedora, `pacman` on Arch; other distros get a generic package-name hint. A `nodejs`-only box reports node as **WARN** — scripts invoking `node` still fail until the real name exists.
 
 ## Recurring runs (optional)
 

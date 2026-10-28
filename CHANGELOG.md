@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **CI** — repin the shared `pr-approve` gate to `devin-powerups`
+  `@v1.9`: self-cancel fix (a successful approval no longer renders as
+  a failed check), fresh-head recheck and paginated dedup.
+- **CI** — `auto-approve` now calls the shared `pr-approve` reusable
+  workflow at v1.6 (was v1.1) and also triggers on
+  `pull_request_review_comment[created]`, so fix-commit replies
+  re-evaluate the gate on the same head; the v1.6 gate adds cross-repo
+  fix anchors and gate-eligible concurrency.
+- **Feature** — `devin-doctor` gains an `automation` check for silently
+  broken scheduled tasks: per-surface enumeration (user crontab,
+  `systemd --user` units/timers including unloaded unit files, Windows
+  Task Scheduler), FAIL on referenced paths that no longer exist or that
+  point into registry-absorbed repo checkouts, and FAIL on tasks removed
+  since the last run via a persisted snapshot
+  (`<state-dir>/automation-snapshot.json`, resolved to the platform
+  `devin-doctor` dir so a `--data-dir` pointed at a repo checkout can
+  never write the baseline inside it). Unavailable surfaces carry their
+  recorded
+  tasks forward instead of reading as empty; removal FAILs persist until
+  the task returns or its snapshot entry is deleted by hand; credential-
+  shaped arguments are redacted to `***` before output and storage.
+- **Fix** — the `automation` snapshot no longer lives under the
+  inspected `--data-dir` (where a run pointed at a repo checkout wrote
+  `doctor/automation-snapshot.json` into it — absolute paths and cron
+  commands were swept into a public commit by `git add -A`). Doctor's
+  own state now resolves to a dedicated `devin-doctor` dir
+  (`$XDG_DATA_HOME` / `%LOCALAPPDATA%` / Application Support,
+  `DEVIN_DOCTOR_STATE_DIR` to override), and a `.gitignore` written
+  beside the snapshot keeps the baseline out of `git add -A` even when
+  the override points inside a checkout.
 - **Feature** — `devin-history` exports now carry the SESSION-EVIDENCE
   anchor triple (`surface`/`native_id`/`ref`) in Markdown frontmatter and
   JSON, per `devin-internals-spec` `docs/SESSION-EVIDENCE.md`.

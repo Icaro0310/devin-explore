@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `devin-search query --tool <name>`: exact-match filter on the tool a
+  hit came from. `tool_call_state` payloads now lift their tool name
+  into a new `docs.tool` column (`UNINDEXED`) — extraction ports
+  devin-graph's best-effort heuristic (`name`/`tool_name`/`tool`/
+  `kind`/`type`/`title` at top level, then one level inside
+  `rawInput`/`raw_input`/`input`/`args`; the call payload wins over the
+  update payload). Combines with `--role tool` and the other filters —
+  a blank `--tool ""` value means no filter, the same contract the MCP
+  adapter applies to `tool=""` — and `--json` hits now carry a `tool`
+  field. Index format bumped to v4 — existing indexes rebuild
+  automatically on the next `index` run.
+- `search_query` MCP tool and `do_query()` accept `tool` for CLI parity;
+  the local query log records the filter when set.
+
+### Fixed
+
+- `json.loads` `RecursionError`s are treated like `JSONDecodeError` so a
+  pathological record is skipped instead of aborting the run (vscode
+  snapshot, mutations log, copilot, codex rollout).
+- `_vscode_field_text` walks containers iteratively, so a chat doc with
+  deeply nested `content` fields no longer RecursionErrors the whole
+  index run.
+- copilot records whose `type` is not a string are skipped instead of
+  raising `TypeError`.
+- codex `threads` docs re-index when only `cwd`/`created_at` metadata
+  changes — the indexed comparison was text-only, so metadata edits
+  were invisible.
+- Managed collector surfaces whose roots are all gone (copilot, codex,
+  vscode-chat) sweep their stale docs/markers — the documented
+  vanished-source contract from 0.2.1 now applies to every surface, not
+  only `sessions_db` and ACP. `--no-<surface>` still preserves docs.
+
 ## [0.2.1] - 2026-10-17
 
 ### Fixed

@@ -62,9 +62,17 @@ CREATE VIRTUAL TABLE docs USING fts5(
   session_id UNINDEXED,  role UNINDEXED,       -- filters
   ts UNINDEXED,                                -- epoch ms
   project UNINDEXED,     session_title UNINDEXED,
-  source UNINDEXED,      ref UNINDEXED         -- 'devin-cli'|'devin-chat' + rowid
+  source UNINDEXED,      ref UNINDEXED,        -- 'devin-cli'|'devin-chat' + rowid
+  tool UNINDEXED                               -- tool-call name, else NULL
 );
 ```
+
+`tool` carries the tool name lifted from `tool_call_state` payloads
+(`tool:` refs only — NULL everywhere else): the call and update payloads
+are merged (call wins on conflict) and the name extracted best-effort
+(`name`/`tool_name`/`tool`/`kind`/`type`/`title`, then one level into
+`rawInput`/`raw_input`/`input`/`args` — the same heuristic devin-graph
+uses). `query --tool` is an exact match against it.
 
 `source` uses the canonical session-surface vocabulary
 (`devin-internals-spec` → `docs/SESSION-SURFACES.md`): `devin-cli` for
@@ -85,7 +93,7 @@ are not unique.
 
 | key | value |
 |---|---|
-| `schema_version` | index format version (currently `2`) |
+| `schema_version` | index format version (currently `4`) |
 | `wm:devin-cli:message_nodes` | max `row_id` indexed |
 | `wm:devin-cli:prompt_history` | max `id` indexed |
 | `devin-chat:wm:<file>` | max `position` indexed per acp file |
@@ -135,7 +143,7 @@ devin-search index [--sessions-db PATH] [--acp-dir DIR]
                    [--no-codex] [--no-vscode-chat]
                    [--index PATH] [--rebuild] [--json]
 devin-search query "<term>" [--role R] [--project P] [--since DATE]
-                   [--limit N] [--index PATH] [--json]
+                   [--tool NAME] [--limit N] [--index PATH] [--json]
 ```
 
 - Defaults auto-detect `%APPDATA%/devin/cli/sessions.db` and
@@ -145,13 +153,20 @@ devin-search query "<term>" [--role R] [--project P] [--since DATE]
   `Code - Insiders` `User` dirs + `~/.vscode-server/data/User` merged);
   `--index` defaults to `<app-dir>/devin-search/search.db`. Each
   `--<surface>-dir` flag pins that surface to one root; each
-  `--no-<surface>` flag disables it entirely.
+  `--no-<surface>` flag disables it entirely. Every managed surface —
+  pinned or auto-detected — sweeps stale docs when its store is gone:
+  a root configured-but-absent counts as vanished and its docs/markers
+  are removed (`stats.removed`); `--no-<surface>` makes the surface
+  unmanaged for the run and preserves its docs.
 - `index` prints a one-line stats summary (or JSON); exit 0.
 - `query` prints a fixed-width table (`WHEN · ROLE · PROJECT · SESSION ·
   SNIPPET`, matches wrapped in `«»`) or `--json`; exit 0 with hits, 1 on
   no hits, 2 on usage/store errors.
 - `term` is tokenized and ANDed; `--since` accepts `YYYY-MM-DD` or epoch
-  ms; `--project` is a substring match on the working directory.
+  ms; `--project` is a substring match on the working directory;
+  `--tool` is an exact match on the indexed `tool_call_state` tool name
+  (a blank value means no filter — the same contract the MCP
+  `search_query` adapter applies to `tool=""`).
 
 ### Roles
 

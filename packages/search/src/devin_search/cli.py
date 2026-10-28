@@ -163,6 +163,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
             role=args.role,
             project=args.project,
             since=since,
+            tool=args.tool,
             limit=args.limit,
         )
     except (FileNotFoundError, StaleIndexError, sqlite3.Error, OSError) as exc:
@@ -171,7 +172,8 @@ def _cmd_query(args: argparse.Namespace) -> int:
     if not args.no_log:
         from devin_search.misslog import record
         record(_resolve_index(args.index), args.term, len(hits),
-               role=args.role, project=args.project, since=args.since)
+               role=args.role, project=args.project, since=args.since,
+               tool=args.tool)
     if args.history_dir:
         hits = attach_history_notes(hits, args.history_dir)
     if args.json:
@@ -267,6 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     q.add_argument(
         "--since", help="only hits at/after this date (YYYY-MM-DD or epoch ms)"
+    )
+    q.add_argument(
+        "--tool", help="filter: exact tool name on tool-call docs "
+        "(e.g. shell; devin-cli tool_call_state only)"
     )
     q.add_argument("--limit", type=int, default=20)
     q.add_argument("--index", help="index file path (default: app dir)")

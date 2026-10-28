@@ -86,8 +86,9 @@ devin-search index
 # search everything
 devin-search query "kubectl delete pod"
 
-# filters: role, project, date, limit — --json on every command
+# filters: role, project, tool, date, limit — --json on every command
 devin-search query "TypeError" --role assistant --project myrepo
+devin-search query "kubectl apply" --tool shell
 devin-search query "migration" --since 2026-09-01 --limit 5 --json
 
 # link hits to devin-history export notes
@@ -108,6 +109,9 @@ Hits print as `WHEN · ROLE · PROJECT · SESSION · SNIPPET` with the match
 wrapped in `«»`; each hit carries a `ref` (e.g. `node:1234`,
 `devin-chat:file.db:7`, `codex-cli:…/rollout-x.jsonl:41`,
 `vscode-chat:…/vs-1.jsonl:0:resp`) pointing back to the exact source row.
+`--tool <name>` matches the tool name indexed from `tool_call_state`
+payloads (exact, case-sensitive; docs without a tool-call payload never
+match), and `--json` hits carry it as `tool`.
 
 With `--history-dir <dir>` pointing at a
 [`devin-history`](https://github.com/Icaro0310/devin-explore) export

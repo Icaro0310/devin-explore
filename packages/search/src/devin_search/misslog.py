@@ -29,6 +29,7 @@ def record(
     role: str | None = None,
     project: str | None = None,
     since: str | None = None,
+    tool: str | None = None,
     now: float | None = None,
 ) -> None:
     entry = {
@@ -42,6 +43,8 @@ def record(
         entry["project"] = project
     if since:
         entry["since"] = since
+    if tool:
+        entry["tool"] = tool
     p = log_path(index_path)
     try:
         with p.open("a", encoding="utf-8") as fh:
