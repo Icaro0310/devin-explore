@@ -148,7 +148,7 @@ def test_slack_token_from_gateways_env_file(ctx, tmp_path):
     )
     f = slack_only(findings)
     assert f.status is Status.PASS
-    assert "gateways/.env" in f.message  # source, not value
+    assert str(env_file) in f.message  # source, not value
     assert "dotenv-token" not in f.message
 
 
