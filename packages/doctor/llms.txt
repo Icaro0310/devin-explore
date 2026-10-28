@@ -12,6 +12,7 @@ Devin keeps local state — a versioned `sessions.db`, one `acp-messages/*.db` p
 - `devin-doctor check`: diagnose the default Devin data dir
 - `devin-doctor check --data-dir <path> --config-dir <path>`: diagnose stores in non-default locations
 - `devin-doctor check --json`: machine-readable output
+- `devin-doctor check --integrations` / `--live`: opt-in checks — half-configured CI via `git`+`gh`, Slack/Ollama connectivity probes
 - `devin-doctor report --md`: markdown report, for pasting into issues
 - `uv tool install devin-doctor  # or: pipx install devin-doctor`: install the CLI
 - `python -m pytest`: run the test suite (synthetic fixtures only)

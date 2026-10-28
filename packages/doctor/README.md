@@ -90,6 +90,8 @@ devin-doctor check --data-dir D:\devin-backup
 devin-doctor check --data-dir ~/.local/share/devin --config-dir ~/.config/Devin
 devin-doctor check --json             # machine-readable output
 devin-doctor check --surface codex-cli  # scope surface checks (repeatable)
+devin-doctor check --integrations     # opt-in: half-configured CI (git + gh CLI)
+devin-doctor check --live             # opt-in: Slack/Ollama connectivity probes
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
 ```
@@ -134,7 +136,35 @@ than hard failures, so the tool is still useful on agent-only machines:
 | `config` | `credentials.toml` presence + validity (**values masked**); `.devin/` hooks/MCP config sanity |
 | `hooks-windows` | hooks/MCP commands that would pop a visible console window on Windows (`cmd /c` without a hidden wrapper, `powershell` without `-WindowStyle Hidden`, direct `.bat`/`.ps1`, `python.exe` vs `pythonw.exe`) — each with file, hook event and a wrapper fix |
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
-| `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
+| `updates` | installed tool versions vs the DevKit manifest (the only default-run check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
+
+**opt-in checks** — two more families stay out of the default run
+because they need more than the local stores. Pass their flags on
+`check`/`report`/`plan`:
+
+- `--integrations` (alias `--ci`) — "half-configured CI" detection for
+  the repo under `--cwd`. It resolves `owner/name` from `git remote
+  get-url origin` and compares two `gh api` views: the repo's Actions
+  secret *names* (values are never exposed) against the file names in
+  `.github/workflows`. A small rule table pairs each required secret
+  with workflow-name markers so new integrations can be added; the
+  shipped rule flags `TS_AUTHKEY` without a `fallback`/`ai-review`
+  workflow — or the workflow without the secret — as
+  `FAIL half-configured`. Both present is `PASS`, neither is `WARN`
+  (some repos legitimately skip), a non-GitHub remote skips, and any
+  `git`/`gh` failure is `WARN unavailable`, never a crash.
+- `--live` — live connectivity probes that authenticate instead of just
+  checking that a file exists. Slack `auth.test` with a token from
+  `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN`, else the first
+  `*/gateways/.env` under `~` and under the ecosystem root
+  (`$DEVIN_ECOSYSTEM_ROOT`, default `~/devin`) — the token is never
+  printed, only its source. Ollama `GET /api/tags` against
+  `OLLAMA_HOST` or `http://localhost:11434`. Each probe is bounded to
+  ~8s: a configured endpoint that fails is `FAIL`, nothing configured
+  is a `WARN` skip.
+
+Both honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` (offline wins over the
+flags), so the pre-commit gate and air-gapped runs stay hermetic.
 
 Privacy doctrine is strict across all checks: headers and metadata only —
 counts, sizes, paths and statuses, never message content. SQLite stores
@@ -180,8 +210,9 @@ timeout) plus a loopback bind — the only network call this tool can make.
 ## Works with Devin alone (Devin-only mode)
 
 devin-doctor is a pure local diagnostic: it reads Devin's own data
-directories, writes nothing, and never contacts a network service. No VM, no
-Tailscale, no Ollama, no Slack — just Devin Desktop plus Python. On a
+directories, writes nothing, and — unless you pass the opt-in
+`--integrations`/`--live` flags — never contacts a network service. No VM,
+no Tailscale, no Ollama, no Slack — just Devin Desktop plus Python. On a
 restricted or corporate machine it is the safest first tool: install, run
 `devin-doctor`, read the report.
 
@@ -192,6 +223,13 @@ Tested on Windows and Linux. On Linux, session data defaults to
 to `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`). Windows stores use
 `%APPDATA%\devin` and `%APPDATA%\Devin`. Use `--data-dir` and `--config-dir`
 when the stores are elsewhere. macOS paths exist but are not verified.
+
+The opt-in checks are platform-neutral: `--integrations` needs `git` plus
+the `gh` CLI on PATH (authenticated to github.com — `gh api` shells out,
+so `cmd`, PowerShell, bash and zsh all work), and `--live` needs outbound
+HTTP to the probed endpoints. The `*/gateways/.env` token lookup is a
+home-dir glob — it works on Windows too, but the env-var path is the
+portable one everywhere.
 
 
 ### `devin-doctor plan` — remediation plan, still read-only
@@ -273,7 +311,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 - Devin misbehaves — missing history, auth errors, disk pressure — and you want one command to localize the cause.
 - You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates), each with a `fix:` suggestion.
 - You need a paste-able report for a bug report: `devin-doctor report --md`.
-- You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (otherwise only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable).
+- You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (in the default run only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable; `--integrations`/`--live` only run when flagged).
 
 ## When NOT to use this
 
@@ -285,7 +323,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 
 **How do I check if my Devin installation's local data is healthy?** Run `devin-doctor check`. It inspects `sessions.db`, `acp-messages/*.db`, `state.vscdb`, `credentials.toml` and disk usage, printing `PASS`/`WARN`/`FAIL` per check with a `fix:` suggestion. Exit code is `0` unless something FAILs. It also diagnoses the other agent session surfaces on the machine (Copilot, Codex, VS Code chat) in the same run — `--surface NAME` scopes that section.
 
-**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and writes nothing to the data dir. The only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`). Config check masks credential values in output. Fixes are suggested as text, never applied.
+**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and writes nothing to the data dir. In the default run the only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`); the `--integrations` (GitHub API via `gh`) and `--live` (Slack/Ollama probes) checks run only when explicitly flagged and also honor `--offline`. Config check masks credential values in output; the live check never prints tokens and the integrations check never sees secret values. Fixes are suggested as text, never applied.
 
 **What does "unknown schema version" mean?** Devin's `sessions.db` schema is versioned; devin-doctor understands v15–v17 via devin-internals-spec. A newer version produces a `schema-unknown` WARN: counts still run, but the layout isn't verified — update the tool or devin-internals-spec.
 

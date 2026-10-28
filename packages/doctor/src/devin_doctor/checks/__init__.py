@@ -11,6 +11,8 @@ from devin_doctor.checks import (
     disk,
     health,
     hooks_windows,
+    integrations,
+    live,
     updates,
 )
 from devin_doctor.checks.surfaces import SURFACE_NAMES, SURFACES
@@ -20,16 +22,26 @@ from devin_doctor.checks.surfaces import SURFACE_NAMES, SURFACES
 # exists at all.
 DEVIN_CHECKS = [health, config, hooks_windows, disk, updates]
 
+# Opt-in checks — they only run when the matching CLI flag passes their
+# CHECK_ID via ``run_all(optional=...)``: ``integrations`` needs the
+# ``gh`` CLI plus GitHub API access; ``live`` authenticates against
+# Slack/Ollama. Keeping them out of CHECKS preserves the hermetic
+# default run (and the --offline pre-commit gate).
+OPTIONAL_CHECKS = [integrations, live]
+
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
 
 __all__ = [
     "CHECKS",
     "DEVIN_CHECKS",
+    "OPTIONAL_CHECKS",
     "SURFACES",
     "SURFACE_NAMES",
     "config",
     "disk",
     "health",
     "hooks_windows",
+    "integrations",
+    "live",
     "updates",
 ]

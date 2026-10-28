@@ -196,3 +196,46 @@ def test_render_json_roundtrip(ctx):
     report = doctor.run_all(ctx)
     payload = json.loads(doctor.render_json(report, ctx))
     assert payload["overall"] in ("PASS", "WARN", "FAIL")
+
+
+def test_opt_in_checks_run_only_when_flagged(ctx, capsys):
+    """--integrations/--live add their checks; offline wins over them, so
+    the run stays hermetic (both report WARN unavailable)."""
+    rc = main(
+        [
+            "check",
+            "--data-dir",
+            str(ctx.data_dir),
+            "--cwd",
+            str(ctx.cwd),
+            "--integrations",
+            "--live",
+            "--offline",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "integrations" in payload["checks"]
+    assert "live" in payload["checks"]
+    warned = {
+        f["check"] for f in payload["findings"] if f["status"] == "WARN"
+    }
+    assert {"integrations", "live"} <= warned
+
+
+def test_opt_in_checks_absent_by_default(ctx, capsys):
+    rc = main(
+        [
+            "check",
+            "--data-dir",
+            str(ctx.data_dir),
+            "--cwd",
+            str(ctx.cwd),
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "integrations" not in payload["checks"]
+    assert "live" not in payload["checks"]

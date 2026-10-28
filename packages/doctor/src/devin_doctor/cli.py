@@ -11,6 +11,11 @@ one surface — the Devin-environment checks always run unscoped.
 run, so the updates check skips its manifest fetch and nothing touches
 the network — the mode the repo's pre-commit gate runs in.
 
+``--integrations``/``--ci`` and ``--live`` (check/report/plan) opt into
+the checks that need more than the local stores: the integrations check
+uses ``git`` + the ``gh`` CLI against the GitHub API, and the live check
+authenticates against Slack/Ollama endpoints.
+
 Exit code: 0 when no FAIL findings, 1 when any check FAILs.
 ``capabilities`` always exits 0 — its output is a JSON profile, not a
 verdict.
@@ -73,6 +78,21 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="scope the agent-surface checks to NAME (repeatable; one of "
         + ", ".join(SURFACE_NAMES)
         + "). Devin-environment checks always run unscoped.",
+    )
+    p.add_argument(
+        "--integrations",
+        "--ci",
+        action="store_true",
+        help="opt-in: check the repo under --cwd for half-configured "
+        "integrations (provisioned secret but no matching workflow, or "
+        "vice-versa) via git + the gh CLI against the GitHub API",
+    )
+    p.add_argument(
+        "--live",
+        action="store_true",
+        help="opt-in: run live connectivity probes — Slack auth.test and "
+        "Ollama /api/tags, each bounded to ~8s (proves the channel, "
+        "not just the key)",
     )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
@@ -156,7 +176,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             else default_config_dir() if args.data_dir is None else None
         ),
     )
-    report = doctor.run_all(ctx, surfaces=args.surface)
+    optional = [
+        name
+        for name, enabled in (
+            ("integrations", getattr(args, "integrations", False)),
+            ("live", getattr(args, "live", False)),
+        )
+        if enabled
+    ]
+    report = doctor.run_all(
+        ctx, surfaces=args.surface, optional=optional or None
+    )
     if args.command == "plan":
         if args.json:
             print(json.dumps(
