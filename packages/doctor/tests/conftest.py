@@ -97,7 +97,8 @@ def _no_toolchain_probes(monkeypatch):
 
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
-    """A healthy synthetic Devin data dir (schema v17, 3 sessions, 2 acp DBs)."""
+    """A healthy synthetic Devin data dir (latest spec schema, 3
+    sessions, 2 acp DBs)."""
     root = tmp_path / "devin"
     create_devin_data_dir(root)
     (root / "credentials.toml").write_text(

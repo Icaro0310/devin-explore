@@ -146,7 +146,8 @@ def test_non_github_remote_skips(ctx):
         ctx, runner=fake_runner(url="git@gitlab.com:acme/app.git")
     )
     assert findings[0].status is Status.WARN
-    assert "github.com" in findings[0].message
+    assert "skipped" in findings[0].message
+    assert "remote" in findings[0].message
 
 
 def test_https_remote_resolves_slug(ctx):
