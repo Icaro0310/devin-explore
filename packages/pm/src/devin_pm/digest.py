@@ -30,15 +30,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from devin_pm.milestones import Milestone, collect_milestones, done_fraction
-from devin_pm.projects import Project
+from devin_pm.projects import Project, extract_cost
 from devin_pm.report import (
     _sessions_table,
     _summary_line,
+    fmt_cost,
+    ms_to_date,
     ms_to_iso,
 )
 
 CURSOR_NAME = "pm-digest"
 """Shared-cursor name → ``<dir>/pm-digest-state.json``."""
+
+SLACK_SAFE_LIMIT = 3500
+"""Hard cap for ``--slack`` output — comfortably under Slack's text
+limits so the digest posts verbatim via ``slack-notify``."""
 
 DEFAULT_WINDOW_MS = 7 * 86_400_000
 """Bare ``digest`` looks back one week — the "weekly-ish" default."""
@@ -169,6 +175,101 @@ def render_digest(
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# slack-mrkdwn rendering (``--slack``)
+# ---------------------------------------------------------------------------
+
+def _session_bullet(s) -> str:
+    """One ``•`` line replacing a ``_sessions_table`` row for Slack."""
+    bits = [ms_to_date(s.last_activity_at), s.status]
+    cost = extract_cost(s.cogs_json)
+    if cost is not None:
+        bits.append(f"cost {fmt_cost(cost)}")
+    if getattr(s, "source", "cli") != "cli":
+        bits.append("gui")
+    return f"• `{s.id}` {s.title or '-'} ({', '.join(bits)})"
+
+
+def _slack_milestone_lines(
+    milestones: Iterable[Milestone], in_window_ids: set[str]
+) -> list[str]:
+    """Checkbox bullets + the Done line, mrkdwn-safe (no heading)."""
+    ms = list(milestones)
+    if not ms:
+        return []
+    lines = [""]
+    for m in ms:
+        mark = " _(this period)_" if m.session_id in in_window_ids else ""
+        lines.append(f"• [{'x' if m.done else ' '}] {m.name}{mark}")
+    done, total, pct = done_fraction(ms)
+    lines.append(f"Done: {done}/{total} ({pct:.0f}%)")
+    return lines
+
+
+def _slack_cap(lines: list[str], max_chars: int) -> str:
+    """Join ``lines`` under ``max_chars``; dropped lines → notice.
+
+    Truncation drops whole trailing lines (never mid-line) and reserves
+    room for the ``… truncated (N lines dropped)`` notice so the output
+    always fits the cap.
+    """
+    notice_fmt = "_… truncated ({} lines dropped)_"
+    reserve = len(notice_fmt.format(9999)) + 1
+    out: list[str] = []
+    used = dropped = 0
+    for line in lines:
+        cost = len(line) + 1
+        if used + cost > max_chars - reserve:
+            dropped += 1
+            continue
+        out.append(line)
+        used += cost
+    if dropped:
+        out.append(notice_fmt.format(dropped))
+    return "\n".join(out) + "\n"
+
+
+def render_slack_digest(
+    projects: Iterable[Project],
+    milestones: Mapping[str, Iterable[Milestone]],
+    *,
+    since_ms: int,
+    now: datetime | None = None,
+    max_chars: int = SLACK_SAFE_LIMIT,
+) -> str:
+    """Slack-mrkdwn digest — same data as :func:`render_digest`.
+
+    ``#``/``##`` headers become ``*bold*`` lines, the sessions table
+    becomes ``•`` bullets (no markdown tables — Slack does not render
+    them), and the text is hard-capped at ``max_chars`` so the output
+    can be piped verbatim into ``slack-notify``.
+    """
+    now = now or datetime.now(tz=timezone.utc)
+    projects = list(projects)
+    lines = [
+        f"*devin-pm weekly digest — {now.strftime('%G-W%V')}*",
+        (
+            f"_{len(projects)} projects with activity since "
+            f"{ms_to_iso(since_ms)}, generated "
+            f"{now.strftime('%Y-%m-%d')}_"
+        ),
+    ]
+    for project in projects:
+        in_window_ids = {s.id for s in project.sessions}
+        lines += [
+            "",
+            f"*{project.name}*",
+            _summary_line(project),
+        ]
+        lines += [_session_bullet(s) for s in project.sessions]
+        tail = _slack_milestone_lines(
+            milestones.get(project.name, ()), in_window_ids
+        )
+        if tail:
+            lines += tail
+    return _slack_cap(lines, max_chars)
+
+
 def _atomic_write(path: Path, text: str) -> None:
     """tmp + ``os.replace`` — the envelope's atomic-write rule."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,6 +329,7 @@ def run_digest(
     stdout: bool = False,
     now: datetime | None = None,
     milestones=None,
+    renderer=None,
 ) -> DigestResult:
     """Produce the digest: filter → render → write → commit cursor.
 
@@ -242,7 +344,9 @@ def run_digest(
     returns the report text instead of writing
     ``pm-digest-YYYY-Www.md``; it still commits (the digest was
     produced). A run with no in-window activity produces no report and
-    no file.
+    no file. ``renderer`` swaps :func:`render_digest` for another
+    callable with the same signature (e.g. :func:`render_slack_digest`)
+    — the alternate format is what lands in the report and the file.
     """
     now = now or datetime.now(tz=timezone.utc)
     projects = list(projects)
@@ -266,8 +370,9 @@ def run_digest(
     result = DigestResult(since_ms=effective_since, projects=active)
 
     if active:
+        render = renderer if renderer is not None else render_digest
         originals = {p.name: p for p in projects}
-        report = render_digest(
+        report = render(
             active,
             _milestones_map(active, originals, milestones),
             since_ms=effective_since,

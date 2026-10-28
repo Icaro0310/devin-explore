@@ -33,7 +33,13 @@ from pathlib import Path
 from devin_internals.parsers import Session, SessionsStore
 from devin_internals.schema import SchemaError
 
-from devin_pm.digest import CURSOR_NAME, parse_since, run_digest
+from devin_pm.digest import (
+    CURSOR_NAME,
+    SLACK_SAFE_LIMIT,
+    parse_since,
+    render_slack_digest,
+    run_digest,
+)
 from devin_pm.milestones import (
     MilestonesError,
     collect_milestones,
@@ -308,7 +314,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
         since_ms=since_ms,
         cursor=cursor,
         out_dir=args.out_dir,
-        stdout=args.stdout,
+        stdout=args.stdout or args.slack,
+        renderer=render_slack_digest if args.slack else None,
     )
     if result.report is None:
         print(
@@ -316,7 +323,7 @@ def cmd_digest(args: argparse.Namespace) -> int:
             f"{ms_to_iso(result.since_ms)} — nothing to digest"
         )
         return 0
-    if args.stdout:
+    if args.stdout or args.slack:
         print(result.report, end="")
     else:
         print(f"wrote {result.out_path}")
@@ -448,6 +455,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the digest instead of writing "
         "pm-digest-YYYY-Www.md (still advances the cursor under "
         "--incremental)",
+    )
+    p.add_argument(
+        "--slack",
+        action="store_true",
+        help="print a Slack-mrkdwn digest instead of markdown — *bold* "
+        "headers, bullet sessions (no tables), hard-capped at "
+        f"{SLACK_SAFE_LIMIT} chars so it can be piped verbatim into "
+        "slack-notify (implies --stdout; still advances the cursor "
+        "under --incremental)",
     )
     p.add_argument(
         "--out-dir",
