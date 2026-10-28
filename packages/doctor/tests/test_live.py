@@ -14,7 +14,14 @@ def _online(monkeypatch):
     # conftest pins DEVIN_DOCTOR_OFFLINE=1 and the real env may carry
     # tokens/hosts — all network inputs are controlled per test.
     monkeypatch.delenv("DEVIN_DOCTOR_OFFLINE", raising=False)
-    for var in ("SLACK_BOT_TOKEN", "SLACK_USER_TOKEN", "OLLAMA_HOST"):
+    for var in (
+        "SLACK_BOT_TOKEN",
+        "SLACK_USER_TOKEN",
+        "SLACK_DOCTOR_CHANNEL",
+        "SLACK_NOTIFY_CHANNEL",
+        "SLACK_NOTIFY_USER",
+        "OLLAMA_HOST",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -49,6 +56,22 @@ def opener_raising(exc: Exception):
     return _open
 
 
+def opener_dispatch(mapping):
+    """opener keyed by request URL — values are bodies or Exceptions.
+
+    Unmapped URLs raise ``URLError`` (the Ollama probe then reads as a
+    default-host skip; an unexpected Slack call fails the finding)."""
+
+    def _open(req, timeout=None):
+        url = getattr(req, "full_url", req)
+        outcome = mapping.get(url, urllib.error.URLError("no mock"))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return FakeResp(outcome)
+
+    return _open
+
+
 def slack_only(findings):
     return next(f for f in findings if f.message.startswith("slack:"))
 
@@ -69,14 +92,24 @@ def _run(ctx, *, opener, environ, home=None):
 def test_slack_ok_passes(ctx):
     findings = _run(
         ctx,
-        opener=opener_returning(
-            json.dumps({"ok": True, "team": "Acme"}).encode()
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: json.dumps(
+                    {"ok": True, "team": "Acme"}
+                ).encode(),
+                live.SLACK_POST_URL: b'{"ok": true}',
+            }
         ),
-        environ={"SLACK_BOT_TOKEN": "xoxb-test-token"},
+        environ={
+            "SLACK_BOT_TOKEN": "xoxb-test-token",
+            "SLACK_DOCTOR_CHANNEL": "C123",
+        },
     )
     f = slack_only(findings)
     assert f.status is Status.PASS
+    assert "auth+deliver ok" in f.message
     assert "Acme" in f.message
+    assert "C123" in f.message
     assert "xoxb-test-token" not in f.message  # never printed
 
 
@@ -142,8 +175,13 @@ def test_slack_token_from_gateways_env_file(ctx, tmp_path):
     )
     findings = _run(
         ctx,
-        opener=opener_returning(json.dumps({"ok": True}).encode()),
-        environ={},
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: b'{"ok": true}',
+                live.SLACK_POST_URL: b'{"ok": true}',
+            }
+        ),
+        environ={"SLACK_DOCTOR_CHANNEL": "C9"},
         home=tmp_path,
     )
     f = slack_only(findings)
@@ -159,13 +197,131 @@ def test_slack_token_from_ecosystem_root(ctx, tmp_path):
     env_file.write_text("SLACK_USER_TOKEN=eco-token\n", encoding="utf-8")
     findings = _run(
         ctx,
-        opener=opener_returning(json.dumps({"ok": True}).encode()),
-        environ={"DEVIN_ECOSYSTEM_ROOT": str(eco)},
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: b'{"ok": true}',
+                live.SLACK_POST_URL: b'{"ok": true}',
+            }
+        ),
+        environ={
+            "DEVIN_ECOSYSTEM_ROOT": str(eco),
+            "SLACK_DOCTOR_CHANNEL": "C9",
+        },
         home=tmp_path / "elsewhere",
     )
     f = slack_only(findings)
     assert f.status is Status.PASS
     assert "eco-token" not in f.message
+
+
+# --- delivery smoke -----------------------------------------------------------
+
+
+def test_slack_auth_ok_no_channel_warns(ctx, tmp_path):
+    findings = _run(
+        ctx,
+        opener=opener_returning(b'{"ok": true}'),
+        environ={"SLACK_BOT_TOKEN": "xoxb-t"},
+        home=tmp_path,
+    )
+    f = slack_only(findings)
+    assert f.status is Status.WARN
+    assert "no delivery channel" in f.message
+    assert "chat.postMessage skipped" in f.message
+
+
+def test_slack_auth_ok_deliver_fails(ctx):
+    findings = _run(
+        ctx,
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: b'{"ok": true}',
+                live.SLACK_POST_URL: json.dumps(
+                    {"ok": False, "error": "not_in_channel"}
+                ).encode(),
+            }
+        ),
+        environ={
+            "SLACK_BOT_TOKEN": "xoxb-t",
+            "SLACK_DOCTOR_CHANNEL": "C123",
+        },
+    )
+    f = slack_only(findings)
+    assert f.status is Status.FAIL
+    assert "auth ok, delivery failed: not_in_channel" in f.message
+    assert "xoxb-t" not in f.message
+
+
+def test_slack_deliver_via_notify_user_dm(ctx):
+    findings = _run(
+        ctx,
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: b'{"ok": true}',
+                live.SLACK_OPEN_URL: json.dumps(
+                    {"ok": True, "channel": {"id": "D42"}}
+                ).encode(),
+                live.SLACK_POST_URL: b'{"ok": true}',
+            }
+        ),
+        environ={
+            "SLACK_USER_TOKEN": "xoxp-t",
+            "SLACK_NOTIFY_USER": "U-secret",
+        },
+    )
+    f = slack_only(findings)
+    assert f.status is Status.PASS
+    assert "D42" in f.message
+    assert "U-secret" not in f.message  # only the channel id is printed
+
+
+def test_slack_dm_open_fails(ctx):
+    findings = _run(
+        ctx,
+        opener=opener_dispatch(
+            {
+                live.SLACK_AUTH_URL: b'{"ok": true}',
+                live.SLACK_OPEN_URL: json.dumps(
+                    {"ok": False, "error": "user_not_found"}
+                ).encode(),
+            }
+        ),
+        environ={
+            "SLACK_BOT_TOKEN": "xoxb-t",
+            "SLACK_NOTIFY_USER": "U-gone",
+        },
+    )
+    f = slack_only(findings)
+    assert f.status is Status.FAIL
+    assert "auth ok, delivery failed: user_not_found" in f.message
+
+
+def test_slack_deliver_posts_diagnostic_text(ctx):
+    calls = []
+
+    def _open(req, timeout=None):
+        url = getattr(req, "full_url", req)
+        calls.append((url, getattr(req, "data", None)))
+        if url == live.SLACK_AUTH_URL:
+            return FakeResp(b'{"ok": true}')
+        if url == live.SLACK_POST_URL:
+            return FakeResp(b'{"ok": true}')
+        raise urllib.error.URLError("no mock")
+
+    findings = _run(
+        ctx,
+        opener=_open,
+        environ={
+            "SLACK_BOT_TOKEN": "xoxb-secret",
+            "SLACK_NOTIFY_CHANNEL": "C9",
+        },
+    )
+    assert slack_only(findings).status is Status.PASS
+    body = next(b for u, b in calls if u == live.SLACK_POST_URL)
+    payload = json.loads(body)
+    assert payload["channel"] == "C9"
+    assert payload["text"].startswith("devin-doctor live-check ")
+    assert "xoxb-secret" not in payload["text"]
 
 
 # --- ollama -----------------------------------------------------------------

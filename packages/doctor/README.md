@@ -92,7 +92,7 @@ devin-doctor check --json             # machine-readable output
 devin-doctor check --surface codex-cli  # scope surface checks (repeatable)
 devin-doctor check --cwd . --package doctor  # publish-readiness on one package
 devin-doctor check --integrations     # opt-in: half-configured CI (git + gh CLI)
-devin-doctor check --live             # opt-in: Slack/Ollama connectivity probes
+devin-doctor check --live             # opt-in: Slack auth+delivery smoke, Ollama probe
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
 ```
@@ -175,10 +175,15 @@ because they need more than the local stores. Pass their flags on
   `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN`, else the first
   `*/gateways/.env` under `~` and under the ecosystem root
   (`$DEVIN_ECOSYSTEM_ROOT`, default `~/devin`) — the token is never
-  printed, only its source. Ollama `GET /api/tags` against
-  `OLLAMA_HOST` or `http://localhost:11434`. Each probe is bounded to
-  ~8s: a configured endpoint that fails is `FAIL`, nothing configured
-  is a `WARN` skip.
+  printed, only its source. A successful auth is followed by a real
+  delivery smoke: one `chat.postMessage` of a `devin-doctor
+  live-check <utc-iso>` diagnostic to `SLACK_DOCTOR_CHANNEL`, else
+  `SLACK_NOTIFY_CHANNEL`, else a DM opened via `SLACK_NOTIFY_USER`
+  (the same resolution `gateways/src/slack-notify.js` uses, never
+  retried — only the channel id is reported). Ollama `GET /api/tags`
+  against `OLLAMA_HOST` or `http://localhost:11434`. Each probe is
+  bounded to ~8s: a configured endpoint that fails is `FAIL`, nothing
+  configured is a `WARN` skip.
 
 Both honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` (offline wins over the
 flags), so the pre-commit gate and air-gapped runs stay hermetic.

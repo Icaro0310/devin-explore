@@ -103,9 +103,9 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--live",
         action="store_true",
-        help="opt-in: run live connectivity probes — Slack auth.test and "
-        "Ollama /api/tags, each bounded to ~8s (proves the channel, "
-        "not just the key)",
+        help="opt-in: run live connectivity probes — Slack auth.test plus "
+        "a chat.postMessage delivery smoke, and Ollama /api/tags, each "
+        "bounded to ~8s (proves the channel, not just the key)",
     )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
