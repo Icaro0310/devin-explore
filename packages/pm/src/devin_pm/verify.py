@@ -278,6 +278,7 @@ def verify(projects: Iterable[Project], registry_path: str | Path) -> dict:
                     "field": "name",
                     "pm": declared,
                     "registry": reg_name,
+                    "working_directory": manifest["working_directory"],
                 }
             )
         for field in ("description", "url"):
@@ -298,6 +299,7 @@ def verify(projects: Iterable[Project], registry_path: str | Path) -> dict:
                         "field": field,
                         "pm": pm_value,
                         "registry": reg_value,
+                        "working_directory": manifest["working_directory"],
                     }
                 )
 
@@ -348,8 +350,71 @@ def projects_from_pm_registry(path: str | Path) -> list[Project]:
     return projects
 
 
-def render_text(report: dict) -> str:
-    """Human-readable verify report (ASCII only — cp1252-safe)."""
+def fix_hint(item: dict, section: str) -> str:
+    """One-line remediation for a divergence — the ``--fix-hints`` layer.
+
+    ``section`` is ``unknown_to_pm`` / ``missing_from_registry`` /
+    ``field_drift``. The registry is authoritative, so the expected value
+    is always the registry side; the action either fixes the checkout to
+    match or updates the registry when the local value is the intended
+    one. Pure data — the CLI may also inject it as ``item["hint"]`` for
+    ``--json`` consumers.
+    """
+    if section == "unknown_to_pm":
+        return (
+            "informational only — no pm sessions tracked yet; run a "
+            "session in the checkout to track it"
+        )
+    if section == "missing_from_registry":
+        if not item.get("relevant"):
+            return "non-ecosystem — no registry entry expected; no action"
+        return (
+            f"expected a registry entry for {item['name']!r} — add it to "
+            "registry.json repositories[] (local_dir relative to the hub "
+            "works for sibling checkouts), or move the checkout out of "
+            "the ecosystem"
+        )
+    # field_drift: expected value is the registry side
+    field = item["field"]
+    expected = item["registry"]
+    wd = item.get("working_directory")
+    pyproject = f"{wd}/pyproject.toml" if wd else "pyproject.toml"
+    if field == "name":
+        return (
+            f"expected {expected!r} — set [project].name in {pyproject} "
+            "to match (or update the registry entry if the rename is "
+            "intended)"
+        )
+    if field == "url":
+        git = f"git -C {wd} " if wd else "git "
+        return (
+            f"expected {expected!r} — run `{git}remote set-url origin "
+            f"{expected}` (or fix the registry url if origin moved)"
+        )
+    return (
+        f"expected {expected!r} — update {field} in {pyproject} (or "
+        "edit the registry entry if pm's value is newer)"
+    )
+
+
+def add_fix_hints(report: dict) -> dict:
+    """Inject ``item[\"hint\"]`` into every divergence (for ``--json``)."""
+    for section in (
+        "unknown_to_pm",
+        "missing_from_registry",
+        "field_drift",
+    ):
+        for item in report[section]:
+            item["hint"] = fix_hint(item, section)
+    return report
+
+
+def render_text(report: dict, hints: bool = False) -> str:
+    """Human-readable verify report (ASCII only — cp1252-safe).
+
+    ``hints=True`` appends a ``hint:`` line under every divergence —
+    the ``--fix-hints`` layer over the same report data.
+    """
     lines = [
         "devin-pm verify",
         f"  registry: {report['registry']} ({report['registry_entries']} entries)",
@@ -365,6 +430,8 @@ def render_text(report: dict) -> str:
                 str(item[k]) for k in ("kind", "visibility") if item.get(k)
             )
             lines.append(f"  - {item['name']}" + (f" ({detail})" if detail else ""))
+            if hints:
+                lines.append(f"    hint: {fix_hint(item, 'unknown_to_pm')}")
     else:
         lines.append("  (none)")
     lines.append(
@@ -377,6 +444,11 @@ def render_text(report: dict) -> str:
             lines.append(
                 f"  - {item['name']} ({item['working_directory']}){flag}"
             )
+            if hints:
+                lines.append(
+                    "    hint: "
+                    f"{fix_hint(item, 'missing_from_registry')}"
+                )
     else:
         lines.append("  (none)")
     lines.append(f"field drift ({len(report['field_drift'])}):")
@@ -386,6 +458,8 @@ def render_text(report: dict) -> str:
                 f"  - {item['name']}.{item['field']}: "
                 f"pm={item['pm']!r} registry={item['registry']!r}"
             )
+            if hints:
+                lines.append(f"    hint: {fix_hint(item, 'field_drift')}")
     else:
         lines.append("  (none)")
     lines.append("")

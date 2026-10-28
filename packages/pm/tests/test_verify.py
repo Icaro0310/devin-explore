@@ -274,6 +274,75 @@ def test_missing_db_exit_2(hub_registry, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# --fix-hints
+# ---------------------------------------------------------------------------
+
+
+def test_fix_hints_field_drift(sessions_db, vflags, capsys):
+    """Each drift line gets a hint with the expected value + action."""
+    alpha = sessions_db.parent / "alpha"
+    (alpha / "pyproject.toml").write_text(
+        '[project]\nname = "alpha"\ndescription = "different description"\n',
+        encoding="utf-8",
+    )
+    assert main(["verify", *vflags, "--fix-hints"]) == 1
+    out = capsys.readouterr().out
+    assert "alpha.description" in out
+    assert "hint: expected 'alpha description'" in out
+    assert "pyproject.toml" in out  # suggested action target
+
+
+def test_fix_hints_url_drift_action(sessions_db, vflags, capsys):
+    """url drift suggests the concrete git remote command."""
+    alpha = sessions_db.parent / "alpha"
+    (alpha / ".git").mkdir()
+    (alpha / ".git" / "config").write_text(
+        '[remote "origin"]\n'
+        "\turl = https://github.com/SomeoneElse/alpha.git\n",
+        encoding="utf-8",
+    )
+    assert main(["verify", *vflags, "--fix-hints"]) == 1
+    out = capsys.readouterr().out
+    assert "remote set-url origin https://github.com/Icaro0310/alpha" in out
+
+
+def test_fix_hints_missing_relevant(vflags, hub_registry, capsys):
+    write_hub_registry(hub_registry, hub_entry("alpha"))
+    assert main(["verify", *vflags, "--fix-hints"]) == 1
+    out = capsys.readouterr().out
+    assert "hint: expected a registry entry for 'beta'" in out
+    assert "registry.json" in out
+
+
+def test_fix_hints_clean_report_shows_none(vflags, capsys):
+    assert main(["verify", *vflags, "--fix-hints"]) == 0
+    assert "hint:" not in capsys.readouterr().out
+
+
+def test_fix_hints_json_items_carry_hint(vflags, hub_registry, capsys):
+    write_hub_registry(hub_registry, hub_entry("alpha"))
+    assert main(["verify", *vflags, "--fix-hints", "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert all("hint" in i for i in report["missing_from_registry"])
+    assert all("hint" in i for i in report["unknown_to_pm"])
+    beta = next(
+        i for i in report["missing_from_registry"] if i["name"] == "beta"
+    )
+    assert "registry.json" in beta["hint"]
+
+
+def test_no_fix_hints_keeps_output_unchanged(sessions_db, vflags, capsys):
+    """Without the flag the drift block prints no hint lines."""
+    alpha = sessions_db.parent / "alpha"
+    (alpha / "pyproject.toml").write_text(
+        '[project]\nname = "alpha"\ndescription = "different description"\n',
+        encoding="utf-8",
+    )
+    assert main(["verify", *vflags]) == 1
+    assert "hint:" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # manifest readers + url normalization
 # ---------------------------------------------------------------------------
 

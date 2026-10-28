@@ -54,6 +54,7 @@ from devin_pm.report import (
 )
 from devin_pm.verify import (
     RegistryError,
+    add_fix_hints,
     default_registry,
     projects_from_pm_registry,
     verify,
@@ -280,10 +281,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         ) from exc
     except RegistryError as exc:
         raise _CliError(str(exc), exit_code=1) from exc
+    if args.fix_hints:
+        add_fix_hints(report)
     if args.json:
         _print_json(report)
     else:
-        print(render_verify_text(report))
+        print(render_verify_text(report, hints=args.fix_hints))
     return 1 if report["drift"] else 0
 
 
@@ -407,6 +410,13 @@ def build_parser() -> argparse.ArgumentParser:
         "of reading sessions.db",
     )
     p.add_argument("--json", action="store_true", help="JSON output")
+    p.add_argument(
+        "--fix-hints",
+        action="store_true",
+        help="append a remediation hint to every divergence — expected "
+        "value plus the suggested action (text mode prints a 'hint:' "
+        "line per item; --json adds a 'hint' key per item)",
+    )
     p.set_defaults(func=cmd_verify)
 
     p = with_db(
