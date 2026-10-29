@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devin-pm"
-version = "0.1.1"
+version = "0.1.2"
 description = "Project-manager powerup: turn session history into milestones, status reports and task tracking per repo."
 readme = "README.md"
 license = { text = "MIT" }

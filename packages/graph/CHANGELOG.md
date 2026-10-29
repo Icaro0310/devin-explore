@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-28
+
+### Changed
+
+- Version-only bump ahead of the next release — PyPI already serves
+  devin-graph 0.1.1 under the `graph-v0.1.1` tag, so new releases
+  continue from 0.1.2. No functional changes since 0.1.1.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed
