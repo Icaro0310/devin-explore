@@ -232,3 +232,103 @@ def shared_files(gs) -> dict:
             "sessions": sorted(sessions_of_file[file_key]),
         })
     return {"count": len(files), "files": files}
+
+
+def orphaned_nodes(gs) -> dict:
+    """Nodes with no incident edges — report-only, never deletes.
+
+    ``prunable`` marks the subset the builder's orphan prune would drop
+    on the next run (shared nodes — ``owner IS NULL`` — with no edges);
+    owned orphans (e.g. a session with no tool calls and no project)
+    carry provenance through their owner and persist until that owner
+    is re-extracted or removed.
+    """
+    endpoints = {e.src for e in gs.edges()} | {e.dst for e in gs.edges()}
+    nodes = [
+        {
+            "id": n.id,
+            "kind": n.kind,
+            "key": n.key,
+            "owner": n.owner,
+            "name": n.attrs.get("name") or n.attrs.get("title"),
+            "prunable": n.owner is None,
+        }
+        for n in gs.nodes()
+        if n.id not in endpoints
+    ]
+    return {"count": len(nodes), "nodes": nodes}
+
+
+def blame_session(gs, query: str) -> dict:
+    """What graph content session ``query`` produced or touched.
+
+    ``produced`` = nodes and edges the extraction stamped with this
+    session as ``owner`` (the session node itself, its tool_call nodes,
+    and every edge it emitted); ``touched`` = the shared entities those
+    edges reach — files, tools, projects, commits. ``session`` is
+    ``None`` when ``query`` matches nothing or is an ambiguous prefix —
+    ``candidates`` then lists session keys for the CLI to hint at.
+    """
+    node = gs.node(f"session:{query}")
+    candidates: list[str] = []
+    if node is None:
+        candidates = sorted(
+            n.key for n in gs.nodes("session") if n.key.startswith(query)
+        )
+        if len(candidates) == 1:
+            node = gs.node(f"session:{candidates[0]}")
+    if node is None:
+        return {
+            "query": query,
+            "session": None,
+            "candidates": candidates[:20],
+        }
+    sid = node.key
+    owned_nodes = [n for n in gs.nodes() if n.owner == sid]
+    owned_edges = [e for e in gs.edges() if e.owner == sid]
+    files = sorted(
+        {e.dst.split(":", 1)[1] for e in owned_edges
+         if e.kind == "file_touched"}
+    )
+    tools = sorted(
+        {e.dst.split(":", 1)[1] for e in owned_edges
+         if e.kind == "tool_used"}
+    )
+    projects = sorted(
+        {e.dst.split(":", 1)[1] for e in owned_edges
+         if e.kind == "runs_in"}
+    )
+    commits = [
+        {"sha": sha, "relation": rel}
+        for sha, rel in sorted(
+            {
+                (e.dst.split(":", 1)[1], e.kind)  # produced | referenced
+                for e in owned_edges
+                if e.kind in ("produced", "referenced")
+            }
+        )
+    ]
+    return {
+        "session_id": sid,
+        "session": _session_dict(gs, node),
+        "extracted_at": gs.extracted_at(sid),
+        "projects": projects,
+        "files": files,
+        "tools": tools,
+        "commits": commits,
+        "nodes_owned": [
+            {"id": n.id, "kind": n.kind, "key": n.key}
+            for n in owned_nodes
+        ],
+        "edges_owned": [
+            {"kind": e.kind, "src": e.src, "dst": e.dst}
+            for e in owned_edges
+        ],
+        "counts": {
+            "nodes": len(owned_nodes),
+            "edges": len(owned_edges),
+            "files": len(files),
+            "tools": len(tools),
+            "commits": len(commits),
+        },
+    }

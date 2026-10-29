@@ -3,6 +3,7 @@
 - ``devin-doctor check [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--surface NAME] [--json]``
 - ``devin-doctor report [--data-dir P] [--cwd P] [--stale-days N] [--offline] [--surface NAME] [--md|--json]``
 - ``devin-doctor capabilities [--config-dir P] [--probe-network]``
+- ``devin-doctor drift [--data-dir P] [--config-dir P] [--cwd P] [--package NAME] [--json]``
 
 ``--surface NAME`` (check/report/plan) scopes the agent-surface checks to
 one surface — the Devin-environment checks always run unscoped.
@@ -30,7 +31,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from devin_doctor import capabilities, doctor
+from devin_doctor import capabilities, doctor, drift
 from devin_doctor.checks.surfaces import SURFACE_NAMES
 from devin_doctor.model import Context
 from devin_doctor.paths import (
@@ -155,6 +156,42 @@ def build_parser() -> argparse.ArgumentParser:
         "no network call is made.",
     )
 
+    d = sub.add_parser(
+        "drift",
+        help="bounded, privacy-safe snapshot for drift diagnosis — tool "
+        "versions vs expected, config/state file presence + digests "
+        "(never contents), PATH health, env key names (never values). "
+        "Exits non-zero on detected drift.",
+    )
+    d.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Devin data dir (default: platform location)",
+    )
+    d.add_argument(
+        "--config-dir",
+        type=Path,
+        default=None,
+        help="Devin UI config dir (default: platform location)",
+    )
+    d.add_argument(
+        "--cwd",
+        type=Path,
+        default=Path.cwd(),
+        help="project dir whose .devin/ config and packages/ to snapshot "
+        "(default: cwd)",
+    )
+    d.add_argument(
+        "--package",
+        action="append",
+        metavar="NAME",
+        help="scope the installed-vs-declared comparison to package NAME "
+        "(repeatable; matches the packages/NAME dir or the project "
+        "name in its pyproject)",
+    )
+    d.add_argument("--json", action="store_true", help="emit JSON")
+
     return parser
 
 
@@ -179,6 +216,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(capabilities.render_profile(profile))
         return 0
+    if args.command == "drift":
+        ctx = Context(
+            data_dir=args.data_dir or default_data_dir(),
+            cwd=args.cwd,
+            state_dir=default_state_dir(),
+            config_dir=(
+                args.config_dir
+                if args.config_dir is not None
+                else default_config_dir() if args.data_dir is None else None
+            ),
+            packages=tuple(args.package or ()),
+        )
+        report = drift.collect(ctx)
+        print(
+            drift.render_json(report)
+            if args.json
+            else drift.render_text(report)
+        )
+        return drift.exit_code(report)
     ctx = Context(
         data_dir=args.data_dir or default_data_dir(),
         cwd=args.cwd,

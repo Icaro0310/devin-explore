@@ -60,6 +60,7 @@ class StoredNode:
     kind: str
     key: str
     attrs: dict
+    owner: str | None = None  # session_id that produced the node
 
 
 @dataclass(frozen=True)
@@ -118,13 +119,14 @@ class GraphStore:
     # -- read API ------------------------------------------------------------
 
     def nodes(self, kind: str | None = None) -> list[StoredNode]:
-        sql = "SELECT id, kind, key, attrs FROM nodes"
+        sql = "SELECT id, kind, key, attrs, owner FROM nodes"
         args: tuple = ()
         if kind is not None:
             sql += " WHERE kind = ?"
             args = (kind,)
         return [
-            StoredNode(r["id"], r["kind"], r["key"], json.loads(r["attrs"]))
+            StoredNode(r["id"], r["kind"], r["key"],
+                       json.loads(r["attrs"]), r["owner"])
             for r in self._con.execute(sql + " ORDER BY id", args)
         ]
 
@@ -142,13 +144,13 @@ class GraphStore:
 
     def node(self, node_id: str) -> StoredNode | None:
         row = self._con.execute(
-            "SELECT id, kind, key, attrs FROM nodes WHERE id = ?",
+            "SELECT id, kind, key, attrs, owner FROM nodes WHERE id = ?",
             (node_id,),
         ).fetchone()
         if row is None:
             return None
         return StoredNode(row["id"], row["kind"], row["key"],
-                          json.loads(row["attrs"]))
+                          json.loads(row["attrs"]), row["owner"])
 
     def out_edges(self, node_id: str) -> list[StoredEdge]:
         return [
@@ -171,6 +173,16 @@ class GraphStore:
                 (node_id,),
             )
         ]
+
+    def extracted_at(self, session_id: str) -> int | None:
+        """Ledger timestamp for ``session_id`` — when it was last
+        (re)extracted into this graph, or ``None``."""
+        row = self._con.execute(
+            "SELECT last_activity_at FROM extracted_sessions"
+            " WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return row["last_activity_at"] if row else None
 
     # -- build ---------------------------------------------------------------
 

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- **Feature** — `devin-history export-gui` now exports *real* GUI
+  transcripts and `devin-history audit --fail-on-anomaly N` gates on
+  anomaly counts. `export-gui` correlates `state.vscdb` session↔workspace
+  bindings with `User/acp-messages/*.db` transcript stores (meta
+  session-id == slug → filename stem == slug → meta title == label,
+  best-effort) and embeds the conversation in each note; unbound acp dbs
+  still get a transcript-only note, `--vscdb none` exports those alone,
+  `--no-transcripts` falls back to the metadata-only notes, and `--acp-dir`
+  overrides auto-detection. All transcript text is redacted with
+  `devin-redact` (`devin_history.transcripts.redact`, fail-closed) before
+  rendering — a redaction failure writes nothing for that session and the
+  command exits 1. `audit --fail-on-anomaly N` exits 1 when the anomaly
+  count (orphan / empty / long-running rows) reaches N; without the flag
+  the exit stays 0.
+- **Feature** — `devin-graph orphans` + `devin-graph blame-session`:
+  graph diagnostics. `orphans` lists nodes with no incident edges —
+  report-only, never deletes — flagging the subset the next `build`
+  would prune. `blame-session <id>` (unique prefix accepted, ambiguous
+  exits 2 with candidates) reports what a session produced — owned
+  nodes + edges — and touched: resolved files, tools, projects, commits
+  and the extraction-ledger timestamp. `StoredNode` gains `owner`;
+  `GraphStore` gains `extracted_at`. Both read via `mode=ro`.
+- **Feature** — `devin-search stats`: index health read straight from
+  the index (opened `mode=ro`, never creates/mutates; missing index
+  exits 2). Reports total/per-source/per-role doc counts, newest doc
+  timestamps, devin-cli + per-file watermark positions, and
+  reconciliation counters — `build_index` now persists `run:*` and
+  `total:*` keys in `index_meta` (indexed/removed/swept/skipped per run,
+  cumulative totals that reset on `--rebuild`). `IndexStats` gains
+  `swept_files`; `index --json` and the stats line surface it.
+- **Feature** — `devin-doctor drift`: a bounded, privacy-safe local
+  snapshot for drift diagnosis. Four sections — tool versions vs
+  expected floors (plus installed `devin-*` dists vs declared pyproject
+  versions, `--package`-scopable), state-file presence + sha256 digest
+  prefixes (contents never emitted), scope-dir/PATH health, and curated
+  env key *names* (values never collected). Caps: ≤100 acp dbs digested,
+  >64 MiB files stat-only, PATH/env listings bounded. File expectations
+  follow the anchor doctrine (`sessions.db` only required on CLI
+  installs, `state.vscdb` only on Desktop). Exit `1` on detected drift;
+  `--json` emits the whole snapshot.
 - **CI** — repin the shared `pr-approve` gate to `devin-powerups`
   `@v1.9`: self-cancel fix (a successful approval no longer renders as
   a failed check), fresh-head recheck and paginated dedup.

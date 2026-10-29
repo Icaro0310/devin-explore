@@ -1,8 +1,11 @@
 """Extract GUI session metadata from Devin's ``state.vscdb`` (HI-1).
 
-GUI sessions live only in the Electron ``ItemTable`` key/value store under
-``User/globalStorage/state.vscdb`` — there are no ``sessions.db`` rows and no
-local transcript for them, so the only exportable artifact is their metadata.
+GUI sessions live in the Electron ``ItemTable`` key/value store under
+``User/globalStorage/state.vscdb`` — there are no ``sessions.db`` rows for
+them. The binding found here is metadata (slug, workspace, folders,
+timestamps); the transcript bodies live in sibling
+``User/acp-messages/*.db`` stores, decoded by ``transcripts.py`` and
+correlated back best-effort at export time.
 
 Key family (same parsing devin-graph's ``vscdb.py`` uses for GR-1):
 
@@ -34,7 +37,8 @@ _EDITOR_URI_PREFIX = "vscode-cascade-editor:///cascade-acp/"
 
 @dataclass(frozen=True)
 class GuiSession:
-    """One GUI session's exportable metadata (no transcript exists locally)."""
+    """One GUI session's workspace binding (transcript lives in
+    ``acp-messages`` — see ``transcripts.py``)."""
 
     slug: str
     backend: str

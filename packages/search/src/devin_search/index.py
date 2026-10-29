@@ -23,6 +23,7 @@ import math
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -84,6 +85,7 @@ class IndexStats:
     codex_messages: int = 0
     vscode_chat_messages: int = 0
     removed: int = 0
+    swept_files: int = 0
     rebuilt: bool = False
     skipped_records: int = 0
     sources: list[str] = field(default_factory=list)
@@ -285,6 +287,7 @@ def _index_sessions_db(
         stats.removed += _reset_source(
             con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS, WM_CONTENT)
         )
+        stats.swept_files += 1
         wm_nodes = wm_prompts = 0
         indexed_tool_refs = set()
 
@@ -418,6 +421,7 @@ def _index_acp_dir(
             (SOURCE_DEVIN_CHAT, f"devin-chat:{gone}:%"),
         )
         stats.removed += cur.rowcount
+        stats.swept_files += 1
         for key in (f"devin-chat:file:{gone}", f"devin-chat:wm:{gone}"):
             con.execute("DELETE FROM index_meta WHERE key = ?", (key,))
 
@@ -575,6 +579,7 @@ def _drop_vanished_files(
     }
     for gone in sorted(known - present):
         stats.removed += _drop_source_file_docs(con, source, gone)
+        stats.swept_files += 1
         con.execute(
             "DELETE FROM index_meta WHERE key IN (?, ?, ?)",
             (
@@ -1536,6 +1541,7 @@ def build_index(
                 stats.removed += _reset_source(
                     con, SOURCE_DEVIN_CLI, (WM_NODES, WM_PROMPTS, WM_CONTENT)
                 )
+                stats.swept_files += 1
         if acp_dir is not None:
             acp_dir = Path(acp_dir)
             if acp_dir.is_dir():
@@ -1562,6 +1568,23 @@ def build_index(
                 _index_vscode_chat_dirs(con, vscode_dirs, stats)
             else:
                 _drop_vanished_files(con, SOURCE_VSCODE_CHAT, set(), stats)
+        # Persist this run's counters so `devin-search stats` can report
+        # index health without re-deriving it: the last run's adds/
+        # removals/sweeps plus cumulative totals. ``total:*`` keys reset
+        # with the index on rebuild (index_meta is dropped), so they
+        # always describe the current index — not all builds ever.
+        _meta_set(con, "run:last_run_at", int(time.time() * 1000))
+        _meta_set(con, "run:last_indexed", stats.indexed)
+        _meta_set(con, "run:last_removed", stats.removed)
+        _meta_set(con, "run:last_swept", stats.swept_files)
+        _meta_set(con, "run:last_skipped", stats.skipped_records)
+        for key, value in (
+            ("total:indexed", stats.indexed),
+            ("total:removed", stats.removed),
+            ("total:swept", stats.swept_files),
+        ):
+            prior = int(_meta_get(con, key) or 0)
+            _meta_set(con, key, prior + value)
         con.commit()
     finally:
         con.close()

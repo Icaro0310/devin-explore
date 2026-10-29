@@ -6,6 +6,7 @@ import json
 
 import pytest
 from devin_pm.cli import main
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 @pytest.fixture
@@ -106,7 +107,9 @@ def test_registry_out_file(db_flag, tmp_path):
     assert main(["registry", *db_flag, "--out", str(out_file)]) == 0
     data = json.loads(out_file.read_text(encoding="utf-8"))
     assert data["source"]["sessions_db"].endswith("sessions.db")
-    assert data["source"]["schema_version"] == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert data["source"]["schema_version"] == LATEST_KNOWN_SCHEMA
 
 
 def test_missing_db_exits_2(tmp_path, capsys):

@@ -298,7 +298,38 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--index", help="index file path (default: app dir)")
     m.add_argument("--json", action="store_true")
     m.set_defaults(func=_cmd_misses)
+
+    st = sub.add_parser(
+        "stats",
+        help="index health — document counts, last-indexed timestamps, "
+        "removed/swept counts, watermark positions, per-source breakdown "
+        "(read-only; never creates or mutates the index)",
+    )
+    st.add_argument("--index", help="index file path (default: app dir)")
+    st.add_argument("--json", action="store_true")
+    st.set_defaults(func=_cmd_stats)
     return p
+
+
+def _cmd_stats(args: argparse.Namespace) -> int:
+    from devin_search.stats import collect, render_text
+
+    try:
+        health = collect(_resolve_index(args.index))
+    except (FileNotFoundError, sqlite3.Error, OSError) as exc:
+        print(f"devin-search: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(
+            json.dumps(
+                {**health.as_dict(), "version": __version__},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(render_text(health))
+    return 0
 
 
 def _cmd_misses(args: argparse.Namespace) -> int:

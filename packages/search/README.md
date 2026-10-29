@@ -103,6 +103,11 @@ devin-search index --no-acp --no-copilot --no-codex --no-vscode-chat
 # zero-hit stats from the local query log (evidence for/against semantic
 # search — SE-1's trigger; log is opt-out via query --no-log)
 devin-search misses
+
+# index health: doc counts, last-indexed timestamps, removed/swept
+# counts, watermark positions, per-source breakdown (read-only)
+devin-search stats
+devin-search stats --json
 ```
 
 Hits print as `WHEN · ROLE · PROJECT · SESSION · SNIPPET` with the match
@@ -120,6 +125,16 @@ line under its row (and a `history_note` field in `--json`). Notes are
 matched by the `<YYYY-MM-DD>_<session-id>.md` filename devin-history writes
 (`.json` exports work as a fallback). A missing note produces no link and
 no error — the flag is purely additive.
+
+`devin-search stats` reports index health straight from the index itself
+(opened read-only, so it can never create or mutate the file — a missing
+index exits 2): total documents with per-source and per-role breakdowns,
+each doc's newest timestamp, watermark positions (`devin-cli` table
+watermarks plus per-file markers/positions for `devin-chat`,
+`copilot-cli`, `codex-cli`, `vscode-chat`), and reconciliation counters
+— the last run's indexed/removed/swept/skipped counts plus cumulative
+totals, which reset with the index on `--rebuild`. `--json` emits the
+same report plus `version`.
 
 ## Works with Devin alone (Devin-only mode)
 

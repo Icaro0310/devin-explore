@@ -20,6 +20,7 @@ from devin_history.format import (
     SURFACE_DEVIN_CLI,
     evidence_ref,
     project_name,
+    render_acp_transcript_md,
     render_gui_index_json,
     render_gui_session_md,
     render_index_json,
@@ -85,6 +86,9 @@ class GuiExportResult:
     written: list[str] = field(default_factory=list)
     skipped_unchanged: list[str] = field(default_factory=list)
     index_entries: list[GuiIndexEntry] = field(default_factory=list)
+    redaction_failed: list[str] = field(default_factory=list)
+    redactions: int = 0
+    transcripts: int = 0
 
 
 def _exported_marker(path: Path, fmt: str) -> int | None:
@@ -301,21 +305,46 @@ def _safe_name(slug: str) -> str:
     return _UNSAFE_NAME.sub("-", slug).strip("-.") or "session"
 
 
+def _dedupe_name(
+    filename: str, used_names: set[str], backend: str, stem: str
+) -> str:
+    """``filename`` unless taken — same slug under another backend (or a
+    transcript-only collision) gets the backend prefix."""
+    if filename not in used_names:
+        return filename
+    date, _, _ = filename.partition("_")
+    return f"{date}_{_safe_name(backend)}-{_safe_name(stem)}.md"
+
+
 def export_gui_sessions(
     store,
     out_dir: str | Path,
     *,
+    acp_dir: str | Path | None = None,
+    transcripts: bool = True,
     force: bool = False,
     dry_run: bool = False,
 ) -> GuiExportResult:
-    """Export GUI session metadata from ``state.vscdb`` to ``out_dir``.
+    """Export GUI sessions from ``state.vscdb`` + ``acp-messages`` to ``out_dir``.
 
     One Markdown note per ``windsurfSpace.sessionWorkspace/*`` binding plus a
-    root ``index.json``. Idempotent via the ``last_activity`` frontmatter
-    marker (= the binding's ``lastUpdated``); ``--all``/``--dry-run`` mirror
-    :func:`export_sessions`. Never writes to the source database — the caller
-    hands in a read-only ``StateVscdbStore``.
+    root ``index.json``. When ``acp_dir`` yields transcripts (and
+    ``transcripts`` is on), a binding's note embeds the actual transcript —
+    correlated best-effort (meta session-id == slug → filename stem ==
+    slug → meta title == label) — and unbound acp dbs still get a
+    transcript-only note.
+
+    Transcript text and the session title are redacted with
+    ``devin_redact.engine.redact_text`` **before** rendering: a redaction
+    failure skips that file entirely — nothing is written for it —
+    and lands in ``redaction_failed`` so the CLI can exit non-zero.
+    Idempotent via the ``last_activity`` frontmatter marker (binding
+    ``lastUpdated`` and/or the transcript file's mtime); ``--all``/
+    ``--dry-run`` mirror :func:`export_sessions`. Never writes to the
+    source databases — the caller hands in read-only stores.
     """
+    from devin_history import transcripts as tr
+
     out_dir = Path(out_dir)
     result = GuiExportResult(out_dir=out_dir)
     if not dry_run:
@@ -323,12 +352,29 @@ def export_gui_sessions(
 
     prov = identity.provenance()
     sessions = sorted(
-        vscdb.gui_sessions(store),
+        vscdb.gui_sessions(store) if store is not None else [],
         key=lambda g: (g.last_updated or g.last_accessed or 0, g.slug),
     )
+    loaded = tr.load_dir(acp_dir) if (transcripts and acp_dir) else []
+    # Preflight: with transcripts to export the redactor must exist —
+    # failing here beats half-exporting unredacted content.
+    redact_text = tr.require_redactor() if loaded else None
+    result.transcripts = len(loaded)
+
     used_names: set[str] = set()
+    claimed: set[Path] = set()
     for i, gs in enumerate(sessions):
-        marker = int(gs.last_updated or gs.last_accessed or 0)
+        t = (
+            tr.match_transcript(gs.slug, gs.label, loaded)
+            if loaded
+            else None
+        )
+        if t is not None:
+            claimed.add(t.path)
+        marker = max(
+            int(gs.last_updated or gs.last_accessed or 0),
+            t.marker if t else 0,
+        )
         ref = evidence_ref(
             SURFACE_DEVIN_CHAT, gs.slug, gs.workspace_id,
             ephemeral_index=i,
@@ -337,19 +383,44 @@ def export_gui_sessions(
             fmt_ts(gs.last_updated or gs.last_accessed, "%Y-%m-%d")
             or "undated"
         )
-        filename = f"{date}_{_safe_name(gs.slug)}.md"
-        if filename in used_names:  # same slug under another backend
-            filename = f"{date}_{_safe_name(gs.backend)}-{_safe_name(gs.slug)}.md"
+        filename = _dedupe_name(
+            f"{date}_{_safe_name(gs.slug)}.md", used_names, gs.backend,
+            gs.slug,
+        )
         used_names.add(filename)
         fpath = out_dir / filename
 
         if not force and _exported_marker(fpath, "md") == marker:
             result.skipped_unchanged.append(gs.slug)
         else:
+            edits: list[dict] = []
+            try:
+                parts = (
+                    [
+                        (m.role, tr.redact(m.text, redact_text, edits))
+                        for m in t.messages
+                    ]
+                    if t is not None and redact_text is not None
+                    else None
+                )
+                text = render_gui_session_md(
+                    gs,
+                    prov,
+                    ref=ref,
+                    transcript_parts=parts,
+                    transcript_source=t.path.name if t else None,
+                    transcript_truncated=t.truncated if t else False,
+                    redactions=len(edits),
+                    marker=marker,
+                )
+            except tr.RedactionError:
+                # Fail-closed: the note is never written.
+                result.redaction_failed.append(gs.slug)
+                continue
             if not dry_run:
-                _write_if_changed(
-                    fpath, render_gui_session_md(gs, prov, ref=ref))
+                _write_if_changed(fpath, text)
             result.written.append(filename)
+            result.redactions += len(edits)
 
         result.index_entries.append(
             GuiIndexEntry(
@@ -364,6 +435,64 @@ def export_gui_sessions(
                 last_accessed=gs.last_accessed,
                 surface=SURFACE_DEVIN_CHAT,
                 native_id=gs.slug,
+                ref=ref,
+            )
+        )
+
+    # Transcript-only notes: acp dbs no vscdb binding claimed.
+    for j, t in enumerate(loaded):
+        if t.path in claimed:
+            continue
+        sid = t.session_id or t.path.stem
+        ref = evidence_ref(
+            SURFACE_DEVIN_CHAT, sid, None,
+            ephemeral_index=len(sessions) + j,
+        )
+        date = fmt_ts(t.marker or None, "%Y-%m-%d") or "undated"
+        filename = _dedupe_name(
+            f"{date}_{_safe_name(sid)}.md", used_names, "acp", sid
+        )
+        used_names.add(filename)
+        fpath = out_dir / filename
+        if not force and _exported_marker(fpath, "md") == t.marker:
+            result.skipped_unchanged.append(sid)
+        else:
+            edits = []
+            try:
+                parts = [
+                    (m.role, tr.redact(m.text, redact_text, edits))
+                    for m in t.messages
+                ]
+                text = render_acp_transcript_md(
+                    sid,
+                    t.title,
+                    prov,
+                    ref=ref,
+                    transcript_parts=parts,
+                    transcript_source=t.path.name,
+                    marker=t.marker,
+                    redactions=len(edits),
+                )
+            except tr.RedactionError:
+                result.redaction_failed.append(sid)
+                continue
+            if not dry_run:
+                _write_if_changed(fpath, text)
+            result.written.append(filename)
+            result.redactions += len(edits)
+        result.index_entries.append(
+            GuiIndexEntry(
+                date=date,
+                filename=filename,
+                slug=sid,
+                title=(t.title or sid).strip(),
+                backend="acp-messages",
+                project="?",
+                workspace_id=None,
+                last_updated=t.marker,
+                last_accessed=None,
+                surface=SURFACE_DEVIN_CHAT,
+                native_id=sid,
                 ref=ref,
             )
         )

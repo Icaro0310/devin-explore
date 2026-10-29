@@ -95,6 +95,8 @@ devin-doctor check --integrations     # opt-in: half-configured CI (git + gh CLI
 devin-doctor check --live             # opt-in: Slack auth+delivery smoke, Ollama probe
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
+devin-doctor drift                    # bounded snapshot for drift diagnosis
+devin-doctor drift --json             # the same snapshot as JSON
 ```
 
 Each check prints `PASS`/`WARN`/`FAIL`, a one-line finding and a `fix:`
@@ -267,6 +269,32 @@ nothing is executed; execution stays a human decision or another tool's job.
 `--json` gives `{"overall", "steps": [{check, status, finding, fix}]}`.
 This replaced the original `--fix` idea so doctor can keep its
 "read-only, always" guarantee.
+
+### `devin-doctor drift` — bounded, privacy-safe snapshot
+
+`drift` captures *what this machine actually looks like right now* so two
+runs (or two machines) can be diffed when behavior silently diverged:
+
+- **tools** — installed versions of the expected toolchain (python, pip,
+  node, npm, git, uv, devin) vs declared floors, plus every `devin-*`
+  dist installed in the interpreter vs the same-named package's
+  `pyproject.toml` version (`--package NAME` scopes it);
+- **files** — presence, size, mtime and a sha256 digest prefix for the
+  install's state files (`cli/sessions.db`, `credentials.toml`,
+  `state.vscdb`, `acp-messages/*.db`, `config.json`, `.devin/*`).
+  **File contents are never emitted — the digest is the only
+  content-derived datum.** Expectations follow the same anchor doctrine
+  as `check`: `sessions.db` is only required when a CLI install is
+  detected, `state.vscdb` only when Desktop artifacts exist;
+- **paths** — scope-dir readability, PATH dead/duplicate entries, and the
+  *names* (never values) of curated env keys (`DEVIN_*`, `XDG_*`,
+  `COPILOT_*`, `CODEX_*`, `APPDATA`, `LOCALAPPDATA`).
+
+Everything is bounded: at most 100 acp dbs are digested, files over
+64 MiB are stat-only, PATH and env-key listings are capped — a capped
+collection says so instead of silently truncating. Exit code is `1` on
+detected drift (missing required tool/file, version below floor,
+unreadable file), else `0`. `--json` emits the whole snapshot.
 
 ## Limitations
 

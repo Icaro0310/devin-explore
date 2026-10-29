@@ -293,22 +293,57 @@ def render_index_json(
     ) + "\n"
 
 
+_TRANSCRIPT_ROLE_LABELS = {
+    "user": "🧑 User",
+    "assistant": "🤖 Devin",
+    "thought": "🤔 Thought",
+    "tool": "🔧 Tool",
+    "system": "⚙️ System",
+}
+
+
+def _transcript_parts(
+    parts: Iterable[tuple[str, str]],
+) -> list[str]:
+    """``(role, already-redacted text)`` pairs → conversation blocks."""
+    out: list[str] = []
+    for role, text in parts:
+        content = text.strip()
+        if not content:
+            continue
+        label = _TRANSCRIPT_ROLE_LABELS.get(role, f"_{role}_")
+        cap = USER_CAP if role == "user" else ASSISTANT_CAP
+        out.append(f"#### {label}\n\n{clip(content, cap)}")
+    return out
+
+
 def render_gui_session_md(
     session: GuiSession,
     prov: dict[str, str] | None = None,
     *,
     ref: str | None = None,
+    transcript_parts: Iterable[tuple[str, str]] | None = None,
+    transcript_source: str | None = None,
+    transcript_truncated: bool = False,
+    redactions: int = 0,
+    marker: int | None = None,
 ) -> str:
-    """One Obsidian-ready note for a GUI session (metadata only).
+    """One Obsidian-ready note for a GUI session.
 
-    GUI sessions have no local transcript — the note carries the
-    session↔workspace binding stored in ``state.vscdb``.
+    ``transcript_parts`` are ``(role, text)`` pairs that must already be
+    redacted — redaction runs *before* rendering so a redaction failure
+    never produces a note at all. ``marker`` overrides ``last_activity``
+    so a matched transcript's mtime participates in the unchanged check;
+    without a transcript the note is the metadata binding only.
     """
     prov_fm = "" if prov is None else (
         f"\nmachine_id: {prov['machine_id']}\nprofile: {prov['profile']}"
     )
     accessed_fm = "" if session.last_accessed is None else (
         f"\nlast_accessed: {int(session.last_accessed)}"
+    )
+    redact_fm = (
+        f"\nredactions: {redactions}" if transcript_parts is not None else ""
     )
     ref = ref or evidence_ref(
         SURFACE_DEVIN_CHAT, session.slug, session.workspace_id
@@ -322,6 +357,28 @@ def render_gui_session_md(
         if session.folders
         else "  - _none recorded_"
     )
+    last_activity = marker if marker is not None else int(
+        session.last_updated or 0
+    )
+    if transcript_parts is not None:
+        body = _transcript_parts(transcript_parts)
+        transcript_section = (
+            "\n## Transcript\n\n"
+            + ("\n\n".join(body) if body else "_No readable messages._")
+            + "\n"
+        )
+        trunc_note = " (upstream says truncated)" if transcript_truncated else ""
+        footer = (
+            f"_GUI session from `state.vscdb`; transcript from "
+            f"`{transcript_source}`{trunc_note}, redacted with "
+            f"devin-redact ({redactions} edit(s))._\n"
+        )
+    else:
+        transcript_section = ""
+        footer = (
+            "_GUI session metadata from `state.vscdb` — no matching "
+            "`acp-messages/*.db` transcript was found._\n"
+        )
     return f"""---
 session_id: {session.slug}
 source: gui
@@ -330,7 +387,7 @@ native_id: {session.slug}
 ref: {ref}
 backend: {session.backend}
 project: {project}
-last_activity: {int(session.last_updated or 0)}{accessed_fm}
+last_activity: {last_activity}{accessed_fm}{redact_fm}
 tags: [session, devin, history, gui]{prov_fm}
 ---
 
@@ -355,11 +412,56 @@ tags: [session, devin, history, gui]{prov_fm}
 | lastUpdated | {session.last_updated if session.last_updated is not None else '—'}{f" ({updated})" if updated else ""} |
 | lastAccessed | {session.last_accessed if session.last_accessed is not None else '—'}{f" ({accessed})" if accessed else ""} |
 | Space | `{session.space_id or '—'}` |
+{transcript_section}
+---
+
+{footer}"""
+
+
+def render_acp_transcript_md(
+    session_id: str,
+    title: str | None,
+    prov: dict[str, str] | None = None,
+    *,
+    ref: str,
+    transcript_parts: Iterable[tuple[str, str]],
+    transcript_source: str,
+    marker: int,
+    redactions: int = 0,
+) -> str:
+    """A transcript-only note — an ``acp-messages/*.db`` with no
+    ``state.vscdb`` binding (wiped state, or a binding pruned upstream).
+    Parts must already be redacted."""
+    prov_fm = "" if prov is None else (
+        f"\nmachine_id: {prov['machine_id']}\nprofile: {prov['profile']}"
+    )
+    body = _transcript_parts(transcript_parts)
+    transcript_body = "\n\n".join(body) if body else "_No readable messages._"
+    return f"""---
+session_id: {session_id}
+source: gui
+surface: {SURFACE_DEVIN_CHAT}
+native_id: {session_id}
+ref: {ref}
+backend: acp-messages
+project: ?
+last_activity: {marker}
+redactions: {redactions}
+tags: [session, devin, history, gui]{prov_fm}
+---
+
+# {title or session_id}
+
+> GUI transcript `{session_id}` · no `state.vscdb` binding — transcript only
+
+## Transcript
+
+{transcript_body}
 
 ---
 
-_GUI session metadata from `state.vscdb` — the GUI keeps no local transcript,
-so only the session/workspace binding is exportable._
+_GUI transcript from `{transcript_source}`, redacted with devin-redact \
+({redactions} edit(s)); workspace binding absent from `state.vscdb`._
 """
 
 

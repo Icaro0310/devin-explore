@@ -21,7 +21,11 @@ from devin_history.format import (
     sessions_to_dicts,
     write_audit_csv,
 )
-from devin_history.paths import default_sessions_db, default_state_vscdb
+from devin_history.paths import (
+    default_acp_dir,
+    default_sessions_db,
+    default_state_vscdb,
+)
 
 
 def _open_store(db_arg: str | None) -> SessionsStore:
@@ -118,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
         "audit", help="grouping by status/type/repo/period + anomalies")
     _add_common(a)
     a.add_argument("--csv", help="also write a CSV summary to this path")
+    a.add_argument(
+        "--fail-on-anomaly", type=int, metavar="N", default=None,
+        help="exit non-zero when the anomaly count reaches N. "
+        "Anomalies are the audit's three checks: 'orphan' (rows in "
+        "message_nodes/tool_call_state/prompt_history referencing a "
+        "session absent from the sessions table), 'empty' (a session "
+        "row with no message nodes) and 'long-running' (session active "
+        ">= 480 min). Without this flag the command always exits 0.")
     a.set_defaults(func=_cmd_audit)
 
     l = sub.add_parser("list", help="quick session table")
@@ -127,12 +139,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser(
         "export-gui",
-        help="GUI session metadata (state.vscdb) → md notes + index.json")
+        help="GUI sessions (state.vscdb bindings + acp-messages "
+        "transcripts, redacted) → md notes + index.json")
     g.add_argument(
         "--vscdb",
         help="path to the GUI state.vscdb (default: auto-detect under "
-        "User/globalStorage of the Devin config dir)",
+        "User/globalStorage of the Devin config dir; 'none' exports "
+        "transcripts only)",
     )
+    g.add_argument(
+        "--acp-dir",
+        help="path to the User/acp-messages dir holding per-session "
+        "transcript dbs (default: the acp-messages dir beside --vscdb, "
+        "or auto-detected)",
+    )
+    g.add_argument(
+        "--no-transcripts", action="store_true",
+        help="metadata-only export — skip acp-messages transcripts "
+        "(pre-M2 behaviour; no redaction needed)")
     g.add_argument("--out", required=True, help="output directory")
     g.add_argument(
         "--all", action="store_true",
@@ -195,24 +219,66 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
 
 def _cmd_export_gui(args: argparse.Namespace) -> int:
-    with _open_vscdb(args.vscdb) as store:
+    if args.acp_dir:
+        acp_dir = Path(args.acp_dir).expanduser()
+        if not acp_dir.is_dir():
+            print(
+                f"devin-history: {acp_dir}: not a directory — "
+                "metadata-only export",
+                file=sys.stderr,
+            )
+    elif args.vscdb and args.vscdb != "none":
+        acp_dir = Path(args.vscdb).expanduser().parent.parent / "acp-messages"
+    else:
+        acp_dir = default_acp_dir()
+    store = (
+        _open_vscdb(args.vscdb)
+        if not (args.vscdb and args.vscdb == "none")
+        else None
+    )
+    try:
+        from devin_history.transcripts import RedactionError
+
         res = export_gui_sessions(
-            store, args.out, force=args.all, dry_run=args.dry_run)
+            store,
+            args.out,
+            acp_dir=acp_dir,
+            transcripts=not args.no_transcripts,
+            force=args.all,
+            dry_run=args.dry_run,
+        )
+    except RedactionError as exc:
+        print(f"devin-history: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        if store is not None:
+            store.close()
     if args.json:
         print(json.dumps({
             "out_dir": str(res.out_dir),
             "written": res.written,
             "skipped_unchanged": res.skipped_unchanged,
             "indexed": len(res.index_entries),
+            "transcripts": res.transcripts,
+            "redactions": res.redactions,
+            "redaction_failed": res.redaction_failed,
         }, indent=2))
     else:
         verb = "would write" if args.dry_run else "written"
         print(
             f"{verb}: {len(res.written)} · unchanged: "
-            f"{len(res.skipped_unchanged)} · index: "
+            f"{len(res.skipped_unchanged)} · transcripts: "
+            f"{res.transcripts} · redactions: {res.redactions} · index: "
             f"{len(res.index_entries)} sessions → {res.out_dir}"
         )
-    return 0
+        for sid in res.redaction_failed:
+            print(
+                f"  redaction failed (not written): {sid}",
+                file=sys.stderr,
+            )
+    # Fail-closed surfaces non-zero: a skipped transcript means the run
+    # did not complete what it was asked to export.
+    return 1 if res.redaction_failed else 0
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
@@ -226,6 +292,10 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         print(json.dumps(audit_to_dict(report), ensure_ascii=False, indent=2))
     else:
         print(audit_to_markdown(report))
+    if args.fail_on_anomaly is not None and (
+        len(report.anomalies) >= args.fail_on_anomaly
+    ):
+        return 1
     return 0
 
 

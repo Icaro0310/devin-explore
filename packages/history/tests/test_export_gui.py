@@ -72,7 +72,7 @@ def test_export_gui_note_frontmatter_and_body(vstore, tmp_path):
     assert "# Fix flaky test" in body
     assert "`/work/alpha`" in body
     assert "`/work/shared`" in body
-    assert "no local transcript" in body
+    assert "no matching `acp-messages/*.db` transcript" in body
 
     otter = next(n for n in res.written if "river-otter" in n)
     body = (out / otter).read_text(encoding="utf-8")

@@ -3,6 +3,7 @@ import json
 import pytest
 from devin_history.cli import main
 from devin_internals.fixtures import create_sessions_db
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 def test_cli_list_table(db_path, capsys):
@@ -68,13 +69,49 @@ def test_cli_audit_markdown_and_csv(db_path, tmp_path, capsys):
 def test_cli_audit_json(db_path, capsys):
     assert main(["audit", "--sessions-db", str(db_path), "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["schema_version"] == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert data["schema_version"] == LATEST_KNOWN_SCHEMA
     assert data["summary"]["total"] == 3
     assert "anomalies" in data
 
 
+def test_cli_audit_fail_on_anomaly_exits_nonzero(db_path, capsys):
+    """``--fail-on-anomaly N`` → rc 1 when anomaly count >= N."""
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])  # one "empty" anomaly
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "1"]) == 1
+    capsys.readouterr()
+
+
+def test_cli_audit_fail_on_anomaly_below_threshold(db_path, capsys):
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "2"]) == 0
+    capsys.readouterr()
+
+
+def test_cli_audit_fail_on_anomaly_clean_db(db_path, capsys):
+    # fixture sessions all have messages → 0 anomalies; any N >= 1 passes
+    assert main(["audit", "--sessions-db", str(db_path),
+                 "--fail-on-anomaly", "1"]) == 0
+    capsys.readouterr()
+
+
+def test_cli_audit_no_flag_keeps_zero_exit(db_path, capsys):
+    from conftest import add_session
+
+    add_session(db_path, "empty-1", messages=[])
+    assert main(["audit", "--sessions-db", str(db_path)]) == 0
+    capsys.readouterr()
+
+
 def test_cli_unknown_schema_fails_loud(tmp_path, capsys):
-    bad = create_sessions_db(tmp_path / "future.db", schema_version=18)
+    bad = create_sessions_db(tmp_path / "future.db", schema_version=LATEST_KNOWN_SCHEMA + 1)
     with pytest.raises(SystemExit) as exc:
         main(["list", "--sessions-db", str(bad)])
     assert exc.value.code == 2

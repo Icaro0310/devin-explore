@@ -6,6 +6,7 @@ import sqlite3
 from conftest import ALPHA, BETA, add_tool_call, bump_last_activity, delete_session
 from devin_graph.store import GraphStore
 from devin_internals.parsers import SessionsStore
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 EXPECTED_NODE_COUNTS = {
     "session": 3, "project": 2, "tool": 4, "tool_call": 6, "file": 5}
@@ -95,7 +96,9 @@ def test_export_json_shape(sessions_db, tmp_path):
         data = gs.export()
 
     assert set(data) == {"meta", "nodes", "edges"}
-    assert data["meta"]["schema_version"] == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert data["meta"]["schema_version"] == LATEST_KNOWN_SCHEMA
     json.dumps(data)  # must be JSON-serializable
 
     node = next(n for n in data["nodes"] if n["id"] == "session:sess-a")

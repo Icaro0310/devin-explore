@@ -8,6 +8,7 @@ import pytest
 from devin_history.cli import main
 from devin_history.mcp_server import do_export, do_list
 from devin_internals.fixtures import create_sessions_db
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 def test_do_list_matches_cli_json(db_path, capsys):
@@ -84,7 +85,7 @@ def test_do_list_missing_db_is_bad_store(tmp_path):
 
 
 def test_do_list_unknown_schema_is_bad_store(tmp_path):
-    bad = create_sessions_db(tmp_path / "future.db", schema_version=18)
+    bad = create_sessions_db(tmp_path / "future.db", schema_version=LATEST_KNOWN_SCHEMA + 1)
     out = do_list(sessions_db=str(bad))
     assert out["error"] == "bad_store"
     assert "schema" in out["detail"]

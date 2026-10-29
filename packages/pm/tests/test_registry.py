@@ -8,6 +8,7 @@ import pytest
 from devin_pm.milestones import collect_milestones
 from devin_pm.projects import group_sessions, load_sessions
 from devin_pm.registry import build_registry, write_registry
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def registry(projects, sessions_db):
         projects,
         milestones={p.name: collect_milestones(p) for p in projects},
         sessions_db=sessions_db,
-        schema_version=17,
+        schema_version=LATEST_KNOWN_SCHEMA,
         generated="2026-09-29T00:00:00Z",
     )
 
@@ -29,7 +30,9 @@ def registry(projects, sessions_db):
 def test_top_level_shape(registry):
     assert registry["version"] == 1
     assert registry["generated"] == "2026-09-29T00:00:00Z"
-    assert registry["source"]["schema_version"] == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert registry["source"]["schema_version"] == LATEST_KNOWN_SCHEMA
     assert registry["source"]["sessions_db"].endswith("sessions.db")
     assert isinstance(registry["projects"], list)
     assert isinstance(registry["totals"], dict)
