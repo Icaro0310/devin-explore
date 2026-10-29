@@ -16,8 +16,10 @@ from devin_internals.cursor import Cursor
 from devin_pm.cli import main
 from devin_pm.digest import (
     CURSOR_NAME,
+    SLACK_SAFE_LIMIT,
     digest_filename,
     parse_since,
+    render_slack_digest,
     run_digest,
 )
 from devin_pm.projects import group_sessions, load_sessions
@@ -223,6 +225,68 @@ def test_digest_stdout_incremental_still_commits(
     capsys.readouterr()
     committed = json.loads(_state_file(cursor_dir).read_text())
     assert committed["last_activity_at"] == MAX_ACTIVITY
+
+
+# ---------------------------------------------------------------------------
+# --slack (mrkdwn, verbatim-postable)
+# ---------------------------------------------------------------------------
+
+
+def test_digest_slack_format(sessions_db, db_flag, capsys):
+    """``--slack`` prints mrkdwn: bold headers, bullets, no md tables."""
+    assert main(["digest", *db_flag, "--since", "0", "--slack"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("*devin-pm weekly digest — ")
+    assert "|---|" not in out and "| id |" not in out
+    assert "### Sessions" not in out
+    assert "*alpha*" in out and "*beta*" in out
+    assert "• `a-1`" in out and "• `b-2`" in out
+    # milestones render as checkbox bullets, not a section header
+    assert "• [x] Alpha scaffold _(this period)_" in out
+
+
+def test_digest_slack_writes_no_file(sessions_db, db_flag, tmp_path,
+                                     monkeypatch, capsys):
+    """``--slack`` implies stdout — the week file is not written."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["digest", *db_flag, "--since", "0", "--slack"]) == 0
+    capsys.readouterr()
+    assert _digests(tmp_path) == []
+
+
+def test_digest_slack_nothing_new(sessions_db, db_flag, capsys):
+    assert (
+        main(["digest", *db_flag, "--since", "9999999999999", "--slack"])
+        == 0
+    )
+    assert "no new project activity" in capsys.readouterr().out
+
+
+def test_digest_slack_incremental_still_commits(
+    sessions_db, db_flag, cursor_dir, capsys
+):
+    """``--slack`` is a real run too: the cursor still advances."""
+    assert (
+        main(["digest", *db_flag, "--incremental", "--slack"]) == 0
+    )
+    capsys.readouterr()
+    committed = json.loads(_state_file(cursor_dir).read_text())
+    assert committed["last_activity_at"] == MAX_ACTIVITY
+
+
+def test_slack_digest_char_cap_truncates(sessions_db):
+    """Over-cap output drops whole lines and says how many."""
+    projects = group_sessions(load_sessions(sessions_db))
+    out = render_slack_digest(projects, {}, since_ms=0, max_chars=200)
+    assert len(out) <= 200
+    assert "truncated" in out and "lines dropped" in out
+    assert out.startswith("*devin-pm weekly digest")
+
+
+def test_slack_digest_default_cap(sessions_db):
+    projects = group_sessions(load_sessions(sessions_db))
+    out = render_slack_digest(projects, {}, since_ms=0)
+    assert len(out) <= SLACK_SAFE_LIMIT
 
 
 # ---------------------------------------------------------------------------

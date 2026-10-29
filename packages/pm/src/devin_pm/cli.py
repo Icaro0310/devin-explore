@@ -33,7 +33,13 @@ from pathlib import Path
 from devin_internals.parsers import Session, SessionsStore
 from devin_internals.schema import SchemaError
 
-from devin_pm.digest import CURSOR_NAME, parse_since, run_digest
+from devin_pm.digest import (
+    CURSOR_NAME,
+    SLACK_SAFE_LIMIT,
+    parse_since,
+    render_slack_digest,
+    run_digest,
+)
 from devin_pm.milestones import (
     MilestonesError,
     collect_milestones,
@@ -54,6 +60,7 @@ from devin_pm.report import (
 )
 from devin_pm.verify import (
     RegistryError,
+    add_fix_hints,
     default_registry,
     projects_from_pm_registry,
     verify,
@@ -280,10 +287,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         ) from exc
     except RegistryError as exc:
         raise _CliError(str(exc), exit_code=1) from exc
+    if args.fix_hints:
+        add_fix_hints(report)
     if args.json:
         _print_json(report)
     else:
-        print(render_verify_text(report))
+        print(render_verify_text(report, hints=args.fix_hints))
     return 1 if report["drift"] else 0
 
 
@@ -305,7 +314,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
         since_ms=since_ms,
         cursor=cursor,
         out_dir=args.out_dir,
-        stdout=args.stdout,
+        stdout=args.stdout or args.slack,
+        renderer=render_slack_digest if args.slack else None,
     )
     if result.report is None:
         print(
@@ -313,7 +323,7 @@ def cmd_digest(args: argparse.Namespace) -> int:
             f"{ms_to_iso(result.since_ms)} — nothing to digest"
         )
         return 0
-    if args.stdout:
+    if args.stdout or args.slack:
         print(result.report, end="")
     else:
         print(f"wrote {result.out_path}")
@@ -407,6 +417,13 @@ def build_parser() -> argparse.ArgumentParser:
         "of reading sessions.db",
     )
     p.add_argument("--json", action="store_true", help="JSON output")
+    p.add_argument(
+        "--fix-hints",
+        action="store_true",
+        help="append a remediation hint to every divergence — expected "
+        "value plus the suggested action (text mode prints a 'hint:' "
+        "line per item; --json adds a 'hint' key per item)",
+    )
     p.set_defaults(func=cmd_verify)
 
     p = with_db(
@@ -438,6 +455,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the digest instead of writing "
         "pm-digest-YYYY-Www.md (still advances the cursor under "
         "--incremental)",
+    )
+    p.add_argument(
+        "--slack",
+        action="store_true",
+        help="print a Slack-mrkdwn digest instead of markdown — *bold* "
+        "headers, bullet sessions (no tables), hard-capped at "
+        f"{SLACK_SAFE_LIMIT} chars so it can be piped verbatim into "
+        "slack-notify (implies --stdout; still advances the cursor "
+        "under --incremental)",
     )
     p.add_argument(
         "--out-dir",
