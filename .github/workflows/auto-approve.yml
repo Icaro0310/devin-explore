@@ -36,11 +36,12 @@ jobs:
     # invoke the reusable workflow. Full verification happens inside.
     if: >-
       github.event_name != 'status' ||
-      (github.event.context == 'Devin Review' &&
+      ((github.event.context == 'Devin Review' ||
+        github.event.context == 'devin-judge/review') &&
        github.event.state == 'success')
     permissions:
       contents: read
       pull-requests: write
     # v1.6 -> v1.9: self-cancel fix (a successful approval no longer
     # renders as a failed check) + fresh-head recheck + paginated dedup.
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.9
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.12
