@@ -33,6 +33,7 @@ from devin_internals.fixtures import (
     create_sessions_db,
     create_state_vscdb,
 )
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 def _finding(findings, needle):
@@ -71,7 +72,10 @@ def test_devin_cli_healthy(ctx):
     assert all(f.check == "devin-cli" for f in findings)
     assert all(f.status is Status.PASS for f in findings)
     assert "sessions.db present" in findings[0].message
-    assert "v17" in _finding(findings, "schema").message
+    # the fixture generator emits the spec's latest schema — the number
+    # moves with devin-internals-spec releases (v17 at 0.3.1, v18 at
+    # 0.3.3), so pin it to the installed spec instead of a literal.
+    assert f"v{LATEST_KNOWN_SCHEMA}" in _finding(findings, "schema").message
     assert "3 sessions" in _finding(findings, "3 sessions").message
 
 

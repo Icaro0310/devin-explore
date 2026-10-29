@@ -91,6 +91,8 @@ devin-doctor check --data-dir ~/.local/share/devin --config-dir ~/.config/Devin
 devin-doctor check --json             # machine-readable output
 devin-doctor check --surface codex-cli  # scope surface checks (repeatable)
 devin-doctor check --cwd . --package doctor  # publish-readiness on one package
+devin-doctor check --integrations     # opt-in: half-configured CI (git + gh CLI)
+devin-doctor check --live             # opt-in: Slack auth+delivery smoke, Ollama probe
 devin-doctor report --md              # markdown, for pasting into issues
 devin-doctor capabilities             # machine capability profile, JSON
 ```
@@ -138,7 +140,7 @@ than hard failures, so the tool is still useful on agent-only machines:
 | `config` | `credentials.toml` presence + validity (**values masked**); `.devin/` hooks/MCP config sanity |
 | `hooks-windows` | hooks/MCP commands that would pop a visible console window on Windows (`cmd /c` without a hidden wrapper, `powershell` without `-WindowStyle Hidden`, direct `.bat`/`.ps1`, `python.exe` vs `pythonw.exe`) — each with file, hook event and a wrapper fix |
 | `disk` | total data-dir size, largest DBs, `acp-messages` accumulation trend |
-| `updates` | installed tool versions vs the DevKit manifest (the only check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
+| `updates` | installed tool versions vs the DevKit manifest (the only default-run check that touches the network — fetches `manifest.json` from GitHub; self-skips when unreachable, or force off with `DEVIN_DOCTOR_OFFLINE=1` / `--offline`) |
 | `automation` | scheduled tasks per surface — user crontab, `systemd --user` services/timers (loaded units plus installed unit files, so unloaded timers are still seen), Windows Task Scheduler: referenced paths/binaries that no longer exist (**FAIL**), tasks removed since the last run (**FAIL**, via a snapshot at `<state-dir>/automation-snapshot.json` — the only data the tool writes, its own state, resolved outside the inspected `--data-dir` so a checkout under inspection never receives it; `DEVIN_DOCTOR_STATE_DIR` overrides; per-OS locations live in the platform guides, `~/Library/Application Support/devin-doctor` on macOS), and targets inside repo checkouts the ecosystem registry marks as absorbed. Surfaces that don't exist on the host report `surface unavailable` — never an error |
 | `path-check` | `[project.scripts]`/`[project.gui-scripts]` declared by the packages under `--cwd` (`packages/*` fan-out or one package dir) vs `shutil.which` reachability — each unreachable command is a named **FAIL** (with 'installed but not linked' vs 'not installed in this interpreter' via `importlib.metadata`, which cannot see isolated uv/pipx envs), a command declared by multiple packages **WARN**s as a collision, and a command resolving to another distribution's entry point — verified against this interpreter's scripts dirs, else reported as an ambiguous foreign shim — or sitting behind extra same-named PATH hits (deduped by real path; CWD-first probing on Windows) reports **WARN** shadowed |
 
@@ -152,6 +154,39 @@ The `automation` check's semantics are deliberately conservative:
 | `publish-readiness` | can a `packages/<name>` dir ship to PyPI — literal `[project]` name/version (`dynamic = ["version"]` cannot stand in), `src/` layout, `__version__` sync, console-script targets, a staged-copy wheel build **whose artifact is opened** (declared modules must ship; wheel `__version__` must match), `pypi-publish.yml` `resolve`-arm coverage including the `mod=` output. The build runs whenever `build`+`setuptools` are importable — `--offline` included — and reports WARN `unverified` when it cannot run; `DEVIN_DOCTOR_NO_WHEEL_BUILD=1` opts out (PEP 517 hooks execute the checkout's backend). Scopes to `packages/*` under `--cwd` (or one package dir); `--package NAME` narrows the fan-out. Mixed fan-outs are expected: a member without `pyproject.toml` and without Python-package signals (`setup.py`/`setup.cfg`, an import-package dir, `.py` under `src/`, or a loose top-level `.py` — the last ignored whenever a `package.json` is present, where it is npm tooling rather than a single-module dist; a same-named `<pkg>.py` beside the manifest WARNs as an ambiguous hybrid instead of failing, and an unparseable manifest gets its own WARN without flipping the classification) is **skipped** with a PASS note — npm/VS Code members are not PyPI candidates — unless a `pypi-publish.yml` arm or dispatch/tag reference names it, which keeps the missing-metadata FAIL |
 | `deps-internals` | silently stale internal deps inside `<cwd>/.venv` — each `__editable__*.pth` target that no longer exists is a named **FAIL** (the repo moved/absorbed the package), a target resolving outside the checkout is **WARN** (venv bound to another workspace), and a non-editable `devin_*` wheel whose version differs from the same-named `packages/*/pyproject.toml` is **WARN** (stale wheel shadowing fresh source; `devin_*` dists with no checkout match are ignored as foreign tooling, editable-marked dists are never double-counted). No `.venv` → 'not detected', like a machine without Devin stores |
 | `toolchain` | the test/build toolchain the scout, E2E runner and CI depend on — `python3`/`python`/`py`, `pip3`/`pip`, `python -m venv` + `ensurepip` (the Debian `python3-venv` split a PATH lookup alone cannot see), `node`, `npm`, `git`. Each missing piece is a named **FAIL** with a `fix:` for the detected package manager (detected via `/etc/os-release` on Linux — see the OS guides for the concrete commands — generic when the platform is unrecognized); pip importable only as `python -m pip`, an alias-only `node`, or an unanswerable probe is **WARN**. Env-missing vs code-fail diagnosable at a glance — there is no 'not detected': a bare system reports FAILs |
+
+**opt-in checks** — two more families stay out of the default run
+because they need more than the local stores. Pass their flags on
+`check`/`report`/`plan`:
+
+- `--integrations` (alias `--ci`) — "half-configured CI" detection for
+  the repo under `--cwd`. It resolves `owner/name` from `git remote
+  get-url origin` and compares two `gh api` views: the repo's Actions
+  secret *names* (values are never exposed) against the file names in
+  `.github/workflows`. A small rule table pairs each required secret
+  with workflow-name markers so new integrations can be added; the
+  shipped rule flags `TS_AUTHKEY` without a `fallback`/`ai-review`
+  workflow — or the workflow without the secret — as
+  `FAIL half-configured`. Both present is `PASS`, neither is `WARN`
+  (some repos legitimately skip), a non-GitHub remote skips, and any
+  `git`/`gh` failure is `WARN unavailable`, never a crash.
+- `--live` — live connectivity probes that authenticate instead of just
+  checking that a file exists. Slack `auth.test` with a token from
+  `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN`, else the first
+  `*/gateways/.env` under `~` and under the ecosystem root
+  (`$DEVIN_ECOSYSTEM_ROOT`, default `~/devin`) — the token is never
+  printed, only its source. A successful auth is followed by a real
+  delivery smoke: one `chat.postMessage` of a `devin-doctor
+  live-check <utc-iso>` diagnostic to `SLACK_DOCTOR_CHANNEL`, else
+  `SLACK_NOTIFY_CHANNEL`, else a DM opened via `SLACK_NOTIFY_USER`
+  (the same resolution `gateways/src/slack-notify.js` uses, never
+  retried — only the channel id is reported). Ollama `GET /api/tags`
+  against `OLLAMA_HOST` or `http://localhost:11434`. Each probe is
+  bounded to ~8s: a configured endpoint that fails is `FAIL`, nothing
+  configured is a `WARN` skip.
+
+Both honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` (offline wins over the
+flags), so the pre-commit gate and air-gapped runs stay hermetic.
 
 Privacy doctrine is strict across all checks: headers and metadata only —
 counts, sizes, paths and statuses, never message content. SQLite stores
@@ -201,7 +236,8 @@ directories, writes nothing except its own small state file
 (`automation-snapshot.json` under the platform `devin-doctor` state
 dir — never inside the inspected data dir or the cwd, so a
 `--data-dir` pointing at a repo checkout leaves it pristine), used by
-the `automation` check's removed-task detection, and never contacts a
+the `automation` check's removed-task detection, and — unless you pass
+the opt-in `--integrations`/`--live` flags — never contacts a
 network service. No VM, no
 Tailscale, no Ollama, no Slack — just Devin Desktop plus Python. On a
 restricted or corporate machine it is the safest first tool: install, run
@@ -214,6 +250,13 @@ Tested on Windows and Linux. On Linux, session data defaults to
 to `$XDG_CONFIG_HOME/Devin` (normally `~/.config/Devin`). Windows stores use
 `%APPDATA%\devin` and `%APPDATA%\Devin`. Use `--data-dir` and `--config-dir`
 when the stores are elsewhere. macOS paths exist but are not verified.
+
+The opt-in checks are platform-neutral: `--integrations` needs `git` plus
+the `gh` CLI on PATH (authenticated to github.com — `gh api` shells out,
+so `cmd`, PowerShell, bash and zsh all work), and `--live` needs outbound
+HTTP to the probed endpoints. The `*/gateways/.env` token lookup is a
+home-dir glob — it works on Windows too, but the env-var path is the
+portable one everywhere.
 
 
 ### `devin-doctor plan` — remediation plan, still read-only
@@ -295,7 +338,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 - Devin misbehaves — missing history, auth errors, disk pressure — and you want one command to localize the cause.
 - You want a health check before debugging: a four-rung surface ladder for every agent session store on the machine (devin-cli, devin-chat, copilot-cli, codex-cli, vscode-chat) plus Devin-environment checks (data health, config, hooks-windows, disk, updates, automation, path-check), each with a `fix:` suggestion.
 - You need a paste-able report for a bug report: `devin-doctor report --md`.
-- You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (otherwise only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable).
+- You are on a restricted machine: it is read-only, and `--offline` keeps the whole run local (in the default run only the `updates` check makes a network call, to fetch the version manifest — it self-skips when unreachable; `--integrations`/`--live` only run when flagged).
 
 ## When NOT to use this
 
@@ -307,7 +350,7 @@ Same stdio server in other hosts — server name `devin-doctor`:
 
 **How do I check if my Devin installation's local data is healthy?** Run `devin-doctor check`. It inspects `sessions.db`, `acp-messages/*.db`, `state.vscdb`, `credentials.toml` and disk usage, printing `PASS`/`WARN`/`FAIL` per check with a `fix:` suggestion. Exit code is `0` unless something FAILs. It also diagnoses the other agent session surfaces on the machine (Copilot, Codex, VS Code chat) in the same run — `--surface NAME` scopes that section.
 
-**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and never touches the system's data or scheduled tasks; the single exception is its own state file (`automation-snapshot.json` under the platform `devin-doctor` state dir — `$XDG_DATA_HOME/devin-doctor` / `%LOCALAPPDATA%\devin-doctor`, `DEVIN_DOCTOR_STATE_DIR` to override) that the `automation` check uses to detect tasks removed since the last run. The only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`). Config check masks credential values in output. Fixes are suggested as text, never applied.
+**Is devin-doctor safe to run? Will it modify my data?** It is strictly read-only — it opens Devin's stores for reading and never touches the system's data or scheduled tasks; the single exception is its own state file (`automation-snapshot.json` under the platform `devin-doctor` state dir — `$XDG_DATA_HOME/devin-doctor` / `%LOCALAPPDATA%\devin-doctor`, `DEVIN_DOCTOR_STATE_DIR` to override) that the `automation` check uses to detect tasks removed since the last run. In the default run the only network call is the `updates` check's manifest fetch (skip it with `--offline` or `DEVIN_DOCTOR_OFFLINE=1`); the `--integrations` (GitHub API via `gh`) and `--live` (Slack/Ollama probes) checks run only when explicitly flagged and also honor `--offline`. Config check masks credential values in output; the live check never prints tokens and the integrations check never sees secret values. Fixes are suggested as text, never applied.
 
 **What does "unknown schema version" mean?** Devin's `sessions.db` schema is versioned; devin-doctor understands v15–v17 via devin-internals-spec. A newer version produces a `schema-unknown` WARN: counts still run, but the layout isn't verified — update the tool or devin-internals-spec.
 

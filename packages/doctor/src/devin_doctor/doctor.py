@@ -22,17 +22,25 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 import devin_doctor
-from devin_doctor.checks import DEVIN_CHECKS, SURFACES
+from devin_doctor.checks import DEVIN_CHECKS, OPTIONAL_CHECKS, SURFACES
 from devin_doctor.model import Context, Finding, Report, Status, platform_name
 
 
-def run_all(ctx: Context, *, surfaces: Sequence[str] | None = None) -> Report:
+def run_all(
+    ctx: Context,
+    *,
+    surfaces: Sequence[str] | None = None,
+    optional: Sequence[str] | None = None,
+) -> Report:
     """Run every check; ``surfaces`` scopes the surface checks by name.
 
     The Devin-environment checks always run unscoped — ``--surface``
-    narrows only the agent-surface ladder. Unknown surface names raise
-    ``ValueError`` (the CLI's argparse ``choices`` catches them first;
-    the MCP tool surfaces it as an ``{error, detail}`` reply).
+    narrows only the agent-surface ladder. ``optional`` adds opt-in
+    checks by CHECK_ID (``integrations``, ``live``) — they need the
+    ``gh`` CLI / live network calls, so the default run stays hermetic.
+    Unknown surface or optional names raise ``ValueError`` (the CLI's
+    argparse ``choices`` catches surface names first; the MCP tool
+    surfaces it as an ``{error, detail}`` reply).
     """
     known = {m.CHECK_ID for m in SURFACES}
     if surfaces is not None:
@@ -45,8 +53,20 @@ def run_all(ctx: Context, *, surfaces: Sequence[str] | None = None) -> Report:
         selected = [m for m in SURFACES if m.CHECK_ID in surfaces]
     else:
         selected = list(SURFACES)
+    known_optional = {m.CHECK_ID: m for m in OPTIONAL_CHECKS}
+    selected_optional = []
+    if optional:
+        unknown_opt = [n for n in optional if n not in known_optional]
+        if unknown_opt:
+            raise ValueError(
+                f"unknown optional check(s): {', '.join(unknown_opt)} — "
+                "known: " + ", ".join(known_optional)
+            )
+        selected_optional = [
+            known_optional[n] for n in dict.fromkeys(optional)
+        ]
     report = Report(surfaces_checked=[m.CHECK_ID for m in selected])
-    for check in [*selected, *DEVIN_CHECKS]:
+    for check in [*selected, *DEVIN_CHECKS, *selected_optional]:
         try:
             report.findings += check.run(ctx)
         except Exception as exc:  # noqa: BLE001 — a doctor must not die

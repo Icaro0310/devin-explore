@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in check `integrations` (`--integrations`, alias `--ci`):
+  "half-configured CI" detection for the repo under `--cwd`. Resolves
+  `owner/name` from `git remote get-url origin` and compares `gh api`
+  views — Actions secret *names* (values are never exposed) vs
+  `.github/workflows` file names. A provisioned secret without its
+  matching workflow (or vice-versa) is `FAIL half-configured`; both is
+  `PASS`, neither is `WARN`, `git`/`gh` failures are `WARN unavailable`.
+  Driven by a rule table (`required_secret` + `workflow_name_substrings`
+  + `label`) so new integrations can be added; ships with the
+  `TS_AUTHKEY` / `fallback`·`ai-review` rule.
+- Opt-in check `live` (`--live`): connectivity probes that authenticate
+  instead of checking a file exists — Slack `auth.test` (token from
+  `SLACK_BOT_TOKEN`/`SLACK_USER_TOKEN` or the first `*/gateways/.env`
+  under `~`/`$DEVIN_ECOSYSTEM_ROOT`; the token is never printed) and
+  Ollama `GET /api/tags` (`OLLAMA_HOST`, default
+  `http://localhost:11434`), each bounded to ~8s. A configured endpoint
+  that fails is `FAIL`; nothing configured is a `WARN` skip.
+- Both opt-in checks honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` and stay
+  out of the default run (and the pre-commit gate) — they only run when
+  their flag is passed to `check`/`report`/`plan`.
 - `disk` — a dedicated `sessions.db` size finding: an exact stat outside
   the bounded walk reports the store's size and warns over
   `ctx.sessions_db_warn_bytes` (default 2 GiB) with the file's path and
