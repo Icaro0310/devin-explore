@@ -7,6 +7,7 @@ import pytest
 from conftest import ALPHA
 from devin_graph.cli import main
 from devin_internals.fixtures import create_sessions_db
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 @pytest.fixture
@@ -123,7 +124,9 @@ def test_cli_export_stdout(built, capsys):
     assert main(["export", "--format", "json", "--graph", str(graph)]) == 0
     data = json.loads(capsys.readouterr().out)
     assert len(data["nodes"]) == 20 and len(data["edges"]) == 25
-    assert data["meta"]["schema_version"] == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert data["meta"]["schema_version"] == LATEST_KNOWN_SCHEMA
 
 
 def test_cli_export_out_file(built, tmp_path, capsys):
@@ -145,7 +148,7 @@ def test_cli_missing_sessions_db(tmp_path, capsys):
 
 
 def test_cli_unknown_schema_fails_loud(tmp_path, capsys):
-    bad = create_sessions_db(tmp_path / "future.db", schema_version=18)
+    bad = create_sessions_db(tmp_path / "future.db", schema_version=LATEST_KNOWN_SCHEMA + 1)
     with pytest.raises(SystemExit) as exc:
         main(["build", "--sessions-db", str(bad),
               "--graph", str(tmp_path / "g.db")])

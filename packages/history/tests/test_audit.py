@@ -6,12 +6,15 @@ from conftest import BASE_MS, add_session, msg
 from devin_history.audit import audit_store, classify_task, redact
 from devin_history.format import audit_to_dict, audit_to_markdown, write_audit_csv
 from devin_internals.parsers import SessionsStore
+from devin_internals.schema import LATEST_KNOWN_SCHEMA
 
 
 def test_audit_rows_cover_all_sessions(store):
     report = audit_store(store)
     assert len(report.rows) == 3
-    assert report.schema_version == 17
+    # fixture emits the installed spec's latest schema (v17 at 0.3.1,
+    # v18 at 0.3.3) — pin to the constant, not a literal
+    assert report.schema_version == LATEST_KNOWN_SCHEMA
     for r in report.rows:
         assert r.user_msgs > 0
         assert r.tool_calls == 2
