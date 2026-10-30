@@ -38,9 +38,8 @@ devin-doctor's own state (the `automation` check's snapshot baseline) lives unde
 - **Blocked installers:** if winget/Store are disabled by policy, `uv` installs as a standalone binary, download the GitHub release zip, extract to `%LOCALAPPDATA%\bin`, add it to PATH.
 - **Long paths:** keep checkout/install roots short (`C:\dev`), MAX_PATH (260 chars) can still bite inside virtualenvs; `LongPathsEnabled` needs admin, short roots do not.
 - **EDR/antivirus:** if a scan kills the install, retry with an exclusion or ask IT to allowlist `%LOCALAPPDATA%\uv` and `%USERPROFILE%\.local\bin`. These tools never elevate or listen on the network by default.
-- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel`), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
+- **Offline/air-gapped:** `pip download <package> -d wheels\` on a connected machine, copy the folder, then `pip install --no-index --find-links wheels\` on the target (pure-Python tools; native deps need a matching platform wheel). For `source_only` tools installed from a copied checkout, stage the build backend too (`pip download setuptools wheel -d wheels\`, into the folder being copied) and install it first (`pip install --no-index --find-links wheels\ setuptools wheel`; `--no-build-isolation` needs the backend installed, not only staged), then install with `pip install --no-index --find-links wheels\ --no-build-isolation .` inside the checkout.
 - **Toolchain check:** `devin-doctor check` names missing test/build tools with `winget install` commands; behind blocked winget/Store policy the same checks tell you which piece (`python`/`node`/`git`) is absent so IT can allowlist or provision it.
-
 - **Fully local runtime:** installed tools make no required network calls, they read `sessions.db` and local stores only. Two exceptions, both disableable: devin-doctor's update check (fetches the DevKit manifest) self-skips when unreachable or with `DEVIN_DOCTOR_OFFLINE=1`, and `capabilities --probe-network` dials out only when the flag is passed.
 
 ## Zscaler
@@ -80,6 +79,7 @@ A extensão `icaro0310.devin-doctor` (Open VSX) é thin shell: corre `devin-doct
 - **Política de extensões:** confirme com o TI se extensões de marketplace são permitidas ou se só VSIX aprovado internamente — o `.vsix` publicado e o source em `packages/doctor/adapters/vscode/` são o artefato auditável.
 - **Workspace trust:** a extensão só precisa de executar o CLI no PATH; o modo Restricted do workspace segue a política padrão do TI.
 - **Extension host:** cada extensão instalada corre num processo com o perfil de rede do editor — a auditoria de "quem faz chamadas externas" cobre o VS Code e o marketplace configurado (Open VSX, Marketplace ou nenhum), não só este `.vsix`.
+- **Update check do `devin-doctor`:** cada invocação do CLI — incluindo as que a extensão faz por si (`check --json`, `report --md`, `plan`) — pode correr o update check que busca o manifest do DevKit. Self-skip quando inalcançável; para desligar de vez, `DEVIN_DOCTOR_OFFLINE=1`.
 
 
 
