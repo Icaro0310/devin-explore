@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from devin_pm.cli import main
 from devin_internals.schema import LATEST_KNOWN_SCHEMA
+from devin_pm.cli import main
 
 
 @pytest.fixture
