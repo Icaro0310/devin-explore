@@ -1,0 +1,95 @@
+name: smoke-windows
+
+# Installed console-script smoke on a real Windows runner.
+# CI elsewhere exercises main(argv) in-process — that covers argparse
+# and exit codes but not the installed devin-*.exe shim (cp1252 output,
+# arg quoting, Scripts/ PATH, py.exe launcher). One subprocess run per
+# entry point catches "installed but won't start" before users do.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/*/pyproject.toml"
+      - "packages/*/src/**"
+      - ".github/workflows/smoke-windows.yml"
+  pull_request:
+    paths:
+      - "packages/*/pyproject.toml"
+      - "packages/*/src/**"
+      - ".github/workflows/smoke-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  console-scripts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: |
+          pip install ./packages/doctor ./packages/graph ./packages/history ./packages/pm ./packages/search
+      - name: Smoke console scripts
+        shell: python
+        run: |
+          import shutil
+          import subprocess
+          import sys
+
+          # argparse CLIs: --help must exit 0 and print usage.
+          CLIS = [
+              "devin-doctor",
+              "devin-graph",
+              "devin-history",
+              "devin-pm",
+              "devin-search",
+          ]
+          # stdio MCP servers: no argparse — the shim proof is that the
+          # exe launches, imports the module, and exits on stdin EOF
+          # without a traceback (missing mcp extra exits 1 cleanly).
+          MCPS = [
+              "devin-doctor-mcp",
+              "devin-graph-mcp",
+              "devin-history-mcp",
+              "devin-pm-mcp",
+              "devin-search-mcp",
+          ]
+
+          fails = []
+          for name in CLIS + MCPS:
+              if not shutil.which(name):
+                  fails.append(f"{name}: entry point not on PATH")
+          for name in CLIS:
+              try:
+                  p = subprocess.run(
+                      [name, "--help"], capture_output=True, text=True, timeout=30
+                  )
+              except subprocess.TimeoutExpired:
+                  fails.append(f"{name}: --help timed out")
+                  continue
+              if p.returncode != 0 or "usage" not in p.stdout.lower():
+                  fails.append(
+                      f"{name}: --help rc={p.returncode} stderr={p.stderr[:300]}"
+                  )
+          for name in MCPS:
+              try:
+                  p = subprocess.run(
+                      [name],
+                      stdin=subprocess.DEVNULL,
+                      capture_output=True,
+                      text=True,
+                      timeout=30,
+                  )
+              except subprocess.TimeoutExpired:
+                  fails.append(f"{name}: hangs on empty stdin")
+                  continue
+              if p.returncode not in (0, 1, 2) or "Traceback" in p.stderr:
+                  fails.append(
+                      f"{name}: rc={p.returncode} stderr={p.stderr[:300]}"
+                  )
+
+          for f in fails:
+              print("FAIL", f)
+          sys.exit(1 if fails else 0)
