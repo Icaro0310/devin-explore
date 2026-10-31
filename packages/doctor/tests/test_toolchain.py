@@ -24,11 +24,12 @@ _ARCH = 'ID=arch\nID_LIKE=arch\n'
 _UNKNOWN_DISTRO = 'ID=nixos\n'
 
 _WHEELS_PROBE = (
-    "import os, ensurepip, sys; "
-    "d = os.path.join(os.path.dirname(ensurepip.__file__), "
-    "'_bundled'); "
-    "sys.exit(0 if os.path.isdir(d) and "
-    "any(n.endswith('.whl') for n in os.listdir(d)) else 1)"
+    "import ensurepip, glob, os, sys, sysconfig; "
+    "dirs = [sysconfig.get_config_var('WHEEL_PKG_DIR'), "
+    "os.path.join(os.path.dirname(ensurepip.__file__), "
+    "'_bundled')]; "
+    "sys.exit(0 if any(glob.glob(os.path.join(d, 'pip-*.whl')) "
+    "for d in dirs if d and os.path.isdir(d)) else 1)"
 )
 
 
@@ -240,8 +241,25 @@ def test_all_python_shims_broken_fails(tmp_path):
     assert "winget" in (fails[0].fix or "")
 
 
-def test_ensurepip_without_bundled_wheels_fails(tmp_path):
-    """ensurepip imports but ships no wheel — fresh venvs still die
+def test_ensurepip_wheel_pkg_dir_passes(tmp_path):
+    """Debian-family layout: ensurepip resolves ``pip-*.whl`` from
+    sysconfig's ``WHEEL_PKG_DIR`` (``/usr/share/python-wheels``),
+    not ``ensurepip/_bundled`` — the probe exits 0 and venv PASSes."""
+    findings = toolchain.run(
+        _ctx(tmp_path),
+        which=_which(_full_path_which()),
+        probe=_ok_probe,
+        plat="linux",
+        os_release=_UBUNTU_LIKE,
+    )
+    assert not _by_msg(findings, "bundles no pip wheel")
+    venv = _by_msg(findings, "ensurepip can bootstrap pip")
+    assert [f.status for f in venv] == [Status.PASS]
+
+
+def test_ensurepip_without_any_pip_wheel_fails(tmp_path):
+    """ensurepip imports but no ``pip-*.whl`` exists under
+    ``WHEEL_PKG_DIR`` or ``_bundled`` — fresh venvs still die
     during pip bootstrap."""
     findings = toolchain.run(
         _ctx(tmp_path),
