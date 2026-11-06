@@ -6,10 +6,7 @@ on:
     paths:
       - 'packages/search/**'
       - '.github/workflows/test-search.yml'
-  pull_request:
-    paths:
-      - 'packages/search/**'
-      - '.github/workflows/test-search.yml'
+  # pull_request testing now lives in ci.yml (job-level path gating + ci-gate aggregator)
 
 permissions:
   contents: read

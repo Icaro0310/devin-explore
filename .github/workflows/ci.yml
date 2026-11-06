@@ -1,8 +1,9 @@
 name: ci
 
-# Secrets scan runs on every change; per-package test workflows
-# (test-*.yml) are scoped by path so a change under packages/x/ runs
-# only that package's suite.
+# Secrets scan runs on every change; per-package test jobs are gated on
+# the `changes` diff (job-level path gating, replacing the path-filtered
+# test-*.yml PR triggers). The always-on `ci-gate` job aggregates every
+# result into the single required check.
 
 on:
   push:
@@ -13,6 +14,41 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      doctor: ${{ steps.f.outputs.doctor }}
+      graph: ${{ steps.f.outputs.graph }}
+      history: ${{ steps.f.outputs.history }}
+      pm: ${{ steps.f.outputs.pm }}
+      search: ${{ steps.f.outputs.search }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: f
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+            base="HEAD~1"
+          fi
+          diff_ok=0
+          git diff --name-only "$base" HEAD >/dev/null 2>&1 && diff_ok=1
+          # diff not computable -> run every suite (safe default)
+          for spec in \
+            'doctor:packages/doctor/** .github/workflows/test-doctor.yml' \
+            'graph:packages/graph/** .github/workflows/test-graph.yml' \
+            'history:packages/history/** .github/workflows/test-history.yml' \
+            'pm:packages/pm/** .github/workflows/test-pm.yml' \
+            'search:packages/search/** .github/workflows/test-search.yml' \
+          ; do
+            pkg="${spec%%:*}"; paths="${spec#*:}"
+            if [ "$diff_ok" = "0" ] || git diff --name-only "$base" HEAD -- $paths | grep -q .; then
+              echo "$pkg=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$pkg=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -32,3 +68,64 @@ jobs:
     permissions:
       contents: read
     uses: Icaro0310/devin-powerups/.github/workflows/config-restricted-check.yml@v1
+  test-doctor:
+    needs: changes
+    if: needs.changes.outputs.doctor == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/doctor
+  test-graph:
+    needs: changes
+    if: needs.changes.outputs.graph == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/graph
+  test-history:
+    needs: changes
+    if: needs.changes.outputs.history == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/history
+  test-pm:
+    needs: changes
+    if: needs.changes.outputs.pm == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/pm
+  test-search:
+    needs: changes
+    if: needs.changes.outputs.search == 'true'
+    permissions:
+      contents: read
+    uses: Icaro0310/devin-powerups/.github/workflows/python-test.yml@v1
+    with:
+      package-dir: packages/search
+  ci-gate:
+    if: always()
+    needs: [changes, lint, secrets-scan, adapters-check, config-restricted-check, test-doctor, test-graph, test-history, test-pm, test-search]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate job results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = {k: v["result"] for k, v in needs.items()
+                 if v["result"] not in ("success", "skipped")}
+          for k, v in needs.items():
+              print(f"{k}: {v['result']}")
+          if bad:
+              print(f"ci-gate FAIL: {bad}", file=sys.stderr)
+              sys.exit(1)
+          print("ci-gate PASS")
+          PY
