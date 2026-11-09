@@ -213,8 +213,8 @@ def test_render_json_roundtrip(ctx):
 
 
 def test_opt_in_checks_run_only_when_flagged(ctx, capsys):
-    """--integrations/--live add their checks; offline wins over them, so
-    the run stays hermetic (both report WARN unavailable)."""
+    """--integrations/--live/--prs add their checks; offline wins over
+    them, so the run stays hermetic (all report WARN unavailable)."""
     rc = main(
         [
             "check",
@@ -224,6 +224,7 @@ def test_opt_in_checks_run_only_when_flagged(ctx, capsys):
             str(ctx.cwd),
             "--integrations",
             "--live",
+            "--prs",
             "--offline",
             "--json",
         ]
@@ -232,10 +233,11 @@ def test_opt_in_checks_run_only_when_flagged(ctx, capsys):
     assert rc == 0
     assert "integrations" in payload["checks"]
     assert "live" in payload["checks"]
+    assert "pr-ready-not-merged" in payload["checks"]
     warned = {
         f["check"] for f in payload["findings"] if f["status"] == "WARN"
     }
-    assert {"integrations", "live"} <= warned
+    assert {"integrations", "live", "pr-ready-not-merged"} <= warned
 
 
 def test_opt_in_checks_absent_by_default(ctx, capsys):
@@ -253,3 +255,4 @@ def test_opt_in_checks_absent_by_default(ctx, capsys):
     assert rc == 0
     assert "integrations" not in payload["checks"]
     assert "live" not in payload["checks"]
+    assert "pr-ready-not-merged" not in payload["checks"]
