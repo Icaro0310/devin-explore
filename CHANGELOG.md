@@ -142,6 +142,12 @@
   `XDG_CONFIG_HOME` and `~` candidates, matching the rest of the
   ecosystem.
 - **Fix** — `devin-history` timestamps are timezone-aware (`DTZ006`).
+- **CI** — `auto-approve` caller repinned to `pr-approve` `@v1.14` and
+  granted `contents: write` at workflow and job level: since v1.13 the
+  gate arms `gh pr merge --auto` after approval, which needs write on
+  the caller job (the reusable workflow's grant is capped by the
+  caller); approved PRs now auto-merge once required checks pass
+  instead of waiting for a human merge click.
 
 ## 2026-10 (F4 consolidation)
 
