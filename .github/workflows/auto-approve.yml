@@ -27,7 +27,7 @@ on:
   status: {}
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -40,8 +40,11 @@ jobs:
         github.event.context == 'devin-judge/review') &&
        github.event.state == 'success')
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
     # v1.6 -> v1.9: self-cancel fix (a successful approval no longer
     # renders as a failed check) + fresh-head recheck + paginated dedup.
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.12
+    # v1.14: arms `gh pr merge --auto` after approval — the arm needs
+    # contents:write on this caller job (workflow- and job-level perms
+    # above both grant it); without it the arm warns and waits.
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.14
