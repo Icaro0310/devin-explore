@@ -26,7 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama `GET /api/tags` (`OLLAMA_HOST`, default
   `http://localhost:11434`), each bounded to ~8s. A configured endpoint
   that fails is `FAIL`; nothing configured is a `WARN` skip.
-- Both opt-in checks honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` and stay
+- Opt-in check `pr-ready-not-merged` (`--prs`): the "PR ready but not
+  merged" detector. Resolves the ecosystem registry
+  (`devin-powerups/registry.json`, shared with the `automation`
+  check via the new `devin_doctor.ecosystem` module) and runs
+  `gh pr list` over every github.com repo it names, deduped. A PR is
+  flagged `WARN` when approved (`reviewDecision APPROVED` or the
+  `devin-judge/review` commit status at `SUCCESS`), every check
+  terminal-green (latest run per check wins; `CANCELLED` never
+  blocks), `autoMergeRequest` still `null`, and older than 30min.
+  Gone repos (404s from absorbed products) skip silently; other
+  per-repo `gh` failures report an incomplete scan.
+- The opt-in checks honor `--offline`/`DEVIN_DOCTOR_OFFLINE=1` and stay
   out of the default run (and the pre-commit gate) — they only run when
   their flag is passed to `check`/`report`/`plan`.
 - `disk` — a dedicated `sessions.db` size finding: an exact stat outside

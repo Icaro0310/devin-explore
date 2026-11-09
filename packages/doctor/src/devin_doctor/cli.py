@@ -12,10 +12,12 @@ one surface — the Devin-environment checks always run unscoped.
 run, so the updates check skips its manifest fetch and nothing touches
 the network — the mode the repo's pre-commit gate runs in.
 
-``--integrations``/``--ci`` and ``--live`` (check/report/plan) opt into
-the checks that need more than the local stores: the integrations check
-uses ``git`` + the ``gh`` CLI against the GitHub API, and the live check
-authenticates against Slack/Ollama endpoints.
+``--integrations``/``--ci``, ``--live`` and ``--prs`` (check/report/plan)
+opt into the checks that need more than the local stores: the
+integrations check uses ``git`` + the ``gh`` CLI against the GitHub
+API, the live check authenticates against Slack/Ollama endpoints, and
+the prs check lists open PRs across the ecosystem registry's repos via
+``gh pr list``.
 
 Exit code: 0 when no FAIL findings, 1 when any check FAILs.
 ``capabilities`` always exits 0 — its output is a JSON profile, not a
@@ -107,6 +109,14 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="opt-in: run live connectivity probes — Slack auth.test plus "
         "a chat.postMessage delivery smoke, and Ollama /api/tags, each "
         "bounded to ~8s (proves the channel, not just the key)",
+    )
+    p.add_argument(
+        "--prs",
+        action="store_true",
+        help="opt-in: scan the ecosystem registry's GitHub repos (via "
+        "gh pr list) for open PRs that are approved + checks-green but "
+        "have no auto-merge and are older than 30min — the 'ready but "
+        "not merged' failure mode",
     )
     p.add_argument("--json", action="store_true", help="emit JSON")
 
@@ -252,6 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for name, enabled in (
             ("integrations", getattr(args, "integrations", False)),
             ("live", getattr(args, "live", False)),
+            ("pr-ready-not-merged", getattr(args, "prs", False)),
         )
         if enabled
     ]

@@ -57,6 +57,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
 from typing import Any
 
+from devin_doctor import ecosystem
 from devin_doctor.model import Context, Finding, Status, platform_name
 from devin_doctor.paths import default_state_dir
 
@@ -702,29 +703,8 @@ def _task_targets(
 # ---------------------------------------------------------------------------
 # ecosystem registry — absorbed/archived repo detection
 # ---------------------------------------------------------------------------
-
-
-def _locate_registry(ctx: Context, home: Path) -> Path | None:
-    """Find ``devin-powerups/registry.json`` under known workspace roots:
-    ``ctx.cwd`` and its ancestors, ``~`` and ``~/devin``, plus one level
-    of container dirs below them (e.g. ``~/devin/devin-ecosystem/``)."""
-    candidates: list[Path] = []
-    for root in (ctx.cwd, *ctx.cwd.parents):
-        candidates.append(root / "devin-powerups" / "registry.json")
-    candidates.append(home / "devin-powerups" / "registry.json")
-    candidates.append(home / "devin" / "devin-powerups" / "registry.json")
-    for base in (home, home / "devin", ctx.cwd):
-        try:
-            children = sorted(base.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if child.is_dir() and child.name != "devin-powerups":
-                candidates.append(child / "devin-powerups" / "registry.json")
-    for path in dict.fromkeys(candidates):
-        if path.is_file():
-            return path
-    return None
+# ``locate_registry`` lives in ``devin_doctor.ecosystem`` — shared with the
+# opt-in ``pr-ready-not-merged`` check, which scans the same registry.
 
 
 def _absorbed_repos(
@@ -922,7 +902,7 @@ def run(
 
     # Absorbed-repo map: silently skipped when the ecosystem registry
     # cannot be located.
-    registry_path = _locate_registry(ctx, home)
+    registry_path = ecosystem.locate_registry(ctx, home)
     absorbed: dict[str, tuple[Path, str]] = {}
     if registry_path is not None:
         try:

@@ -36,8 +36,9 @@ def run_all(
 
     The Devin-environment checks always run unscoped — ``--surface``
     narrows only the agent-surface ladder. ``optional`` adds opt-in
-    checks by CHECK_ID (``integrations``, ``live``) — they need the
-    ``gh`` CLI / live network calls, so the default run stays hermetic.
+    checks by CHECK_ID (``integrations``, ``live``,
+    ``pr-ready-not-merged``) — they need the ``gh`` CLI / live network
+    calls, so the default run stays hermetic.
     Unknown surface or optional names raise ``ValueError`` (the CLI's
     argparse ``choices`` catches surface names first; the MCP tool
     surfaces it as an ``{error, detail}`` reply).

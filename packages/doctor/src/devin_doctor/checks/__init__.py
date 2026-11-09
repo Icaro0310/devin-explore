@@ -16,6 +16,7 @@ from devin_doctor.checks import (
     integrations,
     live,
     path_check,
+    prs,
     publish,
     toolchain,
     updates,
@@ -41,9 +42,10 @@ DEVIN_CHECKS = [
 # Opt-in checks — they only run when the matching CLI flag passes their
 # CHECK_ID via ``run_all(optional=...)``: ``integrations`` needs the
 # ``gh`` CLI plus GitHub API access; ``live`` authenticates against
-# Slack/Ollama. Keeping them out of CHECKS preserves the hermetic
+# Slack/Ollama; ``prs`` scans the ecosystem registry's GitHub repos via
+# ``gh pr list``. Keeping them out of CHECKS preserves the hermetic
 # default run (and the --offline pre-commit gate).
-OPTIONAL_CHECKS = [integrations, live]
+OPTIONAL_CHECKS = [integrations, live, prs]
 
 CHECKS = [*SURFACES, *DEVIN_CHECKS]
 
@@ -62,6 +64,7 @@ __all__ = [
     "integrations",
     "live",
     "path_check",
+    "prs",
     "publish",
     "toolchain",
     "updates",
