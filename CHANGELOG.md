@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **CI** — `auto-approve` caller repinned to `pr-approve` `@v1.16`:
+  the reusable now runs the auto-merge arm in a dedicated
+  `arm-auto-merge` job so the approve path holds read-only
+  permissions again; `contents: write` stays on the caller job for
+  the arm (the reusable's grant is capped by the caller);
+  `packages/doctor/tests/test_auto_approve_workflow.py` pins the
+  caller contract.
 - **Feature** — `devin-history export-gui` now exports *real* GUI
   transcripts and `devin-history audit --fail-on-anomaly N` gates on
   anomaly counts. `export-gui` correlates `state.vscdb` session↔workspace
