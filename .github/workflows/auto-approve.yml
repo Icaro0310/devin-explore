@@ -29,6 +29,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  statuses: read
 
 jobs:
   approve:
@@ -42,6 +43,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      statuses: read
     # v1.6 -> v1.9: self-cancel fix (a successful approval no longer
     # renders as a failed check) + fresh-head recheck + paginated dedup.
     # v1.16: the auto-merge arm moved into a dedicated arm-auto-merge
