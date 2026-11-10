@@ -43,8 +43,15 @@ def test_review_comment_trigger_re_evaluates_gate() -> None:
 
 
 def test_gate_permissions_stay_scoped() -> None:
-    """contents:write is required by the v1.16 ``arm-auto-merge`` job
-    inside the reusable (`gh pr merge --auto`); its absence was the
-    old safe state and is now the regression this contract guards."""
+    """``statuses: read`` is required by the v1.12 judge gate and the
+    v1.16 ``arm-auto-merge`` job inside the reusable (they read commit
+    statuses such as ``devin-judge/review``); ``contents: write`` is
+    required by the arm's ``gh pr merge --auto``. A caller that omits
+    ``statuses: read`` is rejected at reusable-workflow startup as a
+    silent ``startup_failure`` — this contract guards that regression."""
     perms = _load()["jobs"]["approve"]["permissions"]
-    assert perms == {"contents": "write", "pull-requests": "write"}
+    assert perms == {
+        "contents": "write",
+        "pull-requests": "write",
+        "statuses": "read",
+    }

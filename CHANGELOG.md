@@ -6,7 +6,10 @@
   the reusable now runs the auto-merge arm in a dedicated
   `arm-auto-merge` job so the approve path holds read-only
   permissions again; `contents: write` stays on the caller job for
-  the arm (the reusable's grant is capped by the caller);
+  the arm (the reusable's grant is capped by the caller). The caller
+  also grants `statuses: read` at workflow and job level — required
+  since v1.15 for the reusable's status reads; without it the
+  reusable is rejected as a silent `startup_failure`;
   `packages/doctor/tests/test_auto_approve_workflow.py` pins the
   caller contract.
 - **Feature** — `devin-history export-gui` now exports *real* GUI
