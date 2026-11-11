@@ -708,12 +708,16 @@ def _task_targets(
                 and _INTERPRETER.match(last_cmd)
                 and _BARE_COMMAND.match(piece)
                 and _FILEISH.search(piece)
+                and (
+                    not unverifiable_cwd
+                    or Path(piece).is_absolute()
+                    or piece.startswith("~")
+                )
             ):
                 # 'python3 backup.py' — a bare script arg after an
                 # interpreter is a real file reference; option values
                 # are already consumed via payload_next.
-                if not unverifiable_cwd or Path(piece).is_absolute() or piece.startswith("~"):
-                    targets.append(_Target(_resolve_path(piece, cwd), "exists"))
+                targets.append(_Target(_resolve_path(piece, cwd), "exists"))
             expect_cmd = False
     return targets, commands
 
