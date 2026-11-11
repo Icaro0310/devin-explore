@@ -107,6 +107,12 @@ _FILEISH = re.compile(r"\.[A-Za-z0-9]{1,6}$")
 # reference when the running command is an interpreter that takes a
 # script argument — otherwise ``--handler skills.audit`` or
 # ``-m http.server`` would read as missing files.
+# Wrappers that cd into a repo checkout before exec'ing the payload
+# (pas-cron.sh -> worktree, repo-cron.sh <repo> -> repo dir). Relative
+# paths in the payload resolve under THAT directory, which the check
+# cannot see — treat them as unverifiable, not missing.
+_WRAPPER_CD = re.compile(r"^(?:pas-cron|repo-cron)(?:\.sh)?$", re.IGNORECASE)
+
 _INTERPRETER = re.compile(
     r"^(?:[a-z]*sh|pythonw?[\d.]*|node(?:js)?|deno|ruby|perl|pwsh|"
     r"powershell)(?:\.exe)?$",
@@ -457,7 +463,7 @@ def _resolve_path(token: str, cwd: Path) -> Path:
 
 def _task_targets(
     command: str, *, posix: bool, home: Path, cwd: Path | None = None,
-    depth: int = 0,
+    depth: int = 0, unverifiable: bool = False,
 ) -> tuple[list[_Target], list[str]]:
     """Split a scheduled command into ``(targets, bare_commands)``.
 
@@ -487,6 +493,7 @@ def _task_targets(
     targets: list[_Target] = []
     commands: list[str] = []
     cwd = cwd or home
+    unverifiable_cwd = unverifiable
     expect_cmd = True
     cd_next = False
     redirect_next: str | None = None
@@ -511,6 +518,7 @@ def _task_targets(
                 sub_t, sub_c = _task_targets(
                     token, posix=posix, home=cwd, cwd=cwd,
                     depth=depth + 1,
+                    unverifiable=unverifiable_cwd,
                 )
                 targets += sub_t
                 commands += sub_c
@@ -573,6 +581,7 @@ def _task_targets(
                     sub_t, sub_c = _task_targets(
                         piece, posix=posix, home=cwd, cwd=cwd,
                         depth=depth + 1,
+                        unverifiable=unverifiable_cwd,
                     )
                     targets += sub_t
                     commands += sub_c
@@ -666,6 +675,12 @@ def _task_targets(
                     )
                 continue
             elif _is_path_token(piece) or cd_next:
+                if _WRAPPER_CD.match(
+                        PurePath(piece.replace("\\", "/")).name):
+                    unverifiable_cwd = True
+                if unverifiable_cwd and not Path(piece).is_absolute() and not piece.startswith("~") and not cd_next:
+                    expect_cmd = False
+                    continue
                 resolved = _resolve_path(piece, cwd)
                 if cd_next:
                     # 'cd dir &&' moves the cwd for what follows;
@@ -684,6 +699,8 @@ def _task_targets(
                 and piece not in _BUILTINS
                 and _BARE_COMMAND.match(piece)
             ):
+                if _WRAPPER_CD.match(piece):
+                    unverifiable_cwd = True
                 commands.append(piece)
                 last_cmd = piece
             elif (
@@ -691,6 +708,11 @@ def _task_targets(
                 and _INTERPRETER.match(last_cmd)
                 and _BARE_COMMAND.match(piece)
                 and _FILEISH.search(piece)
+                and (
+                    not unverifiable_cwd
+                    or Path(piece).is_absolute()
+                    or piece.startswith("~")
+                )
             ):
                 # 'python3 backup.py' — a bare script arg after an
                 # interpreter is a real file reference; option values

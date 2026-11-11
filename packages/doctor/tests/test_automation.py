@@ -1050,3 +1050,29 @@ def test_digits_glued_or_spaced_vs_word_suffix(tmp_path):
     )
     assert job in {t.path for t in targets}
     assert any(t.path == log and t.kind == "parent" for t in targets)
+
+
+def test_cron_wrapper_relative_paths_unverifiable_not_missing(tmp_path):
+    """pas-cron.sh / repo-cron.sh cd into a checkout before exec —
+    'scripts/x.py' resolves there, not under cron's home. Relative
+    payload paths are unverifiable, not missing."""
+    from devin_doctor.checks import automation
+    tasks = [automation._Task(
+        "cron", "job",
+        "/root/bin/hb run t -- /root/bin/pas-cron.sh /bin/bash -c "
+        "'/usr/bin/python3 scripts/does-not-exist-here.py'")]
+    targets, _ = automation._task_targets(
+        tasks[0].command, posix=True, home=tmp_path)
+    assert not [t for t in targets if "does-not-exist-here" in str(t.path)]
+
+
+def test_cron_wrapper_absolute_paths_still_checked(tmp_path):
+    """Absolute payload paths remain verifiable behind a wrapper."""
+    from devin_doctor.checks import automation
+    tasks = [automation._Task(
+        "cron", "job",
+        "/root/bin/pas-cron.sh /bin/bash -c '/usr/bin/python3 "
+        f"{tmp_path.as_posix()}/definitely-missing-zz.py'")]
+    targets, _ = automation._task_targets(
+        tasks[0].command, posix=True, home=tmp_path)
+    assert any("definitely-missing-zz" in str(t.path) for t in targets)
