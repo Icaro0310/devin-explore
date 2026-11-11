@@ -1072,7 +1072,7 @@ def test_cron_wrapper_absolute_paths_still_checked(tmp_path):
     tasks = [automation._Task(
         "cron", "job",
         "/root/bin/pas-cron.sh /bin/bash -c '/usr/bin/python3 "
-        f"{tmp_path}/definitely-missing-zz.py'")]
+        f"{tmp_path.as_posix()}/definitely-missing-zz.py'")]
     targets, _ = automation._task_targets(
         tasks[0].command, posix=True, home=tmp_path)
     assert any("definitely-missing-zz" in str(t.path) for t in targets)
