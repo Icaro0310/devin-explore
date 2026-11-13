@@ -19,9 +19,11 @@ a binary on PATH is ambiguous (the classic case: ``python3`` exists but
   pip --version``: a module that answers but exposes no script is
   degraded (WARN), not missing — bare ``pip`` still fails;
 - ``<python> -m venv --help`` then ``import ensurepip`` **and** a
-  bundled-wheel listing — the venv module itself, the pip-bootstrap
-  half Debian splits into ``python3-venv``, and the partial install
-  whose ensurepip imports but ships no wheel to bootstrap from;
+  ``pip-*.whl`` lookup — under sysconfig's ``WHEEL_PKG_DIR`` (the
+  Debian-family layout) or ensurepip's ``_bundled`` dir — the venv
+  module itself, the pip-bootstrap half Debian splits into
+  ``python3-venv``, and the partial install whose ensurepip imports
+  but ships no wheel to bootstrap from;
 - ``node``, ``npm``, ``git`` — an alias-only hit (``nodejs`` without
   ``node``) is WARN, not PASS: the shell still cannot resolve the name
   the build/test scripts actually invoke.
@@ -341,14 +343,19 @@ def _venv_finding(
             fix=_fix("venv", manager),
         )
     # Importable is not bootstrappable: a partial install can ship
-    # ensurepip without its bundled wheels, and ``python -m venv``
-    # then dies inside ``_setup_pip``.
+    # ensurepip with no pip wheel, and ``python -m venv`` then dies
+    # inside ``_setup_pip``. The lookup mirrors ensurepip's own
+    # ``_get_pip_whl_path_ctx``: ``pip-*.whl`` under sysconfig's
+    # ``WHEEL_PKG_DIR`` (the Debian-family ``python3-pip-whl``
+    # layout, where ``_bundled`` may not exist at all) when set,
+    # else ensurepip's ``_bundled`` dir.
     wheels_probe = (
-        "import os, ensurepip, sys; "
-        "d = os.path.join(os.path.dirname(ensurepip.__file__), "
-        "'_bundled'); "
-        "sys.exit(0 if os.path.isdir(d) and "
-        "any(n.endswith('.whl') for n in os.listdir(d)) else 1)"
+        "import ensurepip, glob, os, sys, sysconfig; "
+        "dirs = [sysconfig.get_config_var('WHEEL_PKG_DIR'), "
+        "os.path.join(os.path.dirname(ensurepip.__file__), "
+        "'_bundled')]; "
+        "sys.exit(0 if any(glob.glob(os.path.join(d, 'pip-*.whl')) "
+        "for d in dirs if d and os.path.isdir(d)) else 1)"
     )
     wheels = probe([pyexe, "-c", wheels_probe])
     if wheels is None:
