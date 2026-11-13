@@ -14,6 +14,7 @@ from devin_doctor.checks import (
     health,
     hooks_windows,
     integrations,
+    ledger,
     live,
     path_check,
     prs,
@@ -37,6 +38,7 @@ DEVIN_CHECKS = [
     publish,
     deps_internals,
     toolchain,
+    ledger,
 ]
 
 # Opt-in checks — they only run when the matching CLI flag passes their
@@ -62,6 +64,7 @@ __all__ = [
     "health",
     "hooks_windows",
     "integrations",
+    "ledger",
     "live",
     "path_check",
     "prs",
