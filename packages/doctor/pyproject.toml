@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "mcp>=1.2", "PyYAML>=6"]
 mcp = ["mcp>=1.2"]
+ledger = ["devin-memory>=0.4.0"]
 
 [project.scripts]
 devin-doctor = "devin_doctor.cli:main"

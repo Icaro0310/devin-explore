@@ -87,6 +87,7 @@ def test_check_json_schema(ctx, capsys):
         "path-check",
         "publish-readiness",
         "toolchain",
+        "ledger",
     }
     # Extension contract: the VS Code adapter gates on a parseable version
     # and renders all three summary counters.
