@@ -8,8 +8,8 @@ real ``integrations.check`` verdicts.
 
 from __future__ import annotations
 
-from devin_doctor.model import Context, Finding, Status
 from devin_doctor.ledger_paths import ledger_store_dir
+from devin_doctor.model import Context, Finding, Status
 
 CHECK_ID = "ledger"
 
@@ -17,8 +17,7 @@ CHECK_ID = "ledger"
 def run(ctx: Context) -> list[Finding]:
     store = ledger_store_dir()
     try:
-        from devin_memory.ledger import Ledger
-        from devin_memory.ledger import integrations
+        from devin_memory.ledger import Ledger, integrations
     except ImportError:
         if store.is_dir() and (store / "ledger.jsonl").exists():
             return [Finding(
