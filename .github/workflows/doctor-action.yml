@@ -42,7 +42,7 @@ jobs:
 
       - name: missing install → expect NOT INSTALLED failure
         id: notinstalled
-        uses: Icaro0310/devin-doctor-action@4a8d654164b74045311622685f49d8445815f5c0 # v1
+        uses: Icaro0310/devin-doctor-action@8a46abb6db56cf880e5e7a6e34245208f70ce581 # v1
         continue-on-error: true
         with:
           data-dir: /tmp/definitely-no-devin-here
@@ -55,7 +55,7 @@ jobs:
 
       - name: corrupted store → expect UNHEALTHY failure
         id: unhealthy
-        uses: Icaro0310/devin-doctor-action@4a8d654164b74045311622685f49d8445815f5c0 # v1
+        uses: Icaro0310/devin-doctor-action@8a46abb6db56cf880e5e7a6e34245208f70ce581 # v1
         continue-on-error: true
         with:
           data-dir: ${{ github.workspace }}/.smoke-broken
@@ -69,7 +69,7 @@ jobs:
 
       - name: healthy store → expect pass
         id: healthy
-        uses: Icaro0310/devin-doctor-action@4a8d654164b74045311622685f49d8445815f5c0 # v1
+        uses: Icaro0310/devin-doctor-action@8a46abb6db56cf880e5e7a6e34245208f70ce581 # v1
         with:
           data-dir: ${{ github.workspace }}/.smoke-healthy
 
