@@ -80,7 +80,7 @@ def search(
         raise FileNotFoundError(
             f"{index_path}: no index — run `devin-search index` first"
         )
-    con = sqlite3.connect(index_path)
+    con = sqlite3.connect(index_path, timeout=30)
     try:
         row = con.execute(
             "SELECT value FROM index_meta WHERE key = 'schema_version'"

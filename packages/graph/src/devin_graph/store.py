@@ -101,7 +101,13 @@ class GraphStore:
             self._con.execute("PRAGMA query_only = ON")
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._con = sqlite3.connect(self.path)
+            # timeout=30 → busy_timeout 30s; WAL → readers don't block the
+            # writer. graph.db is rebuilt while queries run — the default
+            # 'delete' journal caused 'database is locked' under
+            # SessionSweep/manual concurrency.
+            self._con = sqlite3.connect(self.path, timeout=30)
+            self._con.execute("PRAGMA journal_mode=WAL")
+            self._con.execute("PRAGMA busy_timeout=30000")
             self._con.executescript(_SCHEMA)
         self._con.row_factory = sqlite3.Row
 

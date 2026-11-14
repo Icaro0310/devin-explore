@@ -111,7 +111,13 @@ def open_index(path: str | Path, *, rebuild: bool = False) -> sqlite3.Connection
     schema-version mismatch, so callers can report it honestly."""
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    # timeout=30 → busy_timeout 30s; WAL → readers don't block the writer.
+    # search.db is rebuilt while queries run — the default 'delete'
+    # journal caused 'database is locked' under SessionSweep/manual
+    # concurrency (same contention class as the sessions.db backup fix).
+    con = sqlite3.connect(path, timeout=30)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=30000")
     con.row_factory = sqlite3.Row
     if rebuild:
         con.executescript(
