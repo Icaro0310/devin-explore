@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `database is locked` under concurrent SessionSweep/manual access: `GraphStore` write path now opens with `timeout=30`, `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=30000`.
+
 ## [0.1.2] - 2026-10-28
 
 ### Changed
