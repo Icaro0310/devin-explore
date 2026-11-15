@@ -1,11 +1,11 @@
 """Static assertions for .github/workflows/auto-approve.yml.
 
 The caller is thin by design: triggers plus a pin to the reusable
-``pr-approve`` gate in devin-powerups. These tests pin the v1.16 caller
+``pr-approve`` gate in devin-powerups. These tests pin the v1.17 caller
 contract — the gate version, the ``pull_request_review_comment``
 trigger that re-evaluates the gate when a fix-commit reply lands, and
 the scoped job permissions (``contents: write`` is still required by
-the v1.16 ``arm-auto-merge`` job inside the reusable) — without running
+the v1.17 ``arm-auto-merge`` job inside the reusable) — without running
 the workflow.
 """
 
@@ -29,12 +29,12 @@ def _load() -> dict:
     return wf
 
 
-def test_gate_pin_is_v1_16() -> None:
-    """v1.16 splits the auto-merge arm into a dedicated job so the
+def test_gate_pin_is_v1_17() -> None:
+    """v1.17 splits the auto-merge arm into a dedicated job so the
     approve path runs read-only again; the pin must be exact so a
     silent downgrade is caught here."""
     uses = _load()["jobs"]["approve"]["uses"]
-    assert uses == GATE_PIN + "v1.16"
+    assert uses == GATE_PIN + "v1.17"
 
 
 def test_review_comment_trigger_re_evaluates_gate() -> None:
@@ -44,7 +44,7 @@ def test_review_comment_trigger_re_evaluates_gate() -> None:
 
 def test_gate_permissions_stay_scoped() -> None:
     """``statuses: read`` is required by the v1.12 judge gate and the
-    v1.16 ``arm-auto-merge`` job inside the reusable (they read commit
+    v1.17 ``arm-auto-merge`` job inside the reusable (they read commit
     statuses such as ``devin-judge/review``); ``contents: write`` is
     required by the arm's ``gh pr merge --auto``. A caller that omits
     ``statuses: read`` is rejected at reusable-workflow startup as a
