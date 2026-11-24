@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **CI** — `actions/checkout` bumped from `@v4` to `@v7`
+  in `smoke-windows.yml` (Dependabot).
 - **CI** — `auto-approve` caller repinned to `pr-approve` `@v1.17`
   (was v1.16); `packages/doctor/tests/test_auto_approve_workflow.py`
   pins the v1.17 contract.
