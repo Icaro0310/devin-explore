@@ -4,6 +4,11 @@
 
 - **CI** — `actions/checkout` bumped from `@v4` to `@v7`
   in `smoke-windows.yml` (Dependabot).
+- **CI** — `auto-approve` caller repinned to `pr-approve` `@v1.17`
+  (was v1.16); `packages/doctor/tests/test_auto_approve_workflow.py`
+  pins the v1.17 contract.
+- **CI** — `actions/setup-python` bumped from `@v5` to `@v7`
+  in `smoke-windows.yml` (Dependabot).
 - **CI** — `auto-approve` caller repinned to `pr-approve` `@v1.16`:
   the reusable now runs the auto-merge arm in a dedicated
   `arm-auto-merge` job so the approve path holds read-only

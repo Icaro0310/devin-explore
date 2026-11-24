@@ -51,4 +51,4 @@ jobs:
     # The arm still needs contents:write on this caller job (workflow-
     # and job-level perms above both grant it); without it the arm
     # warns and waits.
-    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.16
+    uses: Icaro0310/devin-powerups/.github/workflows/pr-approve.yml@v1.17
