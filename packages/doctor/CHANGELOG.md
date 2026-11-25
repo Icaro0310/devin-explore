@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points inside a checkout. The baseline rebuilds on the next run; a
   stale copy under an old `<data-dir>/doctor/` can be deleted by hand.
 
+- `automation` / `janitor-reap` command-line parsing hardening
+  (#143/#144 review waves):
+  - schtasks `<Command>` with spaces is quoted before joining with
+    `<Arguments>`, and a quoted absolute path that does not exist is
+    reported whole (the missing exe) instead of being split into
+    phantom fragments — unless its first word resolves to a real
+    executable, in which case it is still parsed as a command line.
+  - `flock` lockfile operand is now a `parent` target (flock creates
+    the file but not its dir; the fd form `flock 9` names no path),
+    and a shell redirect pending in front of it (`flock -n > log
+    lock cmd`) is attributed to the redirect, not to flock.
+  - `ExecStart=@/exe argv0 args…` — the argv0 word is dropped, so the
+    following token lands in the real subcommand slot instead of
+    shifting every argument one position.
+  - `janitor-reap` shell scanning matches bash/dash reality: `-c`
+    inside a flag cluster (`bash -cl`, `sh -xc`) reads the NEXT token
+    while an attached `-c'cmd'` is not a valid invocation; `+`-prefixed
+    options (`bash +x -c …`) no longer close the option list early;
+    `flock -c` before the lockfile (rejected by util-linux) no longer
+    surfaces its payload as a live reaper.
+
 ### Added
 
 - `toolchain` — missing test/build tools named per-OS with concrete

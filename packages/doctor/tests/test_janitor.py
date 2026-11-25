@@ -1412,11 +1412,23 @@ def test_schtasks_spaced_command_reap_detected(ctx):
 def test_unit_payload_strips_execstart_prefixes():
     """systemd.exec run-semantics prefixes on the executable — '-',
     '@', ':', '+', '!', '!!' and combos — come off when the unit text
-    is read, so '-/path/cmd' still reads as '/path/cmd' (#143 review)."""
-    for prefix in ("-", "@", "+", "!", "!!", "-@", "+!"):
+    is read, so '-/path/cmd' still reads as '/path/cmd' (#143 review).
+    '@' additionally sets argv[0]: the word AFTER the executable is
+    argv0, not an argument — '@/bin/j j reap' runs 'j reap' (#144
+    review), so the fixture names 'j' explicitly."""
+    for prefix in ("-", "+", "!", "!!", "+!", ":"):
         text = (
             "[Service]\n"
             f"ExecStart={prefix}/usr/bin/devin-janitor reap --apply\n"
+        )
+        commands, _wd, _activates = janitor.automation._unit_payload(text)
+        assert commands == [
+            "/usr/bin/devin-janitor reap --apply"
+        ], prefix
+    for prefix in ("@", "-@"):
+        text = (
+            "[Service]\n"
+            f"ExecStart={prefix}/usr/bin/devin-janitor janitor reap --apply\n"
         )
         commands, _wd, _activates = janitor.automation._unit_payload(text)
         assert commands == [
@@ -1483,18 +1495,53 @@ def test_systemd_execstart_prefix_dash_detected(ctx, tmp_path):
 
 def test_parse_reap_args_shell_c_option_clusters(tmp_path):
     """'c' inside a combined short-option cluster — 'bash -lc',
-    'sh -xc', attached '-c<payload>' — still opens the shell's '-c'
-    payload for supported shells (#143 review)."""
+    'sh -xc', 'bash -cl' — still opens the shell's '-c' payload:
+    bash/dash cluster single-letter options and always read the
+    command from the NEXT argument (#144 review)."""
     home = tmp_path / "home"
     for cmd in (
         "bash -lc 'devin-janitor reap --apply --state-file /s.json'",
         "sh -xc 'devin-janitor reap --apply'",
         "zsh -lxc 'devin-janitor reap --apply'",
-        "bash -c'devin-janitor reap --apply'",
+        "bash -cl 'devin-janitor reap --apply'",
         "bash -lo vi -c 'devin-janitor reap --apply'",
+        "bash +x -c 'devin-janitor reap --apply'",
     ):
         args = janitor._parse_reap_args(cmd, home, home)
         assert args is not None and args.apply is True, cmd
+
+
+def test_parse_reap_args_attached_c_is_not_bash(tmp_path):
+    """'bash -c<cmd>' fails in bash and dash — the letters after 'c'
+    are parsed as more options ('-c' never takes an attached arg), so
+    a schedule written that way never runs the reaper (#144 review;
+    verified 'bash -c\\'echo hi\\'' → invalid option)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "bash -c'devin-janitor reap --apply'",
+        "sh -c'devin-janitor reap --apply'",
+    ):
+        assert janitor._parse_reap_args(cmd, home, home) is None, cmd
+
+
+def test_parse_reap_args_flock_c_before_lock_is_invalid(tmp_path):
+    """util-linux rejects 'flock -c <cmd> <lock>' — '-c' is only legal
+    AFTER the lockfile operand ('flock <lock> -c <cmd>', verified
+    rc=64 on 2026-11-25); a pre-lock '-c' payload must not read as a
+    live reaper (#144 review)."""
+    home = tmp_path / "home"
+    assert janitor._parse_reap_args(
+        "flock -c 'devin-janitor reap --apply' /tmp/job.lock",
+        home,
+        home,
+    ) is None
+    # the legal form still parses.
+    args = janitor._parse_reap_args(
+        "flock /tmp/job.lock -c 'devin-janitor reap --apply'",
+        home,
+        home,
+    )
+    assert args is not None and args.apply is True
 
 
 def test_parse_reap_args_script_dash_c_is_not_shell_c(tmp_path):
@@ -1602,15 +1649,18 @@ def test_cron_flock_wrapped_reap_detected(ctx, tmp_path):
     assert "--apply" in findings[0].message
 
 
-def test_automation_flock_lockfile_not_a_target(tmp_path):
+def test_automation_flock_lockfile_parent_target(tmp_path):
     """automation's extractor consumes the same flock operands —
-    '/tmp/reap.lock' is not a missing-path FAIL and the wrapped
-    command still reaches command position (#143 review)."""
+    '/tmp/reap.lock' is a 'parent' target (flock creates the file but
+    not its dir), and the wrapped command still reaches command
+    position (#144 review)."""
     home = tmp_path / "home"
     targets, commands = janitor.automation._task_targets(
         "flock -n /tmp/reap.lock devin-janitor reap --apply",
         posix=True,
         home=home,
     )
-    assert targets == []
+    assert targets == [
+        janitor.automation._Target(Path("/tmp/reap.lock"), "parent")
+    ]
     assert commands == ["devin-janitor"]

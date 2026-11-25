@@ -329,15 +329,18 @@ def _parse_reap_args(
 
 
 def _shell_c_operand(token: str) -> str | None:
-    """The ``-c`` operand carried by a POSIX-shell option token.
+    """``""`` when a POSIX-shell option token carries ``-c`` — the
+    command string is always the NEXT token (``bash -c '…'``,
+    ``bash -lc '…'``); ``None`` when the token is not a ``-c``
+    carrier.
 
-    ``""`` when ``c`` is the cluster's last flag — the command string
-    is the NEXT token (``bash -lc '…'``); the attached command string
-    for ``-cCMD``/``-lcCMD``; ``None`` when the token is not a ``-c``
-    carrier. getopt rules apply: chars before ``c`` must be flag-only
-    letters (an arg-taking option like ``-o`` swallows ``c`` as its
+    getopt rules apply: EVERY cluster char must be a flag-only letter
+    (an arg-taking option like ``-o`` swallows what follows as its
     value), ``--`` long options are not clusters, and ``c`` must be
-    lowercase — ``-C`` is a different option entirely."""
+    lowercase — ``-C`` is a different option entirely. bash and dash
+    never take an attached payload: ``bash -cl`` runs the next arg
+    (``-c -l`` clustered) while ``bash -c'cmd'`` parses ``cmd`` as
+    more option letters and fails — verified 2026-11-25."""
     if (
         not token.startswith("-")
         or token.startswith("--")
@@ -345,13 +348,13 @@ def _shell_c_operand(token: str) -> str | None:
     ):
         return None
     cluster = token[1:]
-    idx = cluster.find("c")
-    if idx < 0:
+    if "c" not in cluster:
         return None
-    before = cluster[:idx]
-    if not all(ch.isalpha() and ch not in _SHELL_ARG_OPTS for ch in before):
+    if not all(
+        ch.isalpha() and ch not in _SHELL_ARG_OPTS for ch in cluster
+    ):
         return None
-    return cluster[idx + 1 :]
+    return ""
 
 
 def _scan_reap_tokens(
@@ -424,23 +427,19 @@ def _scan_reap_tokens(
             # flock's own operands: option flags — '-w'/'-E' (and
             # clustered tails) consume the next token as their value —
             # then exactly ONE lockfile/fd operand before the wrapped
-            # command. '-c'/'--command' run the operand via the shell.
+            # command. util-linux only accepts '-c'/'--command' AFTER
+            # the lockfile ('flock lock -c cmd') — in option position
+            # the call is rejected (rc=64, verified 2026-11-25), so its
+            # value is consumed like any optarg and the payload can
+            # never surface as a live reaper.
             if token.startswith("-") and token != "-":
-                if token in ("-c", "--command"):
-                    shell_next = True
-                elif token.startswith("--command="):
-                    payload = token.partition("=")[2]
-                    if payload and depth < 2:
-                        sub = _parse_reap_args(
-                            payload, cwd, home, depth + 1, posix
-                        )
-                        if sub is not None:
-                            return sub
-                elif (
+                if token in ("-c", "--command") or (
                     token in automation._FLOCK_OPTARG
                     or automation._FLOCK_OPTARG_TAIL.fullmatch(token)
                 ):
                     flock_optarg = True
+                # '--command=x' attached — same invalid position,
+                # nothing to consume.
                 i += 1
                 continue
             if flock_optarg:
@@ -544,25 +543,23 @@ def _scan_reap_tokens(
                 # '--' ends the shell's option list — operands follow.
                 shell_opts = False
             elif token.startswith("-") and token != "-":
-                operand = _shell_c_operand(token)
-                if operand == "":
-                    # '-c' / '-lc' — the command string is NEXT.
+                if _shell_c_operand(token) is not None:
+                    # '-c' anywhere in a flag cluster — the command
+                    # string is the NEXT token ('bash -lc', 'sh -xc',
+                    # 'bash -cl' — bash never reads an attached one).
                     shell_next = True
-                elif operand is not None:
-                    # '-c<payload>' attached ('-cCMD', '-lcCMD').
-                    shell_opts = False
-                    if depth < 2:
-                        sub = _parse_reap_args(
-                            operand, cwd, home, depth + 1, posix
-                        )
-                        if sub is not None:
-                            return sub
                 elif (
                     token in _SHELL_OPTARG
                     or _SHELL_OPTARG_TAIL.fullmatch(token)
                 ):
                     shell_optarg = True
                 # any other option token keeps the option region open
+            elif token.startswith("+") and token != "+":
+                # '+'-prefixed option ('bash +x -c …' — '+' clears the
+                # flag); '+o' takes a value like '-o'. The shell's
+                # option list stays open.
+                if token in ("+o", "+O"):
+                    shell_optarg = True
             else:
                 # first operand after the shell word — its option list
                 # is over; a later '-c' belongs to the script, not the

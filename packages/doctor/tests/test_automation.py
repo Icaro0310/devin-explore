@@ -9,6 +9,7 @@ runs.
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -1107,3 +1108,74 @@ def test_execstart_reset_preserves_pre_post():
         "/usr/bin/true",
         "/opt/tools/teardown",
     ]
+
+
+def test_execstart_at_prefix_drops_argv0():
+    """`ExecStart=@/exe argv0 args…` — the word after the executable
+    is argv[0], not an argument: '@/bin/devin-janitor j reap' execs
+    'devin-janitor reap' with argv0 'j'; leaving argv0 in place shifts
+    every argument one slot (#144 review)."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStart=@/usr/bin/devin-janitor devin-janitor reap --apply\n"
+    )
+    assert cmds == ["/usr/bin/devin-janitor reap --apply"]
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\nExecStart=@/usr/bin/tool runner --go\n"
+    )
+    assert cmds == ["/usr/bin/tool --go"]
+
+
+def test_task_targets_missing_space_path_stays_whole(tmp_path):
+    """A quoted absolute path with spaces is ONE target even when
+    missing — splitting on the space checked phantom fragments and
+    never the real exe (Task Scheduler '<Command>' quoting puts the
+    executable field back together, #144 review)."""
+    targets, _ = automation._task_targets(
+        '"C:\\Program Files\\tools\\backup.exe" --daily',
+        posix=False,
+        home=tmp_path,
+    )
+    assert [t.path.name for t in targets] == [
+        "C:\\Program Files\\tools\\backup.exe"
+    ]
+    targets, _ = automation._task_targets(
+        f'"{tmp_path.as_posix()}/my dir/run.sh"',
+        posix=True,
+        home=tmp_path,
+    )
+    assert [t.path for t in targets] == [
+        tmp_path / "my dir" / "run.sh"
+    ]
+
+
+def test_task_targets_flock_lockfile_parent(tmp_path):
+    """'flock -n /srv/jobs/backup.lock cmd' — flock creates the lock
+    FILE but not its parent dir, so the lockfile is a 'parent' target;
+    the fd form ('flock 9') names no path (#144 review)."""
+    targets, _ = automation._task_targets(
+        "flock -n /srv/jobs/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    paths = {t.path: t.kind for t in targets}
+    assert paths[Path("/srv/jobs/backup.lock")] == "parent"
+    targets, _ = automation._task_targets(
+        "flock -n 9 /usr/bin/true", posix=True, home=tmp_path
+    )
+    assert all(t.path.name != "9" for t in targets)
+
+
+def test_task_targets_flock_pending_redirect_is_not_lockfile(tmp_path):
+    """'flock -n > out.log lock cmd' — the shell claims the word after
+    '>' as the redirect target BEFORE flock sees its arguments, so it
+    must not be consumed as the lockfile (#144 review)."""
+    targets, _ = automation._task_targets(
+        "flock -n > /srv/old/backup.log /tmp/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    paths = {t.path: t.kind for t in targets}
+    assert paths[Path("/srv/old/backup.log")] == "parent"
+    assert paths[Path("/tmp/backup.lock")] == "parent"
+    assert Path("/usr/bin/true") in paths

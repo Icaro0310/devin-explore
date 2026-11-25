@@ -307,7 +307,16 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
                 # '-/path/cmd', '@/path', ':/path', '+!/path' — the
                 # systemd.exec run-semantics prefixes come off so the
                 # executable still lands in command position.
-                exec_lists[key].append(_EXEC_PREFIX.sub("", value))
+                command = _EXEC_PREFIX.sub("", value)
+                prefix = _EXEC_PREFIX.match(value)
+                if prefix and "@" in prefix.group(0):
+                    # 'ExecStart=@/exe argv0 args…' — the word after
+                    # the executable is argv[0], NOT an argument:
+                    # '@/bin/j j reap' runs 'j reap' with argv0 'j',
+                    # so argv0 must not occupy the subcommand slot.
+                    segs = command.split(None, 2)
+                    command = " ".join([segs[0], *segs[2:]])
+                exec_lists[key].append(command)
             else:
                 # an empty directive in a drop-in CLEARS every earlier
                 # instance of ITS OWN list — 'cat' concatenates
@@ -595,8 +604,28 @@ def _task_targets(
         # when it actually looks command-like (contains a path or a
         # separator), so 'echo "some words"' is not mistaken for one.
         if re.search(r"\s", token):
-            if _resolve_path(token, cwd).exists():
-                targets.append(_Target(_resolve_path(token, cwd), "exists"))
+            resolved_token = _resolve_path(token, cwd)
+            if resolved_token.exists():
+                targets.append(_Target(resolved_token, "exists"))
+            elif (
+                (
+                    token.startswith(("/", "~"))
+                    or _WINDOWS_ABS.match(token)
+                )
+                and not re.search(r"[|&;<>]", token)
+                and not _resolve_path(
+                    token.split(None, 1)[0], cwd
+                ).exists()
+            ):
+                # ONE absolute path that happens to contain spaces
+                # ('"C:\Program Files\tools\job.exe"', '"/srv/my dir/
+                # run.sh"') — splitting it on the space would check
+                # phantom fragments and never the real path; the whole
+                # token is the reference, missing or not. If the FIRST
+                # word resolves to something on disk the token is a
+                # command line instead ('/usr/bin/python3 scripts/x.py')
+                # and falls through to the recursion below.
+                targets.append(_Target(resolved_token, "exists"))
             elif depth < _MAX_DEPTH and re.search(r"[/\\|&;<>]", token):
                 sub_t, sub_c = _task_targets(
                     token, posix=posix, home=cwd, cwd=cwd,
@@ -674,8 +703,8 @@ def _task_targets(
             if flock_lockfile:
                 # flock's own operands — option flags ('-w'/'-E' take
                 # the next token as value) then exactly ONE lockfile/
-                # fd operand. None of them is a target or a command;
-                # the wrapped command follows them in command position.
+                # fd operand; the wrapped command follows them in
+                # command position.
                 if flock_optarg:
                     flock_optarg = False
                     continue
@@ -686,8 +715,27 @@ def _task_targets(
                     ):
                         flock_optarg = True
                     continue
-                flock_lockfile = False
-                continue
+                if redirect_next is not None:
+                    # 'flock -n > out.log lock cmd' — the shell claims
+                    # this word as the pending redirect's target BEFORE
+                    # flock sees its arguments; fall through so the
+                    # redirect-dest check records it, and flock's
+                    # operand position stays open for the lockfile.
+                    pass
+                else:
+                    flock_lockfile = False
+                    expanded = os.path.expandvars(piece)
+                    if not re.fullmatch(r"\d+", expanded) and (
+                        not _UNRESOLVABLE.search(expanded)
+                    ):
+                        # path lockfile — flock creates the FILE but
+                        # not its parent dir, so a removed dir breaks
+                        # the task ('parent' kind). The fd form
+                        # ('flock 9') names no path at all.
+                        targets.append(
+                            _Target(_resolve_path(expanded, cwd), "parent")
+                        )
+                    continue
             if piece in _CONTROL_WORDS:
                 # 'flock' only wraps a command in command position —
                 # as another command's argument ('runner flock x') it
