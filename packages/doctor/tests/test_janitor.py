@@ -758,11 +758,13 @@ def test_calendar_interval_iter_dot_format():
     runner = make_runner({
         ("systemd-analyze", "calendar", "--iterations=4", "expr"): (
             0,
-            "Normalized form: x\n"
-            "    Next elapse: Thu 2026-11-26 05:30:00 WET\n"
-            "       Iter. #2: Fri 2026-11-27 05:30:00 WET\n"
-            "       Iter. #3: Sat 2026-11-28 05:30:00 WET\n"
-            "       Iter. #4: Sun 2026-11-29 05:30:00 WET\n",
+            (
+                "Normalized form: x\n"
+                "    Next elapse: Thu 2026-11-26 05:30:00 WET\n"
+                "       Iter. #2: Fri 2026-11-27 05:30:00 WET\n"
+                "       Iter. #3: Sat 2026-11-28 05:30:00 WET\n"
+                "       Iter. #4: Sun 2026-11-29 05:30:00 WET\n"
+            ),
         ),
     })
     assert janitor._calendar_interval_seconds(runner, "expr") == 86400.0
@@ -852,8 +854,10 @@ def test_systemd_scan_only_cats_matching_units(ctx, tmp_path):
         ("systemctl", "--user", "list-units", "--type=service,timer",
          "--all", "--no-legend", "--no-pager"): (
             0,
-            "devin-janitor-reap.timer   loaded active waiting   t\n"
-            "unrelated.timer            loaded active waiting   u\n",
+            (
+                "devin-janitor-reap.timer   loaded active waiting   t\n"
+                "unrelated.timer            loaded active waiting   u\n"
+            ),
         ),
         ("systemctl", "--user", "list-unit-files",
          "--type=service,timer", "--no-legend", "--no-pager"): (1, ""),
@@ -891,8 +895,12 @@ def test_schtasks_only_queries_matching_tasks(ctx, tmp_path):
     calls = []
     base = make_runner({
         ("schtasks", "/query", "/fo", "csv", "/nh"): (
-            0, '"\\\\janitor reap","N/A","x"\n'
-               '"\\\\other task","N/A","x"\n'),
+            0,
+            (
+                '"\\\\janitor reap","N/A","x"\n'
+                '"\\\\other task","N/A","x"\n'
+            ),
+        ),
         ("schtasks", "/query", "/tn", "\\janitor reap", "/xml"): (0, xml),
         ("crontab", "-l"): (1, "no crontab for u", ""),
     })
