@@ -109,7 +109,9 @@ def _systemd_table(
     """Runner table for a devin-janitor-reap.timer + .service pair."""
     state = tmp_path / "state" / "janitor-reap.json"
     ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
-    cmd = exec_start.format(state=state, ledger=ledger)
+    # as_posix(): backslash paths would not survive the POSIX shlex
+    # lexer the check applies to scheduled commands on Windows.
+    cmd = exec_start.format(state=state.as_posix(), ledger=ledger.as_posix())
     if service_text is None:
         service_text = SERVICE_TEMPLATE.format(exec_start=cmd)
     unit_names = units or [
@@ -313,7 +315,10 @@ def test_dry_run_within_calibration_passes(ctx, tmp_path):
 def test_cron_reap_healthy_passes(ctx, tmp_path):
     state = tmp_path / "home" / ".devin" / "janitor-reap.json"
     ledger = tmp_path / "home" / ".devin" / "memory" / "janitor-reap-ledger.jsonl"
-    command = f"devin-janitor reap --apply --state-file {state} --ledger-file {ledger}"
+    command = (
+        "devin-janitor reap --apply "
+        f"--state-file {state.as_posix()} --ledger-file {ledger.as_posix()}"
+    )
     _write_state(state, first_seen={"1:2": NOW - 3600})
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text("x\n")
@@ -434,7 +439,10 @@ def test_state_file_stale_warns(ctx, tmp_path):
 def test_cron_state_stale_warns(ctx, tmp_path):
     state = tmp_path / "home" / ".devin" / "janitor-reap.json"
     ledger = tmp_path / "home" / ".devin" / "memory" / "janitor-reap-ledger.jsonl"
-    command = f"devin-janitor reap --apply --state-file {state} --ledger-file {ledger}"
+    command = (
+        "devin-janitor reap --apply "
+        f"--state-file {state.as_posix()} --ledger-file {ledger.as_posix()}"
+    )
     _write_state(state, first_seen={"1:2": NOW - 3600})
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text("x\n")
@@ -518,7 +526,7 @@ def test_trigger_fires_but_state_never_written(ctx, tmp_path):
 def test_service_without_timer_is_unscheduled(ctx, tmp_path):
     state = tmp_path / "state" / "janitor-reap.json"
     ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
-    cmd = EXEC_APPLY.format(state=state, ledger=ledger)
+    cmd = EXEC_APPLY.format(state=state.as_posix(), ledger=ledger.as_posix())
     table = {
         (
             "systemctl",
@@ -592,7 +600,10 @@ def test_unreadable_execstart_warns_unverifiable(ctx, tmp_path):
 def test_non_linux_reap_schedule_warns(ctx, tmp_path):
     state = tmp_path / "home" / ".devin" / "janitor-reap.json"
     ledger = tmp_path / "home" / ".devin" / "memory" / "janitor-reap-ledger.jsonl"
-    command = f"devin-janitor reap --apply --state-file {state} --ledger-file {ledger}"
+    command = (
+        "devin-janitor reap --apply "
+        f"--state-file {state.as_posix()} --ledger-file {ledger.as_posix()}"
+    )
     table = {
         ("crontab", "-l"): (0, f"*/5 * * * * {command}\n"),
     }

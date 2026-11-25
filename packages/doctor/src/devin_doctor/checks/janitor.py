@@ -212,7 +212,11 @@ def _resolve_arg_path(value: str, cwd: Path, home: Path) -> Path:
     systemd ExecStart specifiers and cron's home cwd both land here."""
     expanded = os.path.expandvars(value).replace("%h", str(home))
     path = Path(os.path.expanduser(expanded))
-    if not path.is_absolute():
+    # Only genuinely relative paths join cwd. A rooted-but-driveless
+    # path (``/a/b`` on Windows — ``is_absolute()`` is False there yet
+    # ``root`` is set) must pass through unchanged: joining it would
+    # silently re-root it onto cwd's drive.
+    if not path.is_absolute() and not path.root:
         path = cwd / path
     return path
 
