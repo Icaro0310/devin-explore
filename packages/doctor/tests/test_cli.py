@@ -84,6 +84,7 @@ def test_check_json_schema(ctx, capsys):
         "disk",
         "updates",
         "automation",
+        "janitor-reap",
         "path-check",
         "publish-readiness",
         "toolchain",
