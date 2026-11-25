@@ -1524,6 +1524,20 @@ def test_parse_reap_args_attached_c_is_not_bash(tmp_path):
         assert janitor._parse_reap_args(cmd, home, home) is None, cmd
 
 
+def test_parse_reap_args_invalid_or_noexec_clusters(tmp_path):
+    """'bash -cz' aborts on the unknown 'z' and 'bash -cn' is noexec
+    (the payload is parsed but never run) — either way the reaper
+    never executes, so neither reads as a live schedule (#144
+    re-review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "bash -cz 'devin-janitor reap --apply'",
+        "bash -cn 'devin-janitor reap --apply'",
+        "dash -cn 'devin-janitor reap --apply'",
+    ):
+        assert janitor._parse_reap_args(cmd, home, home) is None, cmd
+
+
 def test_parse_reap_args_flock_c_before_lock_is_invalid(tmp_path):
     """util-linux rejects 'flock -c <cmd> <lock>' — '-c' is only legal
     AFTER the lockfile operand ('flock <lock> -c <cmd>', verified

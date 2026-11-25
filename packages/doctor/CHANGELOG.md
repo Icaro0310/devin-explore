@@ -100,13 +100,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lock cmd`) is attributed to the redirect, not to flock.
   - `ExecStart=@/exe argv0 args…` — the argv0 word is dropped, so the
     following token lands in the real subcommand slot instead of
-    shifting every argument one position.
+    shifting every argument one position; the split is quote-aware
+    (`@/bin/j "cleanup worker" reap`).
   - `janitor-reap` shell scanning matches bash/dash reality: `-c`
     inside a flag cluster (`bash -cl`, `sh -xc`) reads the NEXT token
     while an attached `-c'cmd'` is not a valid invocation; `+`-prefixed
     options (`bash +x -c …`) no longer close the option list early;
-    `flock -c` before the lockfile (rejected by util-linux) no longer
-    surfaces its payload as a live reaper.
+    cluster letters are limited to real bash invocation flags — an
+    unknown one (`-z`) aborts and `-n` is noexec, so neither surfaces
+    a reaper that never runs; `flock -c` before the lockfile
+    (rejected by util-linux) no longer surfaces its payload.
+  - a missing executable reported from a `-c` payload names the exe
+    alone (`/missing/exe`), not the payload string with its
+    arguments; a relative `flock` lockfile under a wrapper-changed
+    cwd (`repo-cron.sh`/`pas-cron.sh`) is unverifiable, not missing.
 
 ### Added
 

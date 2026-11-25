@@ -108,6 +108,13 @@ _REAP_WRAPPER_EXE = re.compile(
 # A cluster ENDING in o/O ('-lo vi') takes the next argv as the
 # value; '-o=x' carries it attached.
 _SHELL_ARG_OPTS = frozenset("oO")
+
+# Single-letter flags bash accepts at INVOCATION: the non-set flags
+# ('c', 'i', 'r', 's', 'D', 'l') plus the 'set' letters — minus the
+# arg-taking 'o'/'O' and minus 'n' (noexec: bash parses the '-c'
+# string but never runs it). A letter outside this set makes bash
+# abort with 'invalid option' before the payload can run.
+_SHELL_FLAG_OPTS = frozenset("abcefhiklmprstuvxBCDEHPT")
 _SHELL_OPTARG = frozenset({"--rcfile", "--init-file"})
 _SHELL_OPTARG_TAIL = re.compile(r"-[A-Za-z]*[oO]")
 
@@ -334,13 +341,16 @@ def _shell_c_operand(token: str) -> str | None:
     ``bash -lc '…'``); ``None`` when the token is not a ``-c``
     carrier.
 
-    getopt rules apply: EVERY cluster char must be a flag-only letter
-    (an arg-taking option like ``-o`` swallows what follows as its
-    value), ``--`` long options are not clusters, and ``c`` must be
-    lowercase — ``-C`` is a different option entirely. bash and dash
-    never take an attached payload: ``bash -cl`` runs the next arg
-    (``-c -l`` clustered) while ``bash -c'cmd'`` parses ``cmd`` as
-    more option letters and fails — verified 2026-11-25."""
+    bash and dash cluster single-letter options and never take an
+    attached payload: ``bash -cl`` runs the next arg (``-c -l``)
+    while ``bash -c'cmd'`` parses ``cmd`` as more option letters and
+    fails — verified 2026-11-25. Every cluster char must therefore be
+    a REAL bash invocation flag letter (an unknown one like ``-z``
+    aborts before the payload runs) and ``-n`` is excluded on
+    purpose: noexec parses the ``-c`` string but never executes it,
+    so ``bash -cn '…reap…'`` is an inert schedule, not a live one.
+    ``--`` long options are not clusters and ``c`` must be lowercase
+    — ``-C`` is a different option entirely."""
     if (
         not token.startswith("-")
         or token.startswith("--")
@@ -350,9 +360,7 @@ def _shell_c_operand(token: str) -> str | None:
     cluster = token[1:]
     if "c" not in cluster:
         return None
-    if not all(
-        ch.isalpha() and ch not in _SHELL_ARG_OPTS for ch in cluster
-    ):
+    if not all(ch in _SHELL_FLAG_OPTS for ch in cluster):
         return None
     return ""
 

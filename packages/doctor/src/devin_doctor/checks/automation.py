@@ -314,8 +314,14 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
                     # the executable is argv[0], NOT an argument:
                     # '@/bin/j j reap' runs 'j reap' with argv0 'j',
                     # so argv0 must not occupy the subcommand slot.
-                    segs = command.split(None, 2)
-                    command = " ".join([segs[0], *segs[2:]])
+                    # Quote-aware split — argv0 can itself be quoted
+                    # ('@/bin/j "cleanup worker" reap').
+                    try:
+                        words = shlex.split(command, posix=True)
+                    except ValueError:
+                        words = command.split()
+                    if words:
+                        command = shlex.join([words[0], *words[2:]])
                 exec_lists[key].append(command)
             else:
                 # an empty directive in a drop-in CLEARS every earlier
@@ -617,15 +623,34 @@ def _task_targets(
                     token.split(None, 1)[0], cwd
                 ).exists()
             ):
-                # ONE absolute path that happens to contain spaces
-                # ('"C:\Program Files\tools\job.exe"', '"/srv/my dir/
-                # run.sh"') — splitting it on the space would check
-                # phantom fragments and never the real path; the whole
-                # token is the reference, missing or not. If the FIRST
-                # word resolves to something on disk the token is a
-                # command line instead ('/usr/bin/python3 scripts/x.py')
-                # and falls through to the recursion below.
-                targets.append(_Target(resolved_token, "exists"))
+                # An absolute-path-shaped token with spaces whose first
+                # word is NOT on disk. Two shapes share this form:
+                #   - '"/srv/my dir/run.sh"', '"C:\Program Files\tools\
+                #     job.exe"' — ONE path with spaces inside it; a
+                #     continuation word still carries a separator.
+                #   - '"/missing/exe --flag arg"' — exe + arguments; the
+                #     missing reference is the executable alone.
+                # Trailing flag words peel off ('--daily'), then a
+                # separator in any continuation word marks the first
+                # shape. If the FIRST word resolves the token is a
+                # command line ('/usr/bin/python3 scripts/x.py') and
+                # falls through to the recursion below.
+                words = token.split()
+                while len(words) > 1 and words[-1].startswith("-"):
+                    words.pop()
+                if any(
+                    "/" in w or "\\" in w or w.startswith("~")
+                    for w in words[1:]
+                ):
+                    targets.append(
+                        _Target(
+                            _resolve_path(" ".join(words), cwd), "exists"
+                        )
+                    )
+                else:
+                    targets.append(
+                        _Target(_resolve_path(words[0], cwd), "exists")
+                    )
             elif depth < _MAX_DEPTH and re.search(r"[/\\|&;<>]", token):
                 sub_t, sub_c = _task_targets(
                     token, posix=posix, home=cwd, cwd=cwd,
@@ -725,16 +750,28 @@ def _task_targets(
                 else:
                     flock_lockfile = False
                     expanded = os.path.expandvars(piece)
-                    if not re.fullmatch(r"\d+", expanded) and (
-                        not _UNRESOLVABLE.search(expanded)
+                    if (
+                        re.fullmatch(r"\d+", expanded)
+                        or _UNRESOLVABLE.search(expanded)
                     ):
-                        # path lockfile — flock creates the FILE but
-                        # not its parent dir, so a removed dir breaks
-                        # the task ('parent' kind). The fd form
-                        # ('flock 9') names no path at all.
-                        targets.append(
-                            _Target(_resolve_path(expanded, cwd), "parent")
-                        )
+                        # the fd form ('flock 9') names no path;
+                        # an unresolvable var is not checkable.
+                        continue
+                    if (
+                        unverifiable_cwd
+                        and not Path(expanded).is_absolute()
+                        and not expanded.startswith("~")
+                    ):
+                        # relative under a wrapper-changed cwd
+                        # ('repo-cron.sh'/'pas-cron.sh') — the same
+                        # skip the plain path-arg rule applies.
+                        continue
+                    # path lockfile — flock creates the FILE but
+                    # not its parent dir, so a removed dir breaks
+                    # the task ('parent' kind).
+                    targets.append(
+                        _Target(_resolve_path(expanded, cwd), "parent")
+                    )
                     continue
             if piece in _CONTROL_WORDS:
                 # 'flock' only wraps a command in command position —
