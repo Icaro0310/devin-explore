@@ -1352,3 +1352,265 @@ def test_journalctl_hint_names_activated_service(ctx, tmp_path):
         assert (
             f"journalctl --user -u {expected}" in findings[0].fix
         ), unit_directive
+
+
+# ---------------------------------------------------------------------------
+# Devin Review wave 2 — schtasks Command/Arguments split, systemd ExecStart
+# prefixes, shell '-c' clusters, flock lockfile operand
+# ---------------------------------------------------------------------------
+
+
+def test_schtasks_spaced_command_stays_one_argument():
+    """'<Command>' is the executable ALONE — Task Scheduler stores it
+    separately from '<Arguments>'. 'C:\\Program Files\\…' + args must
+    not re-split into a phantom 'C:\\Program' path that FAILs the
+    inventory and hides the reaper (#143 review)."""
+    xml = """<?xml version="1.0"?>
+<Task><Actions><Exec>
+<Command>C:\\Program Files\\Tools\\devin-janitor.exe</Command>
+<Arguments>reap --apply</Arguments>
+</Exec></Actions></Task>"""
+    commands = janitor.automation._schtasks_commands(xml)
+    assert commands == [
+        '"C:\\Program Files\\Tools\\devin-janitor.exe" reap --apply'
+    ]
+
+
+def test_schtasks_spaced_command_reap_detected(ctx):
+    """End-to-end: an action whose Command contains spaces (and whose
+    Arguments carry no quotes) still surfaces as a reap schedule —
+    the Windows surface warns Linux-only like any other (#143 review)."""
+    xml = """<?xml version="1.0"?>
+<Task><Actions><Exec>
+<Command>C:\\Program Files\\Tools\\devin-janitor.exe</Command>
+<Arguments>reap --apply</Arguments>
+</Exec></Actions></Task>"""
+    table = {
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (
+            0,
+            '"\\\\nightly sweep","N/A","Ready"\n',
+        ),
+        ("schtasks", "/query", "/tn", "\\nightly sweep", "/xml"): (0, xml),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(ctx, table, plat="windows")
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "Linux-only" in findings[0].message
+    assert "nightly sweep" in findings[0].message
+
+
+def test_unit_payload_strips_execstart_prefixes():
+    """systemd.exec run-semantics prefixes on the executable — '-',
+    '@', ':', '+', '!', '!!' and combos — come off when the unit text
+    is read, so '-/path/cmd' still reads as '/path/cmd' (#143 review)."""
+    for prefix in ("-", "@", "+", "!", "!!", "-@", "+!"):
+        text = (
+            "[Service]\n"
+            f"ExecStart={prefix}/usr/bin/devin-janitor reap --apply\n"
+        )
+        commands, _wd, _activates = janitor.automation._unit_payload(text)
+        assert commands == [
+            "/usr/bin/devin-janitor reap --apply"
+        ], prefix
+
+
+def test_systemd_execstart_prefix_dash_detected(ctx, tmp_path):
+    """'ExecStart=-/…/devin-janitor reap …' — systemd's
+    ignore-exit-status prefix must not hide the exe: the classifier
+    used to keep the '-' and discard the exe as an option, missing
+    the reaper on a generically-named timer (#143 review)."""
+    state = tmp_path / "state" / "janitor-reap.json"
+    ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
+    exec_cmd = "-" + EXEC_APPLY.format(
+        state=state.as_posix(), ledger=ledger.as_posix()
+    )
+    base = make_runner({
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (
+            0,
+            "devin-cleanup.timer   loaded active waiting   t\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "list-unit-files",
+            "--type=service,timer",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+        ("systemctl", "--user", "cat", "devin-cleanup.timer"): (
+            0,
+            TIMER_UNIT,
+        ),
+        ("systemctl", "--user", "cat", "devin-cleanup.service"): (
+            0,
+            SERVICE_TEMPLATE.format(exec_start=exec_cmd),
+        ),
+        ("systemctl", "--user", "is-active", "devin-cleanup.timer"): (
+            0,
+            "active\n",
+        ),
+        ("systemctl", "--user", "is-enabled", "devin-cleanup.timer"): (
+            0,
+            "enabled\n",
+        ),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+    })
+    findings = janitor.run(
+        ctx, runner=base, which=lambda c: None, plat="linux", now_s=NOW
+    )
+    assert findings[0].status is Status.PASS
+    assert "--apply" in findings[0].message
+    assert "not scheduled" not in findings[0].message.lower()
+
+
+def test_parse_reap_args_shell_c_option_clusters(tmp_path):
+    """'c' inside a combined short-option cluster — 'bash -lc',
+    'sh -xc', attached '-c<payload>' — still opens the shell's '-c'
+    payload for supported shells (#143 review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "bash -lc 'devin-janitor reap --apply --state-file /s.json'",
+        "sh -xc 'devin-janitor reap --apply'",
+        "zsh -lxc 'devin-janitor reap --apply'",
+        "bash -c'devin-janitor reap --apply'",
+        "bash -lo vi -c 'devin-janitor reap --apply'",
+    ):
+        args = janitor._parse_reap_args(cmd, home, home)
+        assert args is not None and args.apply is True, cmd
+
+
+def test_parse_reap_args_script_dash_c_is_not_shell_c(tmp_path):
+    """Once the shell's operand (the script name) appears its option
+    list is over — 'bash deploy.sh -c …' passes '-c' to the SCRIPT,
+    not to bash; treating the payload as a -c string would invent a
+    reaper that never runs (#143 review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "bash deploy.sh -c 'devin-janitor reap --apply'",
+        "sh -c 'true' script.sh -c 'devin-janitor reap --apply'",
+        "bash -- -c 'devin-janitor reap --apply'",
+    ):
+        assert janitor._parse_reap_args(cmd, home, home) is None, cmd
+
+
+def test_cron_bash_lc_reap_detected(ctx, tmp_path):
+    """End-to-end cron: 'bash -lc' (login shell + command) must reach
+    the nested reap invocation like plain 'sh -c' does (#143 review)."""
+    home = tmp_path / "home"
+    table = {
+        ("crontab", "-l"): (
+            0,
+            "*/5 * * * * bash -lc 'devin-janitor reap --apply'\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.PASS
+    assert findings[0].message.startswith("janitor reap (cron:")
+    assert "--apply" in findings[0].message
+
+
+def test_parse_reap_args_flock_wrapped_reap(tmp_path):
+    """'flock [opts] <lockfile> <cmd>' — flock consumes its options
+    and exactly ONE lockfile/fd operand before the wrapped command;
+    the lockfile must not read as the executable (#143 review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "flock -n /tmp/reap.lock devin-janitor reap --apply",
+        "flock /tmp/reap.lock devin-janitor reap --apply",
+        "/usr/bin/flock -n /tmp/reap.lock devin-janitor reap --apply",
+        "flock -w 5 /tmp/reap.lock devin-janitor reap --apply",
+        "flock -nw 5 /tmp/reap.lock devin-janitor reap --apply",
+        "flock 9 devin-janitor reap --apply",
+        "timeout 30 flock -n /tmp/l devin-janitor reap --apply",
+        "flock /tmp/l bash -lc 'devin-janitor reap --apply'",
+    ):
+        args = janitor._parse_reap_args(cmd, home, home)
+        assert args is not None and args.apply is True, cmd
+
+
+def test_parse_reap_args_flock_dash_c_and_script_guard(tmp_path):
+    """'flock <file> -c <cmd>' runs the operand via the shell — the
+    payload is a nested command line; but once the WRAPPED command
+    appears, a later '-c' belongs to it, not to a shell (#143 review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "flock -n /tmp/reap.lock -c 'devin-janitor reap --apply'",
+        "flock /tmp/x.lock --command 'devin-janitor reap --apply'",
+    ):
+        args = janitor._parse_reap_args(cmd, home, home)
+        assert args is not None and args.apply is True, cmd
+    assert (
+        janitor._parse_reap_args(
+            "flock /tmp/l deploy.sh -c 'devin-janitor reap --apply'",
+            home,
+            home,
+        )
+        is None
+    )
+
+
+def test_cron_flock_wrapped_reap_detected(ctx, tmp_path):
+    """End-to-end cron: the common 'flock -n <lock> devin-janitor
+    reap' idiom must schedule-detect like the bare command (#143
+    review)."""
+    home = tmp_path / "home"
+    table = {
+        ("crontab", "-l"): (
+            0,
+            "*/5 * * * * flock -n /tmp/reap.lock devin-janitor reap --apply\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.PASS
+    assert findings[0].message.startswith("janitor reap (cron:")
+    assert "--apply" in findings[0].message
+
+
+def test_automation_flock_lockfile_not_a_target(tmp_path):
+    """automation's extractor consumes the same flock operands —
+    '/tmp/reap.lock' is not a missing-path FAIL and the wrapped
+    command still reaches command position (#143 review)."""
+    home = tmp_path / "home"
+    targets, commands = janitor.automation._task_targets(
+        "flock -n /tmp/reap.lock devin-janitor reap --apply",
+        posix=True,
+        home=home,
+    )
+    assert targets == []
+    assert commands == ["devin-janitor"]

@@ -76,6 +76,10 @@ _UNRESOLVABLE = re.compile(r"[*?[\]${}%`]")
 _WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 _SYSTEMD_UNIT = re.compile(r"^(\S+\.(?:service|timer))\s")
 _EXEC_LINE = re.compile(r"^ExecStart(?:Pre|Post)?=(.*)$")
+# systemd.exec prefix chars on the executable ('-', '@', ':', '+',
+# '!', '!!' — combinable) tune HOW the unit runs, not WHAT runs —
+# '-/path/cmd' must still read as '/path/cmd' downstream.
+_EXEC_PREFIX = re.compile(r"^[-@:+!]+(?=\S)")
 
 # Words that keep command position open: shell syntax and prefix wrappers
 # (``sudo cmd``, ``flock -n /x cmd``, ``env A=1 cmd`` — the payload still
@@ -86,6 +90,14 @@ _CONTROL_WORDS = frozenset({
     "nohup", "nice", "flock", "chronic", "timeout", "stdbuf", "command",
     "exec", "eval", "xargs", "parallel", "watch", "setsid",
 })
+
+# flock(1) options that consume the NEXT token as their value —
+# '-w/--timeout', '-E/--conflict-exit-code' (util-linux). A short-
+# option cluster ENDING in w/E ('-nw') takes the next argv too;
+# '-w5' carries the value attached and needs nothing extra. Shared
+# with the janitor check's reap scanner.
+_FLOCK_OPTARG = frozenset({"-w", "-E", "--timeout", "--conflict-exit-code"})
+_FLOCK_OPTARG_TAIL = re.compile(r"-[A-Za-z]*[wE]")
 
 # Words that consume command position but are always present (shell
 # builtins) — never worth a PATH lookup.
@@ -292,7 +304,10 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
             key = stripped.split("=", 1)[0]
             value = exec_match.group(1).strip()
             if value:
-                exec_lists[key].append(value)
+                # '-/path/cmd', '@/path', ':/path', '+!/path' — the
+                # systemd.exec run-semantics prefixes come off so the
+                # executable still lands in command position.
+                exec_lists[key].append(_EXEC_PREFIX.sub("", value))
             else:
                 # an empty directive in a drop-in CLEARS every earlier
                 # instance of ITS OWN list — 'cat' concatenates
@@ -425,11 +440,21 @@ def _schtasks_commands(xml_text: str) -> list[str]:
         command = exec_action.findtext("{*}Command")
         if not command:
             continue
+        command = command.strip()
+        # '<Command>' is the executable ALONE — Task Scheduler keeps it
+        # separate from '<Arguments>'. A path with spaces must stay ONE
+        # argument or the joined text re-splits it ('C:\Program Files\…'
+        # → phantom 'C:\Program' target, missed exe) — quote it the way
+        # a command line would.
+        if re.search(r"\s", command) and not (
+            command.startswith('"') and command.endswith('"')
+        ):
+            command = f'"{command}"'
         arguments = exec_action.findtext("{*}Arguments")
         commands.append(
-            f"{command.strip()} {arguments.strip()}".strip()
+            f"{command} {arguments.strip()}".strip()
             if arguments
-            else command.strip()
+            else command
         )
     return commands
 
@@ -555,6 +580,11 @@ def _task_targets(
     payload_next = False
     # next token is a shell '-c' payload — a nested command line.
     shell_next = False
+    # 'flock [opts] <file|fd> <cmd>' — True while flock's own option
+    # flags and its ONE lockfile operand are still being consumed;
+    # only then does the wrapped command sit in command position.
+    flock_lockfile = False
+    flock_optarg = False
     last_cmd: str | None = None
     for raw in tokens:
         token = raw.strip("\"'`")
@@ -617,6 +647,8 @@ def _task_targets(
                 redirect_next = None
                 payload_next = False
                 shell_next = False
+                flock_lockfile = False
+                flock_optarg = False
                 last_cmd = None
                 continue
             if _ENV_ASSIGNMENT.match(piece):
@@ -639,7 +671,29 @@ def _task_targets(
                     targets += sub_t
                     commands += sub_c
                 continue
+            if flock_lockfile:
+                # flock's own operands — option flags ('-w'/'-E' take
+                # the next token as value) then exactly ONE lockfile/
+                # fd operand. None of them is a target or a command;
+                # the wrapped command follows them in command position.
+                if flock_optarg:
+                    flock_optarg = False
+                    continue
+                if piece.startswith("-") and piece != "-":
+                    if (
+                        piece in _FLOCK_OPTARG
+                        or _FLOCK_OPTARG_TAIL.fullmatch(piece)
+                    ):
+                        flock_optarg = True
+                    continue
+                flock_lockfile = False
+                continue
             if piece in _CONTROL_WORDS:
+                # 'flock' only wraps a command in command position —
+                # as another command's argument ('runner flock x') it
+                # must not eat the following operand.
+                if piece == "flock" and expect_cmd:
+                    flock_lockfile = True
                 continue
             if piece == "cd":
                 cd_next = True

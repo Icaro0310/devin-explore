@@ -101,6 +101,16 @@ _REAP_WRAPPER_EXE = re.compile(
     r"^devin-janitor-reap(?:\.(?:sh|exe|bat|cmd|ps1))?$", re.IGNORECASE
 )
 
+# POSIX-shell short options that take a VALUE (bash/zsh/ksh '-o'/
+# '-O') — inside an option cluster they swallow the rest, so a 'c'
+# behind one is their value, not the '-c' flag. Long shell options
+# whose next token is a value, never the '-c' payload ('--rcfile x').
+# A cluster ENDING in o/O ('-lo vi') takes the next argv as the
+# value; '-o=x' carries it attached.
+_SHELL_ARG_OPTS = frozenset("oO")
+_SHELL_OPTARG = frozenset({"--rcfile", "--init-file"})
+_SHELL_OPTARG_TAIL = re.compile(r"-[A-Za-z]*[oO]")
+
 # janitor cli.py defaults (devin_janitor/cli.py + reap.py) — mirrored so
 # an ExecStart that omits the flags resolves the same paths the tool
 # would use, relative to the unit's WorkingDirectory (home for user
@@ -302,10 +312,12 @@ def _parse_reap_args(
     the wrapped command line) at the start of a pipeline segment.
     Arguments to other programs — ``grep 'devin-janitor reap' …``
     included — are never invocations; only executable payloads recurse
-    (a POSIX shell's ``-c`` string, the wrapper's argument tail),
-    bounded by ``depth``. ``cd DIR`` prefixes move relative flag-path
-    resolution and are tracked only up to the ``reap`` token itself —
-    a ``cd`` later in the line cannot retroactively move them."""
+    (a POSIX shell's ``-c`` string — bare or inside an option cluster
+    like ``bash -lc`` — the wrapper's argument tail, flock's ``-c``
+    operand), bounded by ``depth``. ``cd DIR`` prefixes move relative
+    flag-path resolution and are tracked only up to the ``reap`` token
+    itself — a ``cd`` later in the line cannot retroactively move
+    them."""
     tokens: list[str] = []
     for raw in _lex(command, posix):
         # posix=False keeps quote characters on grouped tokens —
@@ -316,6 +328,32 @@ def _parse_reap_args(
     return _scan_reap_tokens(tokens, cwd, home, depth, posix)
 
 
+def _shell_c_operand(token: str) -> str | None:
+    """The ``-c`` operand carried by a POSIX-shell option token.
+
+    ``""`` when ``c`` is the cluster's last flag — the command string
+    is the NEXT token (``bash -lc '…'``); the attached command string
+    for ``-cCMD``/``-lcCMD``; ``None`` when the token is not a ``-c``
+    carrier. getopt rules apply: chars before ``c`` must be flag-only
+    letters (an arg-taking option like ``-o`` swallows ``c`` as its
+    value), ``--`` long options are not clusters, and ``c`` must be
+    lowercase — ``-C`` is a different option entirely."""
+    if (
+        not token.startswith("-")
+        or token.startswith("--")
+        or len(token) < 2
+    ):
+        return None
+    cluster = token[1:]
+    idx = cluster.find("c")
+    if idx < 0:
+        return None
+    before = cluster[:idx]
+    if not all(ch.isalpha() and ch not in _SHELL_ARG_OPTS for ch in before):
+        return None
+    return cluster[idx + 1 :]
+
+
 def _scan_reap_tokens(
     tokens: list[str], cwd: Path, home: Path, depth: int, posix: bool
 ) -> _ReapArgs | None:
@@ -324,12 +362,25 @@ def _scan_reap_tokens(
     the recognition rules. Command position opens at the start and
     after every shell operator; env assignments, control words
     (``sudo``, ``env``, …) and stray option tokens keep it open, the
-    same heuristic automation's target extraction uses."""
+    same heuristic automation's target extraction uses. ``flock``
+    wrappers consume their options plus ONE lockfile operand before
+    the payload command; a POSIX shell's ``-c`` may hide inside a
+    combined short-option cluster (``bash -lc``) but only while the
+    shell's own option list is still open — ``bash script.sh -c x``
+    passes ``-c`` to the script, not to the shell."""
     expect_cmd = True
     cd_next = False
     shell_next = False
     redirect_next = False
-    last_cmd = ""
+    # 'flock [opts] <file|fd> <cmd>' operand tracking: "opts" while
+    # flock's own options and lockfile are consumed, "cmd" once the
+    # lockfile is passed and the wrapped command position is open.
+    flock_state: str | None = None
+    flock_optarg = False
+    # POSIX-shell option region: True from the shell word until its
+    # first operand — the only span where '-c' is the shell's own.
+    shell_opts = False
+    shell_optarg = False
     i = 0
     n = len(tokens)
     while i < n:
@@ -341,7 +392,10 @@ def _scan_reap_tokens(
                 # redirection does not — '> f cmd' keeps the position
                 # that preceded it (leading redirects are legal shell).
                 expect_cmd = True
-                last_cmd = ""
+                flock_state = None
+                flock_optarg = False
+                shell_opts = False
+                shell_optarg = False
             cd_next = shell_next = False
             i += 1
             continue
@@ -358,6 +412,7 @@ def _scan_reap_tokens(
         if shell_next:
             # POSIX-shell '-c' payload — a nested command line.
             shell_next = False
+            shell_opts = False
             expect_cmd = False
             if depth < 2:
                 sub = _parse_reap_args(token, cwd, home, depth + 1, posix)
@@ -365,8 +420,50 @@ def _scan_reap_tokens(
                     return sub
             i += 1
             continue
+        if flock_state == "opts":
+            # flock's own operands: option flags — '-w'/'-E' (and
+            # clustered tails) consume the next token as their value —
+            # then exactly ONE lockfile/fd operand before the wrapped
+            # command. '-c'/'--command' run the operand via the shell.
+            if token.startswith("-") and token != "-":
+                if token in ("-c", "--command"):
+                    shell_next = True
+                elif token.startswith("--command="):
+                    payload = token.partition("=")[2]
+                    if payload and depth < 2:
+                        sub = _parse_reap_args(
+                            payload, cwd, home, depth + 1, posix
+                        )
+                        if sub is not None:
+                            return sub
+                elif (
+                    token in automation._FLOCK_OPTARG
+                    or automation._FLOCK_OPTARG_TAIL.fullmatch(token)
+                ):
+                    flock_optarg = True
+                i += 1
+                continue
+            if flock_optarg:
+                flock_optarg = False
+                i += 1
+                continue
+            # first non-option operand — the lockfile (path or fd).
+            flock_state = "cmd"
+            expect_cmd = True
+            i += 1
+            continue
         if expect_cmd:
             if automation._ENV_ASSIGNMENT.match(token):
+                i += 1
+                continue
+            base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if base == "flock":
+                # util-linux 'flock [opts] <file|fd> <cmd>' — bare
+                # 'flock' is also a shell control word, so this must
+                # run before that check; '/usr/bin/flock' lands here
+                # via the basename too.
+                flock_state = "opts"
+                expect_cmd = False
                 i += 1
                 continue
             if token in automation._CONTROL_WORDS:
@@ -377,7 +474,6 @@ def _scan_reap_tokens(
                 # 'nice -n 5 cmd') — never a command word itself.
                 i += 1
                 continue
-            base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
             if base == "cd":
                 nxt = tokens[i + 1] if i + 1 < n else None
                 if nxt is None or _OPERATOR.fullmatch(nxt):
@@ -388,11 +484,34 @@ def _scan_reap_tokens(
                 i += 1
                 continue
             if token.startswith("-"):
+                if flock_state == "cmd" and (
+                    token == "-c" or token == "--command"
+                ):
+                    # 'flock <file> -c <cmd>' — runs via the shell, so
+                    # the next token is a nested command line.
+                    shell_next = True
+                    flock_state = None
+                    expect_cmd = False
+                    i += 1
+                    continue
+                if flock_state == "cmd" and token.startswith("--command="):
+                    payload = token.partition("=")[2]
+                    flock_state = None
+                    expect_cmd = False
+                    if payload and depth < 2:
+                        sub = _parse_reap_args(
+                            payload, cwd, home, depth + 1, posix
+                        )
+                        if sub is not None:
+                            return sub
+                    i += 1
+                    continue
                 # option in command position ('sudo -E cmd') — does not
                 # consume command position.
                 i += 1
                 continue
             expect_cmd = False
+            flock_state = None
             if _JANITOR_EXE.match(base):
                 # the subcommand must be the next token ('--' tolerated)
                 j = i + 1
@@ -412,11 +531,43 @@ def _scan_reap_tokens(
                 )
                 if sub is not None:
                     return sub
-            last_cmd = base
+            shell_opts = automation._POSIX_SHELL.fullmatch(base) is not None
             i += 1
             continue
-        if token == "-c" and automation._POSIX_SHELL.fullmatch(last_cmd):
-            shell_next = True
+        if shell_opts:
+            if shell_optarg:
+                # '-o vi' / '--rcfile x' — the option's value token.
+                shell_optarg = False
+                i += 1
+                continue
+            if token == "--":
+                # '--' ends the shell's option list — operands follow.
+                shell_opts = False
+            elif token.startswith("-") and token != "-":
+                operand = _shell_c_operand(token)
+                if operand == "":
+                    # '-c' / '-lc' — the command string is NEXT.
+                    shell_next = True
+                elif operand is not None:
+                    # '-c<payload>' attached ('-cCMD', '-lcCMD').
+                    shell_opts = False
+                    if depth < 2:
+                        sub = _parse_reap_args(
+                            operand, cwd, home, depth + 1, posix
+                        )
+                        if sub is not None:
+                            return sub
+                elif (
+                    token in _SHELL_OPTARG
+                    or _SHELL_OPTARG_TAIL.fullmatch(token)
+                ):
+                    shell_optarg = True
+                # any other option token keeps the option region open
+            else:
+                # first operand after the shell word — its option list
+                # is over; a later '-c' belongs to the script, not the
+                # shell ('bash script.sh -c foo').
+                shell_opts = False
         i += 1
     return None
 
