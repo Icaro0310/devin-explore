@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an export-then-prune pointer (devin-history, devin-janitor). A huge
   sessions.db is the top cause of slow Devin starts and previously only
   surfaced if it happened to make the top-3 stores listing.
+- `janitor-reap` check — warns when the scheduled `devin-janitor reap`
+  orphan-process reaper is inert while appearing healthy. Finds every
+  `reap` invocation across `systemd --user` units (service+timer pairs
+  collapse into one install), the user crontab and Windows Task
+  Scheduler, extracts `--state-file`/`--ledger-file`/`--apply` from the
+  command line, then emits WARN for the silent-failure signatures:
+  dry-run sweeps with no `--apply` once the calibration window has
+  elapsed (install age from `first_seen`, the state file's creation
+  time or the unit fragment's mtime), an empty sweep
+  ledger past that window — the `attribution_ok:false` incident shape,
+  where kills are impossible and every sweep exits 0 with only a
+  WARNING line — a `reap.disabled` kill switch still present, a
+  schedule that has not fired within two expected intervals, and reap
+  scheduled on a non-Linux host (`reap` reads `/proc`, Linux-only).
+  Detection is purely filesystem/`systemctl` — the janitor is a uv
+  tool and is never imported or executed. Motivated by a ~2-week
+  incident where `attribution_ok:false` made every sweep a silent
+  no-op.
 
 ### Fixed
 

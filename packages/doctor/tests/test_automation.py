@@ -1076,3 +1076,34 @@ def test_cron_wrapper_absolute_paths_still_checked(tmp_path):
     targets, _ = automation._task_targets(
         tasks[0].command, posix=True, home=tmp_path)
     assert any("definitely-missing-zz" in str(t.path) for t in targets)
+
+
+def test_execstart_reset_by_empty_directive():
+    """A drop-in replaces ExecStart via an empty line first — 'cat'
+    concatenates fragments, so an empty ExecStart= clears the list."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStart=/old/devin-janitor reap --apply\n"
+        "ExecStart=\n"
+        "ExecStart=/new/devin-janitor reap --json\n"
+    )
+    assert cmds == ["/new/devin-janitor reap --json"]
+
+
+def test_execstart_reset_preserves_pre_post():
+    """An empty ExecStart= only clears the ExecStart list — the
+    systemd keeps separate lists for Pre/Post and still runs them
+    (#143 re-review: clearing the shared list hid live commands)."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStartPre=/opt/tools/prepare\n"
+        "ExecStart=/old/cmd --run\n"
+        "ExecStartPost=/opt/tools/teardown\n"
+        "ExecStart=\n"
+        "ExecStart=/usr/bin/true\n"
+    )
+    assert cmds == [
+        "/opt/tools/prepare",
+        "/usr/bin/true",
+        "/opt/tools/teardown",
+    ]

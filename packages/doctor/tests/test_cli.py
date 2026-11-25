@@ -60,7 +60,9 @@ def test_check_json_schema(ctx, capsys):
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["tool"] == "devin-doctor"
-    assert payload["overall"] == "PASS"
+    # janitor-reap reports WARN (unverifiable) when no scheduling
+    # surface answers in the sandbox — never FAIL here.
+    assert payload["overall"] in ("PASS", "WARN")
     assert isinstance(payload["findings"], list)
     assert payload["findings"], "expected findings"
     for f in payload["findings"]:
@@ -84,6 +86,7 @@ def test_check_json_schema(ctx, capsys):
         "disk",
         "updates",
         "automation",
+        "janitor-reap",
         "path-check",
         "publish-readiness",
         "toolchain",

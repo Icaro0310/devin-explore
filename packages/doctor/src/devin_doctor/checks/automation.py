@@ -275,14 +275,30 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
     """``(exec_lines, working_directory, timer_target)`` from a unit
     ``cat`` — WorkingDirectory feeds path resolution, ``Unit=`` names
     the service a timer activates."""
-    commands: list[str] = []
+    # ExecStartPre/ExecStart/ExecStartPost são listas separadas no
+    # systemd: um `ExecStart=` vazio num drop-in só zera a lista
+    # ExecStart — os comandos Pre/Post continuam a executar.
+    exec_lists: dict[str, list[str]] = {
+        "ExecStartPre": [],
+        "ExecStart": [],
+        "ExecStartPost": [],
+    }
     workdir: str | None = None
     activates: str | None = None
     for ul in text.splitlines():
         stripped = ul.strip()
         exec_match = _EXEC_LINE.match(stripped)
         if exec_match:
-            commands.append(exec_match.group(1).strip())
+            key = stripped.split("=", 1)[0]
+            value = exec_match.group(1).strip()
+            if value:
+                exec_lists[key].append(value)
+            else:
+                # an empty directive in a drop-in CLEARS every earlier
+                # instance of ITS OWN list — 'cat' concatenates
+                # fragments in load order, so the list so far is what
+                # gets replaced.
+                exec_lists[key] = []
         elif stripped.startswith("WorkingDirectory="):
             # an empty directive RESETS the directory (drop-ins are
             # concatenated into one 'cat' — a later 'WorkingDirectory='
@@ -292,11 +308,17 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
             target = stripped.split("=", 1)[1].strip()
             if target:
                 activates = target
+    commands = (
+        exec_lists["ExecStartPre"]
+        + exec_lists["ExecStart"]
+        + exec_lists["ExecStartPost"]
+    )
     return commands, workdir, activates
 
 
 def _systemd_user_tasks(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str] | None],
+    predicate: Callable[[str], bool] | None = None,
 ) -> tuple[list[_Task] | None, str | None, list[str]]:
     res = runner([
         "systemctl", "--user", "list-units",
@@ -327,7 +349,12 @@ def _systemd_user_tasks(
             if name.endswith((".service", ".timer")) and name not in seen:
                 seen.add(name)
                 units.append(name)
+    if predicate is not None:
+        # a caller that only inspects some units (e.g. the janitor reap
+        # sweep) skips the per-unit 'cat' fan-out for the rest.
+        units = [unit for unit in units if predicate(unit)]
     tasks: list[_Task] = []
+    unreadable = 0
     for unit in units:
         names = [unit]
         commands: list[str] = []
@@ -340,12 +367,17 @@ def _systemd_user_tasks(
                 workdir = wd
             if unit.endswith(".timer") and activates:
                 names.append(activates)
+        else:
+            # the unit's ExecStart could not be read — it stays in the
+            # inventory (name only) but its command went uninspected
+            unreadable += 1
         # Timers carry no ExecStart — read the activated service too.
         if unit.endswith(".timer") and len(names) == 1:
             names.append(unit[: -len(".timer")] + ".service")
         for name in names[1:]:
             cat = runner(["systemctl", "--user", "cat", name])
             if cat is None or cat.returncode != 0:
+                unreadable += 1
                 continue
             cmds, wd, _ = _unit_payload(cat.stdout or "")
             commands += cmds
@@ -359,7 +391,13 @@ def _systemd_user_tasks(
                 cwd=_expand_workdir(workdir),
             )
         )
-    return tasks, None, []
+    notes: list[str] = []
+    if unreadable:
+        notes.append(
+            f"{unreadable} unit cat(s) failed (systemctl --user cat) — "
+            "their ExecStart commands were not inspected"
+        )
+    return tasks, None, notes
 
 
 def _expand_workdir(workdir: str | None) -> str | None:
@@ -378,7 +416,12 @@ def _schtasks_commands(xml_text: str) -> list[str]:
     except ET.ParseError:
         return []
     commands: list[str] = []
-    for exec_action in root.iter("{*}Exec"):
+    # Element.iter() compares tags literally — it does NOT understand
+    # the '{*}' ElementPath wildcard and would never match. findall()
+    # does; '{*}' covers the real Task Scheduler namespace
+    # (http://schemas.microsoft.com/windows/2004/02/mit/task) and
+    # namespace-less fixtures alike.
+    for exec_action in root.findall(".//{*}Exec"):
         command = exec_action.findtext("{*}Command")
         if not command:
             continue
@@ -394,7 +437,13 @@ def _schtasks_commands(xml_text: str) -> list[str]:
 def _task_scheduler_tasks(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str] | None],
     plat: str,
+    predicate: Callable[[str], bool] | None = None,
+    limit: int | None = _MAX_SCHTASKS,
 ) -> tuple[list[_Task] | None, str | None, list[str]]:
+    """``limit`` caps how many listed tasks get their ``/xml`` probed —
+    ``None`` inspects every task (callers that hunt a possibly-renamed
+    entry by command, like janitor-reap, cannot accept a silent
+    inventory cap)."""
     if plat != "windows":
         return None, "non-Windows host", []
     res = runner(["schtasks", "/query", "/fo", "csv", "/nh"])
@@ -408,14 +457,18 @@ def _task_scheduler_tasks(
         if match and match.group(1).strip():
             names.append(match.group(1).strip())
     notes: list[str] = []
-    if len(names) > _MAX_SCHTASKS:
+    if limit is not None and len(names) > limit:
         notes.append(
-            f"listing truncated at {_MAX_SCHTASKS} of {len(names)} "
+            f"listing truncated at {limit} of {len(names)} "
             "tasks — the rest are unchecked"
         )
+    if predicate is not None:
+        # same fan-out guard as _systemd_user_tasks — callers that only
+        # inspect some tasks skip the per-task '/query /xml' for others.
+        names = [name for name in names if predicate(name)]
     tasks: list[_Task] = []
     unreadable = 0
-    for name in names[:_MAX_SCHTASKS]:
+    for name in names if limit is None else names[:limit]:
         commands: list[str] = []
         detail = runner(["schtasks", "/query", "/tn", name, "/xml"])
         if detail is not None and detail.returncode == 0:
