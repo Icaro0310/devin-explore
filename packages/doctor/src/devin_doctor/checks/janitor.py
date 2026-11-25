@@ -631,7 +631,11 @@ def _fragment_path(runner, unit: str) -> Path | None:
     if not lines:
         return None
     value = lines[-1]
-    return Path(value) if value.startswith("/") else None
+    path = Path(value)
+    # is_absolute() — not a "/" prefix check — so Windows-absolute
+    # fragment paths (C:\…) still resolve when tests fake systemd
+    # output on a Windows runner.
+    return path if path.is_absolute() else None
 
 
 def _install_age_seconds(inst: _Install, now: float, runner) -> float | None:
