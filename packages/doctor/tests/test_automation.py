@@ -1088,3 +1088,22 @@ def test_execstart_reset_by_empty_directive():
         "ExecStart=/new/devin-janitor reap --json\n"
     )
     assert cmds == ["/new/devin-janitor reap --json"]
+
+
+def test_execstart_reset_preserves_pre_post():
+    """An empty ExecStart= only clears the ExecStart list — the
+    systemd keeps separate lists for Pre/Post and still runs them
+    (#143 re-review: clearing the shared list hid live commands)."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStartPre=/opt/tools/prepare\n"
+        "ExecStart=/old/cmd --run\n"
+        "ExecStartPost=/opt/tools/teardown\n"
+        "ExecStart=\n"
+        "ExecStart=/usr/bin/true\n"
+    )
+    assert cmds == [
+        "/opt/tools/prepare",
+        "/usr/bin/true",
+        "/opt/tools/teardown",
+    ]

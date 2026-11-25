@@ -275,21 +275,30 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
     """``(exec_lines, working_directory, timer_target)`` from a unit
     ``cat`` — WorkingDirectory feeds path resolution, ``Unit=`` names
     the service a timer activates."""
-    commands: list[str] = []
+    # ExecStartPre/ExecStart/ExecStartPost são listas separadas no
+    # systemd: um `ExecStart=` vazio num drop-in só zera a lista
+    # ExecStart — os comandos Pre/Post continuam a executar.
+    exec_lists: dict[str, list[str]] = {
+        "ExecStartPre": [],
+        "ExecStart": [],
+        "ExecStartPost": [],
+    }
     workdir: str | None = None
     activates: str | None = None
     for ul in text.splitlines():
         stripped = ul.strip()
         exec_match = _EXEC_LINE.match(stripped)
         if exec_match:
+            key = stripped.split("=", 1)[0]
             value = exec_match.group(1).strip()
             if value:
-                commands.append(value)
-            elif stripped.startswith("ExecStart="):
-                # an empty ExecStart= in a drop-in CLEARS every earlier
-                # ExecStart — 'cat' concatenates fragments in load
-                # order, so the list so far is what gets replaced.
-                commands = []
+                exec_lists[key].append(value)
+            else:
+                # an empty directive in a drop-in CLEARS every earlier
+                # instance of ITS OWN list — 'cat' concatenates
+                # fragments in load order, so the list so far is what
+                # gets replaced.
+                exec_lists[key] = []
         elif stripped.startswith("WorkingDirectory="):
             # an empty directive RESETS the directory (drop-ins are
             # concatenated into one 'cat' — a later 'WorkingDirectory='
@@ -299,6 +308,11 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
             target = stripped.split("=", 1)[1].strip()
             if target:
                 activates = target
+    commands = (
+        exec_lists["ExecStartPre"]
+        + exec_lists["ExecStart"]
+        + exec_lists["ExecStartPost"]
+    )
     return commands, workdir, activates
 
 

@@ -742,8 +742,13 @@ def test_last_trigger_never_fired_returns_none():
     assert janitor._last_trigger_s(runner, "t.timer") is None
 
 
-def test_last_trigger_monotonic_fallback():
-    usec = int((time.monotonic() - 7200) * 1e6)
+def test_last_trigger_monotonic_fallback(monkeypatch):
+    # freeze both clocks — on a host with <2h uptime the raw
+    # (monotonic - 7200) timestamp is negative and the parser rejects
+    # it before the conversion is even exercised (#143 re-review)
+    monkeypatch.setattr(janitor.time, "monotonic", lambda: 10_000.0)
+    monkeypatch.setattr(janitor.time, "time", lambda: 1_800_000_000.0)
+    usec = int((10_000.0 - 7200) * 1e6)
     runner = make_runner({
         ("systemctl", "--user", "show", "t.timer", "-p",
          "LastTriggerUSec", "--value"): (0, "n/a\n"),
@@ -751,7 +756,7 @@ def test_last_trigger_monotonic_fallback():
          "LastTriggerUSecMonotonic", "--value"): (0, f"{usec}\n"),
     })
     got = janitor._last_trigger_s(runner, "t.timer")
-    assert got is not None and abs(got - (time.time() - 7200)) < 5
+    assert got is not None and abs(got - (1_800_000_000.0 - 7200)) < 5
 
 
 def test_calendar_interval_iter_dot_format():
@@ -848,7 +853,7 @@ def test_execstart_dropin_replacement_drives_diagnosis(ctx, tmp_path):
     assert "calibration" in findings[0].message
 
 
-def test_systemd_scan_only_cats_matching_units(ctx, tmp_path):
+def test_systemd_scan_cats_all_units(ctx, tmp_path):
     calls = []
     base = make_runner({
         ("systemctl", "--user", "list-units", "--type=service,timer",
@@ -883,7 +888,38 @@ def test_systemd_scan_only_cats_matching_units(ctx, tmp_path):
               if a[:3] == ["systemctl", "--user", "cat"]}
     assert "devin-janitor-reap.timer" in catted
     assert "devin-janitor-reap.service" in catted
-    assert "unrelated.timer" not in catted
+    # detection is by ExecStart, not name — an unrelated-looking unit
+    # must still be read in case it runs the reaper (#143 re-review)
+    assert "unrelated.timer" in catted
+
+
+def test_systemd_detects_reaper_behind_renamed_unit(ctx, tmp_path):
+    """A unit without 'janitor'/'reap' in its name but whose ExecStart
+    runs the reaper must still be detected as scheduled (#143
+    re-review: name-filtered enumeration reported 'not scheduled')."""
+    base = make_runner({
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (
+            0,
+            "devin-cleanup.timer            loaded active waiting   t\n",
+        ),
+        ("systemctl", "--user", "list-unit-files",
+         "--type=service,timer", "--no-legend", "--no-pager"): (1, ""),
+        ("systemctl", "--user", "cat", "devin-cleanup.timer"): (
+            0, TIMER_UNIT),
+        ("systemctl", "--user", "cat", "devin-cleanup.service"): (
+            0, SERVICE_TEMPLATE.format(exec_start=EXEC_APPLY.format(
+                state=tmp_path / "s.json", ledger=tmp_path / "l.jsonl"))),
+        ("systemctl", "--user", "is-active",
+         "devin-cleanup.timer"): (0, "active\n"),
+        ("systemctl", "--user", "is-enabled",
+         "devin-cleanup.timer"): (0, "enabled\n"),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+    })
+    findings = janitor.run(ctx, runner=base, which=lambda c: None,
+                           plat="linux", now_s=NOW)
+    assert findings[0].status is Status.PASS
+    assert "not scheduled" not in findings[0].message.lower()
 
 
 def test_schtasks_only_queries_matching_tasks(ctx, tmp_path):
@@ -913,5 +949,7 @@ def test_schtasks_only_queries_matching_tasks(ctx, tmp_path):
                            plat="windows", now_s=NOW)
     details = {a[3] for a in calls
                if a[:3] == ["schtasks", "/query", "/tn"]}
-    assert details == {"\\janitor reap"}
+    # every task is /xml-queried — the reaper may hide behind a name
+    # without 'janitor' in it (#143 re-review)
+    assert details == {"\\janitor reap", "\\other task"}
     assert findings[0].status is Status.WARN

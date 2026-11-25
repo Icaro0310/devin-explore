@@ -86,9 +86,6 @@ _TRIGGER_GRACE_SECONDS = 600
 _CRON_HORIZON = timedelta(days=35)
 
 _REAP_WORD = re.compile(r"\breap\b", re.IGNORECASE)
-# Unit/task names worth a payload read — keeps the reap sweep from
-# cat'ing every systemd unit or /xml-querying every scheduled task.
-_JANITOR_NAME = re.compile(r"janitor|reap", re.IGNORECASE)
 _OPERATOR = re.compile(r"[;&|<>()]+")
 _PATH_FLAGS = frozenset({"state-file", "ledger-file", "disable-file"})
 
@@ -433,6 +430,21 @@ def _calendar_interval_seconds(runner, expr: str) -> float | None:
     stamps.sort()
     diffs = [(later - earlier).total_seconds() for earlier, later in pairwise(stamps)]
     return max(diffs) if diffs else None
+
+
+def _service_unit_for_timer(runner, timer_unit: str) -> str:
+    """Unidade onde os erros do oneshot ficam registados: o serviço
+    que o timer activa — ``Unit=`` quando declarado, senão o
+    ``.service`` homónimo. É a unidade certa para 'journalctl -u'
+    quando se inspecciona uma sweep que morre a meio."""
+    res = runner(["systemctl", "--user", "cat", timer_unit])
+    if res is not None and res.returncode == 0:
+        _cmds, _wd, activates = automation._unit_payload(res.stdout or "")
+        if activates:
+            return activates
+    if timer_unit.endswith(".timer"):
+        return timer_unit[: -len(".timer")] + ".service"
+    return timer_unit
 
 
 def _timer_interval_seconds(runner, timer_unit: str) -> float | None:
@@ -899,8 +911,9 @@ def _evaluate(
             )
             fixes.append(
                 "Inspect 'journalctl --user -u "
-                f"{inst.timer_unit}' — the oneshot is likely dying "
-                "mid-sweep (timeout, wrapper guard, missing binary)."
+                f"{_service_unit_for_timer(runner, inst.timer_unit)}' — "
+                "the oneshot is likely dying mid-sweep (timeout, "
+                "wrapper guard, missing binary)."
             )
         elif (
             last_trigger is not None
@@ -914,8 +927,9 @@ def _evaluate(
             )
             fixes.append(
                 "Inspect 'journalctl --user -u "
-                f"{inst.timer_unit}' — the oneshot is likely dying "
-                "mid-sweep (timeout, wrapper guard, missing binary)."
+                f"{_service_unit_for_timer(runner, inst.timer_unit)}' — "
+                "the oneshot is likely dying mid-sweep (timeout, "
+                "wrapper guard, missing binary)."
             )
     return reasons, fixes
 
@@ -1044,8 +1058,11 @@ def run(
             # other failures stay 'unavailable' — automation reports them
 
     # --- systemd user units (services + timers, loaded and installed)
+    # SEM predicate: a reaper-detecção decide pelo COMANDO da unidade,
+    # não pelo nome — um timer chamado devin-cleanup.timer cujo
+    # ExecStart corre o janitor tem de ser inspeccionado na mesma.
     systemd_tasks, _reason, _notes = automation._systemd_user_tasks(
-        runner, predicate=lambda n: bool(_JANITOR_NAME.search(n))
+        runner
     )
     if systemd_tasks is not None:
         answered.append("systemd-user")
@@ -1056,7 +1073,7 @@ def run(
 
     # --- Windows Task Scheduler (the enumerator self-skips off Windows)
     ts_tasks, _reason, _notes = automation._task_scheduler_tasks(
-        runner, plat, predicate=lambda n: bool(_JANITOR_NAME.search(n))
+        runner, plat
     )
     if ts_tasks is not None:
         answered.append("task-scheduler")
