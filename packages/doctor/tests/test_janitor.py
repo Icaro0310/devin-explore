@@ -183,16 +183,24 @@ def _systemd_table(
                 "LastTriggerUSec",
                 "--value",
             )
-        ] = (0, f"{last_trigger_us}\n")
+        ] = (
+            0,
+            # systemctl prints a formatted local timestamp, not raw usec
+            time.strftime(
+                "%a %Y-%m-%d %H:%M:%S %Z",
+                time.localtime(last_trigger_us / 1e6),
+            )
+            + "\n",
+        )
     if calendar is not None:
         table[("systemd-analyze", "calendar", "--iterations=4", calendar)] = (
             0,
             (
                 "Normalized form: x\n"
                 "    Next elapse: Thu 2026-11-26 05:30:00 WET\n"
-                "   Iteration #2: Fri 2026-11-27 05:30:00 WET\n"
-                "   Iteration #3: Sat 2026-11-28 05:30:00 WET\n"
-                "   Iteration #4: Sun 2026-11-29 05:30:00 WET\n"
+                "       Iter. #2: Fri 2026-11-27 05:30:00 WET\n"
+                "       Iter. #3: Sat 2026-11-28 05:30:00 WET\n"
+                "       Iter. #4: Sun 2026-11-29 05:30:00 WET\n"
             ),
         )
     return table, state, ledger
@@ -227,7 +235,7 @@ def test_no_janitor_traces_is_not_detected(ctx):
     assert findings == []
 
 
-def test_no_surface_available_reports_pass(ctx):
+def test_no_surface_available_warns_unverifiable(ctx):
     findings = janitor.run(
         ctx,
         runner=_no_surfaces,
@@ -236,7 +244,7 @@ def test_no_surface_available_reports_pass(ctx):
         now_s=NOW,
     )
     assert len(findings) == 1
-    assert findings[0].status is Status.PASS
+    assert findings[0].status is Status.WARN
     assert "no scheduling surface" in findings[0].message
 
 
@@ -711,3 +719,191 @@ def test_cron_interval_biweekly_and_sparse():
     assert janitor._cron_interval_seconds("0,30 9-17 * * *") == 55800.0
     # yearly-ish schedule: too sparse to measure inside the horizon
     assert janitor._cron_interval_seconds("0 0 29 2 *") is None
+
+
+def test_last_trigger_parses_systemctl_date():
+    epoch = NOW - 3600
+    stamp = time.strftime("%a %Y-%m-%d %H:%M:%S %Z", time.localtime(epoch))
+    runner = make_runner({
+        ("systemctl", "--user", "show", "t.timer", "-p",
+         "LastTriggerUSec", "--value"): (0, f"{stamp}\n"),
+    })
+    got = janitor._last_trigger_s(runner, "t.timer")
+    assert got is not None and abs(got - epoch) < 2
+
+
+def test_last_trigger_never_fired_returns_none():
+    runner = make_runner({
+        ("systemctl", "--user", "show", "t.timer", "-p",
+         "LastTriggerUSec", "--value"): (0, "n/a\n"),
+        ("systemctl", "--user", "show", "t.timer", "-p",
+         "LastTriggerUSecMonotonic", "--value"): (0, "0\n"),
+    })
+    assert janitor._last_trigger_s(runner, "t.timer") is None
+
+
+def test_last_trigger_monotonic_fallback():
+    usec = int((time.monotonic() - 7200) * 1e6)
+    runner = make_runner({
+        ("systemctl", "--user", "show", "t.timer", "-p",
+         "LastTriggerUSec", "--value"): (0, "n/a\n"),
+        ("systemctl", "--user", "show", "t.timer", "-p",
+         "LastTriggerUSecMonotonic", "--value"): (0, f"{usec}\n"),
+    })
+    got = janitor._last_trigger_s(runner, "t.timer")
+    assert got is not None and abs(got - (time.time() - 7200)) < 5
+
+
+def test_calendar_interval_iter_dot_format():
+    runner = make_runner({
+        ("systemd-analyze", "calendar", "--iterations=4", "expr"): (
+            0,
+            "Normalized form: x\n"
+            "    Next elapse: Thu 2026-11-26 05:30:00 WET\n"
+            "       Iter. #2: Fri 2026-11-27 05:30:00 WET\n"
+            "       Iter. #3: Sat 2026-11-28 05:30:00 WET\n"
+            "       Iter. #4: Sun 2026-11-29 05:30:00 WET\n",
+        ),
+    })
+    assert janitor._calendar_interval_seconds(runner, "expr") == 86400.0
+
+
+def test_cron_empty_first_seen_uses_state_birth(ctx, tmp_path):
+    home = tmp_path / "home"
+    state = home / ".devin" / "janitor-reap.json"
+    ledger = home / ".devin" / "memory" / "l.jsonl"
+    command = (
+        f"devin-janitor reap --json --state-file {state} "
+        f"--ledger-file {ledger}"
+    )
+    _write_state(state)  # empty first_seen
+    table = {
+        ("crontab", "-l"): (0, f"*/5 * * * * {command}\n"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+        ("stat", "-c", "%W", str(state)): (0, f"{int(NOW - 20 * DAY)}\n"),
+    }
+    findings = _run(ctx, table, home=home)
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "calibration" in findings[0].message
+
+
+def test_trigger_fired_but_state_missing_warns(ctx, tmp_path):
+    table, _state, ledger = _systemd_table(
+        tmp_path, exec_start=EXEC_APPLY,
+        last_trigger_us=int((NOW - 3600) * 1e6),
+    )
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("x\n")
+    findings = _run(ctx, table)
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "never finish a state write" in findings[0].message
+
+
+def test_cron_cd_prefix_resolves_relative_paths(ctx, tmp_path):
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    command = (
+        f"cd {work} && devin-janitor reap --apply "
+        "--state-file reap-state.json --ledger-file reap-ledger.jsonl"
+    )
+    _write_state(work / "reap-state.json", first_seen={"1:2": NOW - 3600})
+    (work / "reap-ledger.jsonl").write_text("x\n")
+    table = {
+        ("crontab", "-l"): (0, f"*/5 * * * * {command}\n"),
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (1, ""),
+    }
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.PASS
+    assert "state file present" in findings[0].message
+    (work / "reap.disabled").write_text("")
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.WARN
+    assert "reap.disabled" in findings[0].message
+
+
+def test_execstart_dropin_replacement_drives_diagnosis(ctx, tmp_path):
+    state = tmp_path / "state" / "janitor-reap.json"
+    ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
+    service_text = (
+        "[Service]\n"
+        f"ExecStart={EXEC_APPLY.format(state=state, ledger=ledger)}\n"
+        "ExecStart=\n"
+        f"ExecStart={EXEC_DRY.format(state=state, ledger=ledger)}\n"
+    )
+    table, state, ledger = _systemd_table(
+        tmp_path, exec_start=EXEC_APPLY, service_text=service_text,
+        last_trigger_us=int(NOW * 1e6),
+    )
+    _write_state(state, first_seen={"1:2": NOW - 20 * DAY})
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("x\n")
+    findings = _run(ctx, table)
+    assert findings[0].status is Status.WARN
+    assert "calibration" in findings[0].message
+
+
+def test_systemd_scan_only_cats_matching_units(ctx, tmp_path):
+    calls = []
+    base = make_runner({
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (
+            0,
+            "devin-janitor-reap.timer   loaded active waiting   t\n"
+            "unrelated.timer            loaded active waiting   u\n",
+        ),
+        ("systemctl", "--user", "list-unit-files",
+         "--type=service,timer", "--no-legend", "--no-pager"): (1, ""),
+        ("systemctl", "--user", "cat", "devin-janitor-reap.timer"): (
+            0, TIMER_UNIT),
+        ("systemctl", "--user", "cat", "devin-janitor-reap.service"): (
+            0, SERVICE_TEMPLATE.format(exec_start=EXEC_APPLY.format(
+                state=tmp_path / "s.json", ledger=tmp_path / "l.jsonl"))),
+        ("systemctl", "--user", "is-active",
+         "devin-janitor-reap.timer"): (0, "active\n"),
+        ("systemctl", "--user", "is-enabled",
+         "devin-janitor-reap.timer"): (0, "enabled\n"),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+    })
+
+    def runner(argv):
+        calls.append(list(argv))
+        return base(argv)
+
+    janitor.run(ctx, runner=runner, which=lambda c: None,
+                plat="linux", now_s=NOW)
+    catted = {a[-1] for a in calls
+              if a[:3] == ["systemctl", "--user", "cat"]}
+    assert "devin-janitor-reap.timer" in catted
+    assert "devin-janitor-reap.service" in catted
+    assert "unrelated.timer" not in catted
+
+
+def test_schtasks_only_queries_matching_tasks(ctx, tmp_path):
+    xml = """<?xml version="1.0"?>
+<Task><Actions><Exec>
+<Command>C:\\Tools\\devin-janitor.exe</Command>
+<Arguments>reap --apply</Arguments>
+</Exec></Actions></Task>"""
+    calls = []
+    base = make_runner({
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (
+            0, '"\\\\janitor reap","N/A","x"\n'
+               '"\\\\other task","N/A","x"\n'),
+        ("schtasks", "/query", "/tn", "\\janitor reap", "/xml"): (0, xml),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+    })
+
+    def runner(argv):
+        calls.append(list(argv))
+        return base(argv)
+
+    findings = janitor.run(ctx, runner=runner, which=lambda c: None,
+                           plat="windows", now_s=NOW)
+    details = {a[3] for a in calls
+               if a[:3] == ["schtasks", "/query", "/tn"]}
+    assert details == {"\\janitor reap"}
+    assert findings[0].status is Status.WARN

@@ -1076,3 +1076,15 @@ def test_cron_wrapper_absolute_paths_still_checked(tmp_path):
     targets, _ = automation._task_targets(
         tasks[0].command, posix=True, home=tmp_path)
     assert any("definitely-missing-zz" in str(t.path) for t in targets)
+
+
+def test_execstart_reset_by_empty_directive():
+    """A drop-in replaces ExecStart via an empty line first — 'cat'
+    concatenates fragments, so an empty ExecStart= clears the list."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStart=/old/devin-janitor reap --apply\n"
+        "ExecStart=\n"
+        "ExecStart=/new/devin-janitor reap --json\n"
+    )
+    assert cmds == ["/new/devin-janitor reap --json"]

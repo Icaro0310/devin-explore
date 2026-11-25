@@ -50,11 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   orphan-process reaper is inert while appearing healthy. Finds every
   `reap` invocation across `systemd --user` units (service+timer pairs
   collapse into one install), the user crontab and Windows Task
-  Scheduler, extracts `--state-file`/`--ledger-file`/`--log-file`/
-  `--apply` from the command line, then emits WARN for the
-  silent-failure signatures: dry-run sweeps with no `--apply` once the
-  calibration window has elapsed (install age from `first_seen`/`pidmap`,
-  the unit fragment's mtime, or `LastTriggerUSec`), an empty sweep
+  Scheduler, extracts `--state-file`/`--ledger-file`/`--apply` from the
+  command line, then emits WARN for the silent-failure signatures:
+  dry-run sweeps with no `--apply` once the calibration window has
+  elapsed (install age from `first_seen`, the state file's creation
+  time or the unit fragment's mtime), an empty sweep
   ledger past that window — the `attribution_ok:false` incident shape,
   where kills are impossible and every sweep exits 0 with only a
   WARNING line — a `reap.disabled` kill switch still present, a

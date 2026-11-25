@@ -56,6 +56,7 @@ import os
 import re
 import shlex
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import pairwise
@@ -85,6 +86,9 @@ _TRIGGER_GRACE_SECONDS = 600
 _CRON_HORIZON = timedelta(days=35)
 
 _REAP_WORD = re.compile(r"\breap\b", re.IGNORECASE)
+# Unit/task names worth a payload read — keeps the reap sweep from
+# cat'ing every systemd unit or /xml-querying every scheduled task.
+_JANITOR_NAME = re.compile(r"janitor|reap", re.IGNORECASE)
 _OPERATOR = re.compile(r"[;&|<>()]+")
 _PATH_FLAGS = frozenset({"state-file", "ledger-file", "disable-file"})
 
@@ -296,6 +300,50 @@ def _parse_reap_args(
     return None
 
 
+def _command_cwd(command: str, home: Path, depth: int = 0) -> Path:
+    """Working directory the scheduled line actually runs in — a
+    ``cd DIR &&``/``cd DIR;`` prefix moves relative-path resolution
+    off the scheduler default (cron's HOME). Quoted ``sh -c 'cd …'``
+    payloads recurse, bounded by ``depth``."""
+    cwd = home
+    tokens = _lex(command)
+    expect_cmd = True
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if re.search(r"\s", token):
+            if depth < 2:
+                cwd = _command_cwd(token, cwd, depth + 1)
+            expect_cmd = False
+            i += 1
+            continue
+        if _OPERATOR.fullmatch(token):
+            expect_cmd = True
+            i += 1
+            continue
+        if not expect_cmd:
+            i += 1
+            continue
+        if (
+            automation._ENV_ASSIGNMENT.match(token)
+            or token in automation._CONTROL_WORDS
+        ):
+            i += 1
+            continue
+        if token == "cd":
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            if nxt is not None and not _OPERATOR.fullmatch(nxt):
+                cwd = _resolve_arg_path(nxt, cwd, home)
+                i += 2
+            else:
+                i += 1
+            expect_cmd = False
+            continue
+        expect_cmd = False
+        i += 1
+    return cwd
+
+
 def _classify(
     name: str, command: str, cwd: Path, home: Path
 ) -> tuple[str | None, _ReapArgs | None]:
@@ -356,7 +404,7 @@ def _timespan_seconds(text: str) -> float | None:
 
 
 _CALENDAR_STAMP = re.compile(
-    r"(?:Next elapse|Iteration #\d+):\s+(?:\w+\s+)?"
+    r"(?:Next elapse|Iter(?:ation)?\.?\s*#\d+):\s+(?:\w+\s+)?"
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
 )
 
@@ -547,6 +595,33 @@ def _first_seen_epoch(state_file: Path) -> float | None:
     return min(epochs) if epochs else None
 
 
+def _birth_epoch(path: Path, runner) -> float | None:
+    """Creation epoch (statx btime) of ``path`` — the state file's
+    birth is the first sweep that ever ran, so it dates the install
+    even when ``first_seen`` stayed empty (a quiet machine records no
+    orphans). ``None`` when the filesystem or ``stat`` cannot report a
+    btime."""
+    res = runner(["stat", "-c", "%W", str(path)])
+    if res is not None and res.returncode == 0:
+        lines = [
+            line.strip()
+            for line in (res.stdout or "").splitlines()
+            if line.strip()
+        ]
+        if lines:
+            try:
+                btime = int(lines[-1])
+            except ValueError:
+                btime = 0
+            if btime > 0:
+                return float(btime)
+    try:
+        birthtime = getattr(path.stat(), "st_birthtime", None)
+    except OSError:
+        return None
+    return float(birthtime) if birthtime else None
+
+
 def _fragment_path(runner, unit: str) -> Path | None:
     """FragmentPath of a systemd unit via ``systemctl show --value``."""
     res = runner(["systemctl", "--user", "show", unit, "-p", "FragmentPath", "--value"])
@@ -572,6 +647,13 @@ def _install_age_seconds(inst: _Install, now: float, runner) -> float | None:
     evidences: list[float] = []
     if first_seen is not None:
         evidences.append(first_seen)
+    if inst.args is not None:
+        # cron installs have no unit fragment to date — the state and
+        # ledger files' birth times mark the first sweep that wrote.
+        for dated in (inst.args.state_file, inst.args.ledger_file):
+            birth = _birth_epoch(dated, runner)
+            if birth is not None:
+                evidences.append(birth)
     if inst.timer_unit:
         unit_names = [inst.timer_unit]
         if inst.timer_unit.endswith(".timer"):
@@ -605,22 +687,67 @@ def _systemctl_prop(runner, verb: str, unit: str) -> str | None:
     return lines[0] if lines else None
 
 
+_LAST_TRIGGER_STAMP = re.compile(
+    r"(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})"
+)
+
+
 def _last_trigger_s(runner, unit: str) -> float | None:
-    """``LastTriggerUSec`` of a timer as epoch seconds — when the timer
-    last fired its service, ``None`` when never/unknown."""
+    """Epoch seconds when the timer last fired its service — ``None``
+    when never/unknown. ``LastTriggerUSec`` prints as a formatted local
+    timestamp (``Thu 2026-11-26 05:30:00 WET``) or ``n/a``; the raw
+    usec count lives in ``LastTriggerUSecMonotonic``, which shares
+    CLOCK_MONOTONIC's base with ``time.monotonic()``."""
     res = runner(
         ["systemctl", "--user", "show", unit, "-p", "LastTriggerUSec", "--value"]
     )
+    if res is not None and res.returncode == 0:
+        lines = [
+            line.strip() for line in (res.stdout or "").splitlines() if line.strip()
+        ]
+        if lines:
+            value = lines[-1]
+            try:
+                usec = int(value)
+            except ValueError:
+                usec = None
+            if usec is not None:
+                if usec > 0:
+                    return usec / 1_000_000
+            else:
+                match = _LAST_TRIGGER_STAMP.search(value)
+                if match is not None:
+                    try:
+                        return (
+                            datetime.strptime(
+                                match.group(1).replace("T", " "),
+                                "%Y-%m-%d %H:%M:%S",
+                            )
+                            .astimezone()  # naive → local tz, like systemctl
+                            .timestamp()
+                        )
+                    except ValueError:
+                        pass
+    res = runner(
+        [
+            "systemctl", "--user", "show", unit,
+            "-p", "LastTriggerUSecMonotonic", "--value",
+        ]
+    )
     if res is None or res.returncode != 0:
         return None
-    lines = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
+    lines = [
+        line.strip() for line in (res.stdout or "").splitlines() if line.strip()
+    ]
     if not lines:
         return None
     try:
         usec = int(lines[-1])
     except ValueError:
         return None
-    return usec / 1_000_000 if usec > 0 else None
+    if usec <= 0:
+        return None
+    return time.time() - max(0.0, time.monotonic() - usec / 1_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -760,9 +887,19 @@ def _evaluate(
             )
             fixes.append(f"systemctl --user enable {inst.timer_unit}.")
         last_trigger = _last_trigger_s(runner, inst.timer_unit)
-        if (
+        if last_trigger is not None and state_mtime is None:
+            reasons.append(
+                f"timer last fired {(now - last_trigger) / 60:.0f}min "
+                f"ago but {args.state_file} does not exist — sweeps "
+                "start but never finish a state write"
+            )
+            fixes.append(
+                "Inspect 'journalctl --user -u "
+                f"{inst.timer_unit}' — the oneshot is likely dying "
+                "mid-sweep (timeout, wrapper guard, missing binary)."
+            )
+        elif (
             last_trigger is not None
-            and state_mtime is not None
             and last_trigger - state_mtime > _TRIGGER_GRACE_SECONDS
         ):
             reasons.append(
@@ -882,7 +1019,9 @@ def run(
                 if "janitor" not in command.lower():
                     continue
                 janitor_seen = True
-                args = _parse_reap_args(command, home, home)
+                args = _parse_reap_args(
+                    command, _command_cwd(command, home), home
+                )
                 if args is None:
                     continue
                 installs.append(
@@ -901,7 +1040,9 @@ def run(
             # other failures stay 'unavailable' — automation reports them
 
     # --- systemd user units (services + timers, loaded and installed)
-    systemd_tasks, _reason, _notes = automation._systemd_user_tasks(runner)
+    systemd_tasks, _reason, _notes = automation._systemd_user_tasks(
+        runner, predicate=lambda n: bool(_JANITOR_NAME.search(n))
+    )
     if systemd_tasks is not None:
         answered.append("systemd-user")
         for task in systemd_tasks:
@@ -910,7 +1051,9 @@ def run(
         installs += _systemd_reap_installs(runner, home, systemd_tasks)
 
     # --- Windows Task Scheduler (the enumerator self-skips off Windows)
-    ts_tasks, _reason, _notes = automation._task_scheduler_tasks(runner, plat)
+    ts_tasks, _reason, _notes = automation._task_scheduler_tasks(
+        runner, plat, predicate=lambda n: bool(_JANITOR_NAME.search(n))
+    )
     if ts_tasks is not None:
         answered.append("task-scheduler")
         for task in ts_tasks:
@@ -934,7 +1077,7 @@ def run(
             return [
                 Finding(
                     CHECK_ID,
-                    Status.PASS,
+                    Status.WARN,
                     "no scheduling surface available — reap schedule unverifiable",
                 )
             ]

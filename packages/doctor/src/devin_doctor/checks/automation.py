@@ -282,7 +282,14 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
         stripped = ul.strip()
         exec_match = _EXEC_LINE.match(stripped)
         if exec_match:
-            commands.append(exec_match.group(1).strip())
+            value = exec_match.group(1).strip()
+            if value:
+                commands.append(value)
+            elif stripped.startswith("ExecStart="):
+                # an empty ExecStart= in a drop-in CLEARS every earlier
+                # ExecStart — 'cat' concatenates fragments in load
+                # order, so the list so far is what gets replaced.
+                commands = []
         elif stripped.startswith("WorkingDirectory="):
             # an empty directive RESETS the directory (drop-ins are
             # concatenated into one 'cat' — a later 'WorkingDirectory='
@@ -297,6 +304,7 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
 
 def _systemd_user_tasks(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str] | None],
+    predicate: Callable[[str], bool] | None = None,
 ) -> tuple[list[_Task] | None, str | None, list[str]]:
     res = runner([
         "systemctl", "--user", "list-units",
@@ -327,6 +335,10 @@ def _systemd_user_tasks(
             if name.endswith((".service", ".timer")) and name not in seen:
                 seen.add(name)
                 units.append(name)
+    if predicate is not None:
+        # a caller that only inspects some units (e.g. the janitor reap
+        # sweep) skips the per-unit 'cat' fan-out for the rest.
+        units = [unit for unit in units if predicate(unit)]
     tasks: list[_Task] = []
     for unit in units:
         names = [unit]
@@ -394,6 +406,7 @@ def _schtasks_commands(xml_text: str) -> list[str]:
 def _task_scheduler_tasks(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str] | None],
     plat: str,
+    predicate: Callable[[str], bool] | None = None,
 ) -> tuple[list[_Task] | None, str | None, list[str]]:
     if plat != "windows":
         return None, "non-Windows host", []
@@ -413,6 +426,10 @@ def _task_scheduler_tasks(
             f"listing truncated at {_MAX_SCHTASKS} of {len(names)} "
             "tasks — the rest are unchecked"
         )
+    if predicate is not None:
+        # same fan-out guard as _systemd_user_tasks — callers that only
+        # inspect some tasks skip the per-task '/query /xml' for others.
+        names = [name for name in names if predicate(name)]
     tasks: list[_Task] = []
     unreadable = 0
     for name in names[:_MAX_SCHTASKS]:
