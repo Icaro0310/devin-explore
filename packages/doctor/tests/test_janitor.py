@@ -780,8 +780,9 @@ def test_cron_empty_first_seen_uses_state_birth(ctx, tmp_path):
     state = home / ".devin" / "janitor-reap.json"
     ledger = home / ".devin" / "memory" / "l.jsonl"
     command = (
-        f"devin-janitor reap --json --state-file {state} "
-        f"--ledger-file {ledger}"
+        "devin-janitor reap --json "
+        f"--state-file {state.as_posix()} "
+        f"--ledger-file {ledger.as_posix()}"
     )
     _write_state(state)  # empty first_seen
     table = {
@@ -813,7 +814,7 @@ def test_cron_cd_prefix_resolves_relative_paths(ctx, tmp_path):
     home = tmp_path / "home"
     work = tmp_path / "work"
     command = (
-        f"cd {work} && devin-janitor reap --apply "
+        f"cd {work.as_posix()} && devin-janitor reap --apply "
         "--state-file reap-state.json --ledger-file reap-ledger.jsonl"
     )
     _write_state(work / "reap-state.json", first_seen={"1:2": NOW - 3600})
@@ -835,11 +836,17 @@ def test_cron_cd_prefix_resolves_relative_paths(ctx, tmp_path):
 def test_execstart_dropin_replacement_drives_diagnosis(ctx, tmp_path):
     state = tmp_path / "state" / "janitor-reap.json"
     ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
+    apply_cmd = EXEC_APPLY.format(
+        state=state.as_posix(), ledger=ledger.as_posix()
+    )
+    dry_cmd = EXEC_DRY.format(
+        state=state.as_posix(), ledger=ledger.as_posix()
+    )
     service_text = (
         "[Service]\n"
-        f"ExecStart={EXEC_APPLY.format(state=state, ledger=ledger)}\n"
+        f"ExecStart={apply_cmd}\n"
         "ExecStart=\n"
-        f"ExecStart={EXEC_DRY.format(state=state, ledger=ledger)}\n"
+        f"ExecStart={dry_cmd}\n"
     )
     table, state, ledger = _systemd_table(
         tmp_path, exec_start=EXEC_APPLY, service_text=service_text,
@@ -870,7 +877,8 @@ def test_systemd_scan_cats_all_units(ctx, tmp_path):
             0, TIMER_UNIT),
         ("systemctl", "--user", "cat", "devin-janitor-reap.service"): (
             0, SERVICE_TEMPLATE.format(exec_start=EXEC_APPLY.format(
-                state=tmp_path / "s.json", ledger=tmp_path / "l.jsonl"))),
+                state=(tmp_path / "s.json").as_posix(),
+                ledger=(tmp_path / "l.jsonl").as_posix()))),
         ("systemctl", "--user", "is-active",
          "devin-janitor-reap.timer"): (0, "active\n"),
         ("systemctl", "--user", "is-enabled",
@@ -909,7 +917,8 @@ def test_systemd_detects_reaper_behind_renamed_unit(ctx, tmp_path):
             0, TIMER_UNIT),
         ("systemctl", "--user", "cat", "devin-cleanup.service"): (
             0, SERVICE_TEMPLATE.format(exec_start=EXEC_APPLY.format(
-                state=tmp_path / "s.json", ledger=tmp_path / "l.jsonl"))),
+                state=(tmp_path / "s.json").as_posix(),
+                ledger=(tmp_path / "l.jsonl").as_posix()))),
         ("systemctl", "--user", "is-active",
          "devin-cleanup.timer"): (0, "active\n"),
         ("systemctl", "--user", "is-enabled",
