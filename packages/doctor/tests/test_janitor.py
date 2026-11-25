@@ -962,3 +962,393 @@ def test_schtasks_only_queries_matching_tasks(ctx, tmp_path):
     # without 'janitor' in it (#143 re-review)
     assert details == {"\\janitor reap", "\\other task"}
     assert findings[0].status is Status.WARN
+
+
+# ---------------------------------------------------------------------------
+# Devin Review wave — command-position parsing, cwd-at-reap, surface caps
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reap_args_cd_scoped_to_reap_point(tmp_path):
+    """`cd X && devin-janitor reap … && cd Y` — relative flag paths
+    resolve against the directory in effect AT the reap token, not the
+    line's final cd (#143 review)."""
+    home = tmp_path / "home"
+    cmd = "cd /a && devin-janitor reap --state-file s.json && cd /b"
+    args = janitor._parse_reap_args(cmd, home, home)
+    assert args is not None
+    assert args.state_file == Path("/a/s.json")
+
+
+def test_parse_reap_args_rejects_non_command_mentions(tmp_path):
+    """'devin-janitor reap' inside another command's arguments — quoted
+    or bare — is text, not a scheduled invocation (#143 review)."""
+    home = tmp_path / "home"
+    for cmd in (
+        "grep 'devin-janitor reap' /var/log/syslog",
+        "grep devin-janitor reap /var/log/syslog",
+        "echo devin-janitor reap",
+        "logger 'devin-janitor reap --apply' done",
+    ):
+        assert janitor._parse_reap_args(cmd, home, home) is None, cmd
+
+
+def test_parse_reap_args_windows_exe_posix_false(tmp_path):
+    """Task Scheduler commands keep Windows path backslashes — the
+    posix=False lexer must still find the exe + subcommand."""
+    home = tmp_path / "home"
+    args = janitor._parse_reap_args(
+        r"C:\Tools\devin-janitor.exe reap --apply",
+        home,
+        home,
+        posix=False,
+    )
+    assert args is not None and args.apply is True
+
+
+def test_cron_cd_after_reap_keeps_reap_cwd(ctx, tmp_path):
+    """End-to-end: `cd work && devin-janitor reap … && cd other` — the
+    state/ledger/kill-switch resolve under `work`, and a `reap.disabled`
+    there is still seen (#143 review)."""
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    other = tmp_path / "other"
+    command = (
+        f"cd {work.as_posix()} && devin-janitor reap --apply "
+        "--state-file reap-state.json --ledger-file reap-ledger.jsonl "
+        f"&& cd {other.as_posix()} && ./rotate"
+    )
+    _write_state(work / "reap-state.json", first_seen={"1:2": NOW - 3600})
+    (work / "reap-ledger.jsonl").write_text("x\n")
+    table = {
+        ("crontab", "-l"): (0, f"*/5 * * * * {command}\n"),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.PASS
+    assert "state file present" in findings[0].message
+    (work / "reap.disabled").write_text("")
+    findings = _run(ctx, table, home=home)
+    assert findings[0].status is Status.WARN
+    assert "reap.disabled" in findings[0].message
+
+
+def test_cron_grep_reap_pattern_is_not_a_reaper(ctx, tmp_path):
+    """A cron line that merely MENTIONS 'devin-janitor reap' (a log
+    audit) must not be reported as a scheduled reaper (#143 review)."""
+    home = tmp_path / "home"
+    table = {
+        ("crontab", "-l"): (
+            0,
+            "*/5 * * * * grep 'devin-janitor reap' /var/log/sweeps.log\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(
+        ctx,
+        table,
+        home=home,
+        which=lambda c: "/usr/local/bin/devin-janitor",
+    )
+    assert len(findings) == 1
+    assert findings[0].status is Status.PASS
+    assert "not scheduled" in findings[0].message
+
+
+def test_systemd_grep_reap_is_not_a_reaper(ctx):
+    """ExecStart that only GREPS for 'devin-janitor reap' in logs is not
+    a reaper schedule — no 'sweep never finishes' WARN (#143 review)."""
+    last_trigger = time.strftime(
+        "%a %Y-%m-%d %H:%M:%S %Z",
+        time.localtime(NOW - 3600),
+    )
+    table = {
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (
+            0,
+            "log-audit.timer   loaded active waiting   log-audit.timer\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "list-unit-files",
+            "--type=service,timer",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+        ("systemctl", "--user", "cat", "log-audit.timer"): (
+            0,
+            "[Timer]\nOnUnitActiveSec=1h\n\n[Install]\nWantedBy=timers.target\n",
+        ),
+        ("systemctl", "--user", "cat", "log-audit.service"): (
+            0,
+            SERVICE_TEMPLATE.format(
+                exec_start="/usr/bin/grep 'devin-janitor reap' "
+                "/var/log/sweeps.log"
+            ),
+        ),
+        ("systemctl", "--user", "is-active", "log-audit.timer"): (
+            0,
+            "active\n",
+        ),
+        ("systemctl", "--user", "is-enabled", "log-audit.timer"): (
+            0,
+            "enabled\n",
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "log-audit.timer",
+            "-p",
+            "LastTriggerUSec",
+            "--value",
+        ): (0, last_trigger + "\n"),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+    }
+    findings = _run(ctx, table)
+    assert len(findings) == 1
+    assert findings[0].status is Status.PASS
+    assert "not scheduled" in findings[0].message
+
+
+def test_systemd_reap_wrapper_execstart_detected(ctx, tmp_path):
+    """The production install wraps reap in devin-janitor-reap.sh —
+    '<wrapper> <janitor> reap …' must still parse as a reap schedule
+    (#143 review)."""
+    table, state, ledger = _systemd_table(
+        tmp_path,
+        exec_start=(
+            "/home/u/.local/bin/devin-janitor-reap.sh "
+            "/home/u/.local/bin/devin-janitor reap --apply --json "
+            "--state-file {state} --ledger-file {ledger}"
+        ),
+        last_trigger_us=int(NOW * 1e6),
+    )
+    _write_state(state, first_seen={"1:2": NOW - 3600})
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("x\n")
+    findings = _run(ctx, table)
+    assert len(findings) == 1
+    assert findings[0].status is Status.PASS
+    assert "--apply" in findings[0].message
+
+
+TASK_SCHEDULER_NS_XML = """<?xml version="1.0"?>
+<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<Actions><Exec>
+<Command>C:\\Tools\\devin-janitor.exe</Command>
+<Arguments>reap --apply</Arguments>
+</Exec></Actions></Task>"""
+
+
+def test_schtasks_xml_real_namespace_generic_name(ctx):
+    """Real schtasks /xml output carries the Task Scheduler namespace —
+    the reader must match it, and detection is by COMMAND so a generic
+    task name still surfaces as a reap schedule (#143 review)."""
+    table = {
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (
+            0,
+            '"\\\\nightly sweep","N/A","Ready"\n',
+        ),
+        ("schtasks", "/query", "/tn", "\\nightly sweep", "/xml"): (
+            0,
+            TASK_SCHEDULER_NS_XML,
+        ),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(ctx, table, plat="windows")
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "Linux-only" in findings[0].message
+    assert "nightly sweep" in findings[0].message
+
+
+def test_schtasks_reaper_beyond_inventory_cap_still_found(ctx):
+    """Automation caps /xml probing at 200 tasks for its own inventory;
+    the janitor check hunts by COMMAND and must inspect every listed
+    task — a reaper at position 201 is still found (#143 review)."""
+    fillers = [f"task{i:03d}" for i in range(200)]
+    csv_lines = "".join(
+        f'"\\\\{name}","N/A","Ready"\n' for name in fillers
+    )
+    csv_lines += '"\\\\janitor reap","N/A","Ready"\n'
+    table = {
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (0, csv_lines),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    for name in fillers:
+        table[("schtasks", "/query", "/tn", f"\\{name}", "/xml")] = (
+            0,
+            "<Task/>",
+        )
+    table[("schtasks", "/query", "/tn", "\\janitor reap", "/xml")] = (
+        0,
+        TASK_SCHEDULER_NS_XML,
+    )
+    findings = _run(ctx, table, plat="windows")
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "Linux-only" in findings[0].message
+
+
+def test_schtasks_unreadable_tasks_warn_instead_of_pass(ctx):
+    """A task whose /xml probe fails leaves part of the surface
+    uninspected — with no reap found, 'not scheduled' is unverifiable,
+    so the check WARNs instead of PASSing (#143 review)."""
+    table = {
+        ("schtasks", "/query", "/fo", "csv", "/nh"): (
+            0,
+            '"\\\\nightly sweep","N/A","Ready"\n',
+        ),
+        ("schtasks", "/query", "/tn", "\\nightly sweep", "/xml"): (1, ""),
+        ("crontab", "-l"): (1, "no crontab for u", ""),
+        (
+            "systemctl",
+            "--user",
+            "list-units",
+            "--type=service,timer",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ): (1, ""),
+    }
+    findings = _run(
+        ctx,
+        table,
+        plat="windows",
+        which=lambda c: "/usr/local/bin/devin-janitor",
+    )
+    assert len(findings) == 1
+    assert findings[0].status is Status.WARN
+    assert "cannot be ruled out" in findings[0].message
+
+
+def test_journalctl_hint_names_activated_service(ctx, tmp_path):
+    """The dead-sweep fix must point 'journalctl -u' at the service the
+    timer activates — explicit Unit= or the homonymous .service
+    (#143 review)."""
+    ledger = tmp_path / "memory" / "janitor-reap-ledger.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("x\n")
+    # state file deliberately absent → 'fired but never wrote' branch
+    state = tmp_path / "state" / "janitor-reap.json"
+    exec_cmd = EXEC_APPLY.format(
+        state=state.as_posix(), ledger=ledger.as_posix()
+    )
+    last_trigger = time.strftime(
+        "%a %Y-%m-%d %H:%M:%S %Z",
+        time.localtime(NOW - 3600),
+    )
+    for unit_directive, expected in (
+        ("Unit=custom-sweep.service\n", "custom-sweep.service"),
+        ("", "devin-janitor-reap.service"),
+    ):
+        activated = (
+            "custom-sweep.service"
+            if unit_directive
+            else "devin-janitor-reap.service"
+        )
+        timer_text = (
+            "[Timer]\n"
+            + unit_directive
+            + "OnUnitActiveSec=3min\nAccuracySec=30s\n\n"
+            "[Install]\nWantedBy=timers.target\n"
+        )
+        table = {
+            (
+                "systemctl",
+                "--user",
+                "list-units",
+                "--type=service,timer",
+                "--all",
+                "--no-legend",
+                "--no-pager",
+            ): (
+                0,
+                "devin-janitor-reap.timer   loaded active waiting   t\n",
+            ),
+            (
+                "systemctl",
+                "--user",
+                "list-unit-files",
+                "--type=service,timer",
+                "--no-legend",
+                "--no-pager",
+            ): (1, ""),
+            ("systemctl", "--user", "cat", "devin-janitor-reap.timer"): (
+                0,
+                timer_text,
+            ),
+            ("systemctl", "--user", "cat", activated): (
+                0,
+                SERVICE_TEMPLATE.format(exec_start=exec_cmd),
+            ),
+            ("systemctl", "--user", "is-active", "devin-janitor-reap.timer"): (
+                0,
+                "active\n",
+            ),
+            (
+                "systemctl",
+                "--user",
+                "is-enabled",
+                "devin-janitor-reap.timer",
+            ): (0, "enabled\n"),
+            (
+                "systemctl",
+                "--user",
+                "show",
+                "devin-janitor-reap.timer",
+                "-p",
+                "LastTriggerUSec",
+                "--value",
+            ): (0, last_trigger + "\n"),
+            ("crontab", "-l"): (1, "no crontab for u", ""),
+        }
+        findings = _run(ctx, table)
+        assert len(findings) == 1, unit_directive
+        assert findings[0].status is Status.WARN
+        assert (
+            f"journalctl --user -u {expected}" in findings[0].fix
+        ), unit_directive

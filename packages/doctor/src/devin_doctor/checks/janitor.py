@@ -89,6 +89,18 @@ _REAP_WORD = re.compile(r"\breap\b", re.IGNORECASE)
 _OPERATOR = re.compile(r"[;&|<>()]+")
 _PATH_FLAGS = frozenset({"state-file", "ledger-file", "disable-file"})
 
+# Executable basenames that make the following ``reap`` token the
+# janitor subcommand: the uv entry point (``devin-janitor``, optionally
+# with a launcher extension) and the ecosystem's ExecStart wrapper
+# ``devin-janitor-reap.sh`` — it execs ``"$@"`` verbatim, so its
+# argument tail IS the wrapped command line.
+_JANITOR_EXE = re.compile(
+    r"^devin-janitor(?:\.(?:exe|bat|cmd|ps1|sh))?$", re.IGNORECASE
+)
+_REAP_WRAPPER_EXE = re.compile(
+    r"^devin-janitor-reap(?:\.(?:sh|exe|bat|cmd|ps1))?$", re.IGNORECASE
+)
+
 # janitor cli.py defaults (devin_janitor/cli.py + reap.py) — mirrored so
 # an ExecStart that omits the flags resolves the same paths the tool
 # would use, relative to the unit's WorkingDirectory (home for user
@@ -197,11 +209,13 @@ class _Install:
 # ---------------------------------------------------------------------------
 
 
-def _lex(command: str) -> list[str]:
+def _lex(command: str, posix: bool = True) -> list[str]:
     """Punctuation-aware tokenize — shell operators surface as their own
-    tokens (same lexer automation uses for scheduled commands)."""
+    tokens (same lexer automation uses for scheduled commands).
+    ``posix=False`` keeps Windows path backslashes literal for the
+    Task Scheduler surface (cron/systemd commands are POSIX)."""
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=posix, punctuation_chars=True)
         lexer.whitespace_split = True
         return list(lexer)
     except ValueError:
@@ -273,81 +287,149 @@ def _args_from_tokens(tokens: list[str], cwd: Path, home: Path) -> _ReapArgs:
 
 
 def _parse_reap_args(
-    command: str, cwd: Path, home: Path, depth: int = 0
+    command: str,
+    cwd: Path,
+    home: Path,
+    depth: int = 0,
+    posix: bool = True,
 ) -> _ReapArgs | None:
-    """``_ReapArgs`` for the first ``reap`` invocation in ``command``,
-    ``None`` when there is none.
+    """``_ReapArgs`` for the first ``devin-janitor reap`` invocation in
+    ``command``, ``None`` when there is none.
 
-    The subcommand token can hide inside a quoted wrapper payload
-    (``sh -c 'devin-janitor reap …'`` yields one whitespace-bearing
-    token) — recurse into such tokens, bounded by ``depth``."""
-    tokens = _lex(command)
-    if "reap" in tokens:
-        return _args_from_tokens(tokens[tokens.index("reap") + 1 :], cwd, home)
-    if depth < 2:
-        for token in tokens:
-            if (
-                re.search(r"\s", token)
-                and "janitor" in token.lower()
-                and _REAP_WORD.search(token)
-            ):
-                sub = _parse_reap_args(token, cwd, home, depth + 1)
+    ``reap`` only counts as the janitor subcommand in *command
+    position* — the token right after a ``devin-janitor`` executable
+    (or after the ``devin-janitor-reap`` wrapper, whose arguments ARE
+    the wrapped command line) at the start of a pipeline segment.
+    Arguments to other programs — ``grep 'devin-janitor reap' …``
+    included — are never invocations; only executable payloads recurse
+    (a POSIX shell's ``-c`` string, the wrapper's argument tail),
+    bounded by ``depth``. ``cd DIR`` prefixes move relative flag-path
+    resolution and are tracked only up to the ``reap`` token itself —
+    a ``cd`` later in the line cannot retroactively move them."""
+    tokens: list[str] = []
+    for raw in _lex(command, posix):
+        # posix=False keeps quote characters on grouped tokens —
+        # strip them so '"C:\\janitor.exe"' still reads as a path.
+        token = raw.strip("\"'")
+        if token:
+            tokens.append(token)
+    return _scan_reap_tokens(tokens, cwd, home, depth, posix)
+
+
+def _scan_reap_tokens(
+    tokens: list[str], cwd: Path, home: Path, depth: int, posix: bool
+) -> _ReapArgs | None:
+    """Left-to-right scan of one command line for the first
+    ``devin-janitor reap`` invocation — see ``_parse_reap_args`` for
+    the recognition rules. Command position opens at the start and
+    after every shell operator; env assignments, control words
+    (``sudo``, ``env``, …) and stray option tokens keep it open, the
+    same heuristic automation's target extraction uses."""
+    expect_cmd = True
+    cd_next = False
+    shell_next = False
+    redirect_next = False
+    last_cmd = ""
+    i = 0
+    n = len(tokens)
+    while i < n:
+        token = tokens[i]
+        if _OPERATOR.fullmatch(token):
+            redirect_next = ">" in token or "<" in token
+            if not redirect_next:
+                # ';'/'&&'/'|'/… open a new command position; a
+                # redirection does not — '> f cmd' keeps the position
+                # that preceded it (leading redirects are legal shell).
+                expect_cmd = True
+                last_cmd = ""
+            cd_next = shell_next = False
+            i += 1
+            continue
+        if redirect_next:
+            redirect_next = False
+            i += 1
+            continue
+        if cd_next:
+            cwd = _resolve_arg_path(token, cwd, home)
+            cd_next = False
+            expect_cmd = False
+            i += 1
+            continue
+        if shell_next:
+            # POSIX-shell '-c' payload — a nested command line.
+            shell_next = False
+            expect_cmd = False
+            if depth < 2:
+                sub = _parse_reap_args(token, cwd, home, depth + 1, posix)
                 if sub is not None:
                     return sub
+            i += 1
+            continue
+        if expect_cmd:
+            if automation._ENV_ASSIGNMENT.match(token):
+                i += 1
+                continue
+            if token in automation._CONTROL_WORDS:
+                i += 1
+                continue
+            if token[0].isdigit():
+                # numeric argument of a prefix wrapper ('timeout 60 cmd',
+                # 'nice -n 5 cmd') — never a command word itself.
+                i += 1
+                continue
+            base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if base == "cd":
+                nxt = tokens[i + 1] if i + 1 < n else None
+                if nxt is None or _OPERATOR.fullmatch(nxt):
+                    cwd = home  # bare 'cd' lands in $HOME
+                else:
+                    cd_next = True
+                expect_cmd = False
+                i += 1
+                continue
+            if token.startswith("-"):
+                # option in command position ('sudo -E cmd') — does not
+                # consume command position.
+                i += 1
+                continue
+            expect_cmd = False
+            if _JANITOR_EXE.match(base):
+                # the subcommand must be the next token ('--' tolerated)
+                j = i + 1
+                if j < n and tokens[j] == "--":
+                    j += 1
+                if j < n and tokens[j] == "reap":
+                    return _args_from_tokens(tokens[j + 1 :], cwd, home)
+                # 'devin-janitor run …' — keep scanning later segments
+            elif _REAP_WRAPPER_EXE.match(base) and depth < 2:
+                # the wrapper execs its argument tail verbatim — recurse
+                # on the rest of THIS segment only.
+                end = i + 1
+                while end < n and not _OPERATOR.fullmatch(tokens[end]):
+                    end += 1
+                sub = _scan_reap_tokens(
+                    tokens[i + 1 : end], cwd, home, depth + 1, posix
+                )
+                if sub is not None:
+                    return sub
+            last_cmd = base
+            i += 1
+            continue
+        if token == "-c" and automation._POSIX_SHELL.fullmatch(last_cmd):
+            shell_next = True
+        i += 1
     return None
 
 
-def _command_cwd(command: str, home: Path, depth: int = 0) -> Path:
-    """Working directory the scheduled line actually runs in — a
-    ``cd DIR &&``/``cd DIR;`` prefix moves relative-path resolution
-    off the scheduler default (cron's HOME). Quoted ``sh -c 'cd …'``
-    payloads recurse, bounded by ``depth``."""
-    cwd = home
-    tokens = _lex(command)
-    expect_cmd = True
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if re.search(r"\s", token):
-            if depth < 2:
-                cwd = _command_cwd(token, cwd, depth + 1)
-            expect_cmd = False
-            i += 1
-            continue
-        if _OPERATOR.fullmatch(token):
-            expect_cmd = True
-            i += 1
-            continue
-        if not expect_cmd:
-            i += 1
-            continue
-        if (
-            automation._ENV_ASSIGNMENT.match(token)
-            or token in automation._CONTROL_WORDS
-        ):
-            i += 1
-            continue
-        if token == "cd":
-            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
-            if nxt is not None and not _OPERATOR.fullmatch(nxt):
-                cwd = _resolve_arg_path(nxt, cwd, home)
-                i += 2
-            else:
-                i += 1
-            expect_cmd = False
-            continue
-        expect_cmd = False
-        i += 1
-    return cwd
-
-
 def _classify(
-    name: str, command: str, cwd: Path, home: Path
+    name: str, command: str, cwd: Path, home: Path, posix: bool = True
 ) -> tuple[str | None, _ReapArgs | None]:
     """``("reap", args)`` for a real reap invocation, ``("unverifiable",
     None)`` for a janitor+reap-named unit whose command cannot be read,
     ``(None, None)`` otherwise."""
-    args = _parse_reap_args(command, cwd, home) if command else None
+    args = (
+        _parse_reap_args(command, cwd, home, posix=posix) if command else None
+    )
     if args is not None and "janitor" in f"{name} {command}".lower():
         return "reap", args
     if "janitor" in name.lower() and _REAP_WORD.search(name):
@@ -1037,9 +1119,9 @@ def run(
                 if "janitor" not in command.lower():
                     continue
                 janitor_seen = True
-                args = _parse_reap_args(
-                    command, _command_cwd(command, home), home
-                )
+                # base cwd is cron's HOME — 'cd DIR' prefixes inside the
+                # line are tracked by the parser up to the reap token.
+                args = _parse_reap_args(command, home, home)
                 if args is None:
                     continue
                 installs.append(
@@ -1061,7 +1143,7 @@ def run(
     # SEM predicate: a reaper-detecção decide pelo COMANDO da unidade,
     # não pelo nome — um timer chamado devin-cleanup.timer cujo
     # ExecStart corre o janitor tem de ser inspeccionado na mesma.
-    systemd_tasks, _reason, _notes = automation._systemd_user_tasks(
+    systemd_tasks, _reason, systemd_notes = automation._systemd_user_tasks(
         runner
     )
     if systemd_tasks is not None:
@@ -1071,16 +1153,22 @@ def run(
                 janitor_seen = True
         installs += _systemd_reap_installs(runner, home, systemd_tasks)
 
-    # --- Windows Task Scheduler (the enumerator self-skips off Windows)
-    ts_tasks, _reason, _notes = automation._task_scheduler_tasks(
-        runner, plat
+    # --- Windows Task Scheduler (the enumerator self-skips off Windows).
+    # limit=None: detection is by COMMAND, so the reaper may hide behind
+    # any task name and automation's 200-task inventory cap must not
+    # silently apply — every listed task gets its /xml probed. Tasks
+    # whose XML stays unreadable are surfaced via the notes instead.
+    ts_tasks, _reason, ts_notes = automation._task_scheduler_tasks(
+        runner, plat, limit=None
     )
     if ts_tasks is not None:
         answered.append("task-scheduler")
         for task in ts_tasks:
             if "janitor" in f"{task.name} {task.command}".lower():
                 janitor_seen = True
-            kind, args = _classify(task.name, task.command, home, home)
+            kind, args = _classify(
+                task.name, task.command, home, home, posix=False
+            )
             if kind is None:
                 continue
             installs.append(
@@ -1103,6 +1191,33 @@ def run(
                 )
             ]
         if which("devin-janitor") or janitor_seen:
+            # Enumeration notes mean part of a surface went uninspected
+            # (unreadable unit cats, failed schtasks /xml) — 'not
+            # scheduled' would be a claim the evidence cannot support.
+            enum_notes = [
+                f"{surface}: {note}"
+                for surface, notes in (
+                    ("systemd-user", systemd_notes),
+                    ("task-scheduler", ts_notes),
+                )
+                for note in notes
+            ]
+            if enum_notes:
+                return [
+                    Finding(
+                        CHECK_ID,
+                        Status.WARN,
+                        "devin-janitor present but whether 'reap' is "
+                        "scheduled cannot be ruled out — enumeration "
+                        "incomplete: " + "; ".join(enum_notes),
+                        fix=(
+                            "Re-run once the failing probes recover, or "
+                            "inspect the listed units/tasks by hand — an "
+                            "unreadable entry may still schedule the "
+                            "reaper."
+                        ),
+                    )
+                ]
             return [
                 Finding(
                     CHECK_ID,
