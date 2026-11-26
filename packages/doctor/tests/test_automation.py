@@ -1202,15 +1202,31 @@ def test_execstart_at_prefix_quoted_argv0():
 def test_task_targets_missing_exe_with_args_reports_exe(tmp_path):
     """'bash -c "/missing/exe --flag arg"' — when the executable is
     gone the missing reference is the exe alone, not the payload with
-    its arguments glued on (#144 re-review)."""
+    its arguments glued on (#144 re-review). An absolute path under
+    tmp_path keeps the assertion valid on Windows too (a bare
+    '/missing/…' gains the cwd's drive there)."""
+    missing = tmp_path / "definitely-not-here" / "exe"
     targets, _ = automation._task_targets(
-        'bash -c "/missing/definitely-not-here/exe --daily arg"',
+        f'bash -c "{missing} --daily arg"',
         posix=True,
         home=tmp_path,
     )
-    assert [t.path for t in targets] == [
-        Path("/missing/definitely-not-here/exe")
-    ]
+    assert [t.path for t in targets] == [missing]
+
+
+def test_task_targets_unverifiable_cwd_resets_at_boundary(tmp_path):
+    """'pas-cron.sh foo && flock rel.lock cmd' — the wrapper's cd
+    happens in its own process; the SECOND command runs in the real
+    cwd, so its relative lockfile IS checkable (#144 re-review)."""
+    targets, _ = automation._task_targets(
+        f"/root/bin/pas-cron.sh {tmp_path.as_posix()}/foo.sh && "
+        "flock jobs/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    assert (tmp_path / "jobs" / "backup.lock", "parent") in {
+        (t.path, t.kind) for t in targets
+    }
 
 
 def test_task_targets_flock_relative_lockfile_unverifiable(tmp_path):

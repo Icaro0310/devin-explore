@@ -113,7 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a missing executable reported from a `-c` payload names the exe
     alone (`/missing/exe`), not the payload string with its
     arguments; a relative `flock` lockfile under a wrapper-changed
-    cwd (`repo-cron.sh`/`pas-cron.sh`) is unverifiable, not missing.
+    cwd (`repo-cron.sh`/`pas-cron.sh`) is unverifiable — but only
+    within that segment: `pas-cron.sh foo && flock rel.lock cmd`
+    runs the flock in the real cwd, so the unknown-cwd marker resets
+    at every shell boundary.
 
 ### Added
 

@@ -704,6 +704,11 @@ def _task_targets(
                 flock_lockfile = False
                 flock_optarg = False
                 last_cmd = None
+                # a wrapper's 'cd' happens in its own process —
+                # 'pas-cron.sh foo && flock rel.lock cmd' runs the
+                # flock in the real cwd, so the unknown-cwd marker is
+                # segment-scoped, not line-scoped.
+                unverifiable_cwd = unverifiable
                 continue
             if _ENV_ASSIGNMENT.match(piece):
                 continue
