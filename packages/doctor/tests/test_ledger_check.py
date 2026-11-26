@@ -34,6 +34,16 @@ def test_store_without_dep_warns(tmp_path, monkeypatch):
     store.mkdir()
     (store / "ledger.jsonl").write_text('{"op":"add"}\n', encoding="utf-8")
     monkeypatch.setenv("DEVIN_LEDGER_DIR", str(store))
+    # parent=None alone is not enough: 'from devin_memory.ledger
+    # import …' resolves already-imported SUBmodules straight from
+    # sys.modules, so any earlier test that imported them (envs with
+    # the 'ledger' extra installed) lets the check find the package.
+    for mod in [
+        m
+        for m in sys.modules
+        if m == "devin_memory" or m.startswith("devin_memory.")
+    ]:
+        monkeypatch.delitem(sys.modules, mod)
     monkeypatch.setitem(sys.modules, "devin_memory", None)
     findings = ledger.run(_ctx(tmp_path))
     assert findings[0].status is Status.WARN

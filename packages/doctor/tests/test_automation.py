@@ -9,6 +9,7 @@ runs.
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 from devin_doctor.checks import automation
@@ -1107,3 +1108,155 @@ def test_execstart_reset_preserves_pre_post():
         "/usr/bin/true",
         "/opt/tools/teardown",
     ]
+
+
+def test_execstart_at_prefix_drops_argv0():
+    """`ExecStart=@/exe argv0 args…` — the word after the executable
+    is argv[0], not an argument: '@/bin/devin-janitor j reap' execs
+    'devin-janitor reap' with argv0 'j'; leaving argv0 in place shifts
+    every argument one slot (#144 review)."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        "ExecStart=@/usr/bin/devin-janitor devin-janitor reap --apply\n"
+    )
+    assert cmds == ["/usr/bin/devin-janitor reap --apply"]
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\nExecStart=@/usr/bin/tool runner --go\n"
+    )
+    assert cmds == ["/usr/bin/tool --go"]
+
+
+def test_task_targets_missing_space_path_stays_whole(tmp_path):
+    """A quoted absolute path with spaces is ONE target even when
+    missing — splitting on the space checked phantom fragments and
+    never the real exe (Task Scheduler '<Command>' quoting puts the
+    executable field back together, #144 review)."""
+    targets, _ = automation._task_targets(
+        '"C:\\Program Files\\tools\\backup.exe" --daily',
+        posix=False,
+        home=tmp_path,
+    )
+    # Path.name keeps backslashes on Linux but splits on them on
+    # Windows — compare the resolved path's tail instead (#144
+    # re-review).
+    assert len(targets) == 1
+    assert str(targets[0].path).endswith(
+        "C:\\Program Files\\tools\\backup.exe"
+    )
+    targets, _ = automation._task_targets(
+        f'"{tmp_path.as_posix()}/my dir/run.sh"',
+        posix=True,
+        home=tmp_path,
+    )
+    assert [t.path for t in targets] == [
+        tmp_path / "my dir" / "run.sh"
+    ]
+
+
+def test_task_targets_flock_lockfile_parent(tmp_path):
+    """'flock -n /srv/jobs/backup.lock cmd' — flock creates the lock
+    FILE but not its parent dir, so the lockfile is a 'parent' target;
+    the fd form ('flock 9') names no path (#144 review)."""
+    targets, _ = automation._task_targets(
+        "flock -n /srv/jobs/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    paths = {t.path: t.kind for t in targets}
+    assert paths[Path("/srv/jobs/backup.lock")] == "parent"
+    # 'flock <fd>' (no wrapped command) is the descriptor form —
+    # 'flock -n 9 cmd' actually names a FILE called '9' (#144
+    # re-review).
+    targets, _ = automation._task_targets(
+        "flock -n 9", posix=True, home=tmp_path
+    )
+    assert all(t.path.name != "9" for t in targets)
+
+
+def test_task_targets_flock_pending_redirect_is_not_lockfile(tmp_path):
+    """'flock -n > out.log lock cmd' — the shell claims the word after
+    '>' as the redirect target BEFORE flock sees its arguments, so it
+    must not be consumed as the lockfile (#144 review)."""
+    targets, _ = automation._task_targets(
+        "flock -n > /srv/old/backup.log /tmp/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    paths = {t.path: t.kind for t in targets}
+    assert paths[Path("/srv/old/backup.log")] == "parent"
+    assert paths[Path("/tmp/backup.lock")] == "parent"
+    assert Path("/usr/bin/true") in paths
+
+
+def test_execstart_at_prefix_quoted_argv0():
+    """'@/bin/j "cleanup worker" reap' — argv0 can itself be quoted;
+    a naive whitespace split would leave 'worker"' glued into the
+    command (#144 re-review)."""
+    cmds, _wd, _act = automation._unit_payload(
+        "[Service]\n"
+        'ExecStart=@/usr/bin/devin-janitor "cleanup worker" reap --apply\n'
+    )
+    assert cmds == ["/usr/bin/devin-janitor reap --apply"]
+
+
+def test_task_targets_missing_exe_with_args_reports_exe(tmp_path):
+    """'bash -c "/missing/exe --flag arg"' — when the executable is
+    gone the missing reference is the exe alone, not the payload with
+    its arguments glued on (#144 re-review). An absolute path under
+    tmp_path keeps the assertion valid on Windows too (a bare
+    '/missing/…' gains the cwd's drive there)."""
+    missing = tmp_path / "definitely-not-here" / "exe"
+    targets, _ = automation._task_targets(
+        f'bash -c "{missing} --daily arg"',
+        posix=True,
+        home=tmp_path,
+    )
+    assert [t.path for t in targets] == [missing]
+
+
+def test_task_targets_unverifiable_cwd_resets_at_boundary(tmp_path):
+    """'pas-cron.sh foo && flock rel.lock cmd' — the wrapper's cd
+    happens in its own process; the SECOND command runs in the real
+    cwd, so its relative lockfile IS checkable (#144 re-review)."""
+    targets, _ = automation._task_targets(
+        f"/root/bin/pas-cron.sh {tmp_path.as_posix()}/foo.sh && "
+        "flock jobs/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    assert (tmp_path / "jobs" / "backup.lock", "parent") in {
+        (t.path, t.kind) for t in targets
+    }
+
+
+def test_task_targets_flock_relative_lockfile_unverifiable(tmp_path):
+    """'pas-cron.sh … flock jobs/x.lock cmd' — the wrapper changes to
+    an unknown cwd, so a repo-relative lockfile must not FAIL as
+    missing (same skip the plain path-arg rule applies, #144
+    re-review)."""
+    targets, _ = automation._task_targets(
+        "/root/bin/pas-cron.sh flock jobs/backup.lock /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    assert not [t for t in targets if "backup.lock" in str(t.path)]
+
+
+def test_task_targets_find_exec_braces_not_a_boundary(tmp_path):
+    """'find . -exec cmd {} \\;' — the literal '{}' argument is a word
+    passed to the wrapped command, not a command boundary; a boundary
+    there used to reset the unknown-cwd marker early and let the next
+    relative path FAIL as missing (#144 re-review)."""
+    targets, _ = automation._task_targets(
+        "/root/bin/pas-cron.sh find . -exec cp {} rel/out \\;",
+        posix=True,
+        home=tmp_path,
+    )
+    assert not [t for t in targets if "out" in str(t.path)]
+    # real group braces still bound commands
+    targets, _ = automation._task_targets(
+        "{ rel/one; } ; /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "rel" / "one" in {t.path for t in targets}

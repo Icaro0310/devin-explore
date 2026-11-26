@@ -71,11 +71,19 @@ _MAX_DEPTH = 3
 
 _CRON_SPECIALS = re.compile(r"^@\w+$")
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SHELL_BOUNDARY = re.compile(r"[0-9]*[|&;(){}<>]+[0-9]*")
+# Command separators: runs of '|', '&', ';', '<', '>' PLUS single
+# '{', '}', '(', ')' — a PAIR like '{}' or '()' is a literal word
+# ('find … -exec cmd {} \;' passes '{}' to the wrapped command), not
+# a boundary.
+_SHELL_BOUNDARY = re.compile(r"[0-9]*(?:[|&;<>]+|[{}()])[0-9]*")
 _UNRESOLVABLE = re.compile(r"[*?[\]${}%`]")
 _WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 _SYSTEMD_UNIT = re.compile(r"^(\S+\.(?:service|timer))\s")
 _EXEC_LINE = re.compile(r"^ExecStart(?:Pre|Post)?=(.*)$")
+# systemd.exec prefix chars on the executable ('-', '@', ':', '+',
+# '!', '!!' — combinable) tune HOW the unit runs, not WHAT runs —
+# '-/path/cmd' must still read as '/path/cmd' downstream.
+_EXEC_PREFIX = re.compile(r"^[-@:+!]+(?=\S)")
 
 # Words that keep command position open: shell syntax and prefix wrappers
 # (``sudo cmd``, ``flock -n /x cmd``, ``env A=1 cmd`` — the payload still
@@ -86,6 +94,14 @@ _CONTROL_WORDS = frozenset({
     "nohup", "nice", "flock", "chronic", "timeout", "stdbuf", "command",
     "exec", "eval", "xargs", "parallel", "watch", "setsid",
 })
+
+# flock(1) options that consume the NEXT token as their value —
+# '-w/--timeout', '-E/--conflict-exit-code' (util-linux). A short-
+# option cluster ENDING in w/E ('-nw') takes the next argv too;
+# '-w5' carries the value attached and needs nothing extra. Shared
+# with the janitor check's reap scanner.
+_FLOCK_OPTARG = frozenset({"-w", "-E", "--timeout", "--conflict-exit-code"})
+_FLOCK_OPTARG_TAIL = re.compile(r"-[A-Za-z]*[wE]")
 
 # Words that consume command position but are always present (shell
 # builtins) — never worth a PATH lookup.
@@ -292,7 +308,25 @@ def _unit_payload(text: str) -> tuple[list[str], str | None, str | None]:
             key = stripped.split("=", 1)[0]
             value = exec_match.group(1).strip()
             if value:
-                exec_lists[key].append(value)
+                # '-/path/cmd', '@/path', ':/path', '+!/path' — the
+                # systemd.exec run-semantics prefixes come off so the
+                # executable still lands in command position.
+                command = _EXEC_PREFIX.sub("", value)
+                prefix = _EXEC_PREFIX.match(value)
+                if prefix and "@" in prefix.group(0):
+                    # 'ExecStart=@/exe argv0 args…' — the word after
+                    # the executable is argv[0], NOT an argument:
+                    # '@/bin/j j reap' runs 'j reap' with argv0 'j',
+                    # so argv0 must not occupy the subcommand slot.
+                    # Quote-aware split — argv0 can itself be quoted
+                    # ('@/bin/j "cleanup worker" reap').
+                    try:
+                        words = shlex.split(command, posix=True)
+                    except ValueError:
+                        words = command.split()
+                    if words:
+                        command = shlex.join([words[0], *words[2:]])
+                exec_lists[key].append(command)
             else:
                 # an empty directive in a drop-in CLEARS every earlier
                 # instance of ITS OWN list — 'cat' concatenates
@@ -425,11 +459,21 @@ def _schtasks_commands(xml_text: str) -> list[str]:
         command = exec_action.findtext("{*}Command")
         if not command:
             continue
+        command = command.strip()
+        # '<Command>' is the executable ALONE — Task Scheduler keeps it
+        # separate from '<Arguments>'. A path with spaces must stay ONE
+        # argument or the joined text re-splits it ('C:\Program Files\…'
+        # → phantom 'C:\Program' target, missed exe) — quote it the way
+        # a command line would.
+        if re.search(r"\s", command) and not (
+            command.startswith('"') and command.endswith('"')
+        ):
+            command = f'"{command}"'
         arguments = exec_action.findtext("{*}Arguments")
         commands.append(
-            f"{command.strip()} {arguments.strip()}".strip()
+            f"{command} {arguments.strip()}".strip()
             if arguments
-            else command.strip()
+            else command
         )
     return commands
 
@@ -502,16 +546,50 @@ def _lex(command: str, posix: bool) -> list[str]:
     return list(lexer)
 
 
-def _resolve_path(token: str, cwd: Path) -> Path:
+def _resolve_path(token: str, cwd: Path, *, posix: bool = False) -> Path:
     """``~`` expansion plus cwd-relative resolution (cron's cwd is the
-    user's home; a ``cd dir &&`` prefix moves it)."""
+    user's home; a ``cd dir &&`` prefix moves it). In ``posix`` mode a
+    leading '/' is already absolute — on a Windows host
+    ``Path('/srv/x').is_absolute()`` is False (no drive letter), so a
+    naive cwd-join would re-anchor it as 'C:/srv/x'."""
     if token.startswith("~"):
         path = Path(os.path.expanduser(token))
     else:
         path = Path(token)
-    if not path.is_absolute():
+    if not path.is_absolute() and not (
+        posix and token.startswith("/")
+    ):
         path = cwd / path
     return path
+
+
+def _abs_in_mode(piece: str, posix: bool) -> bool:
+    """``piece`` is an absolute path for the command dialect in use.
+    ``Path('/x').is_absolute()`` is False on Windows hosts, so POSIX-
+    absolute strings need the ``posix`` flag to stay absolute."""
+    return Path(piece).is_absolute() or (
+        posix and piece.startswith(("/", "~"))
+    )
+
+
+def _first_word_resolves(word: str, cwd: Path, posix: bool) -> bool:
+    """Is the first word of a space-bearing token a live executable?
+    Decides 'one path with spaces' vs 'command line' before recursing.
+    A POSIX-absolute argv0 ('/usr/bin/python3') can never be stat'ed on
+    a Windows host, so there the basename's interpreter shape / PATH
+    presence answers instead."""
+    if _resolve_path(word, cwd, posix=posix).exists():
+        return True
+    if (
+        posix
+        and os.name == "nt"
+        and _abs_in_mode(word, posix)
+    ):
+        name = PurePath(word.replace("\\", "/")).name
+        return bool(
+            _INTERPRETER.match(name) or shutil.which(name)
+        )
+    return False
 
 
 def _task_targets(
@@ -555,6 +633,11 @@ def _task_targets(
     payload_next = False
     # next token is a shell '-c' payload — a nested command line.
     shell_next = False
+    # 'flock [opts] <file|fd> <cmd>' — True while flock's own option
+    # flags and its ONE lockfile operand are still being consumed;
+    # only then does the wrapped command sit in command position.
+    flock_lockfile = False
+    flock_optarg = False
     last_cmd: str | None = None
     for raw in tokens:
         token = raw.strip("\"'`")
@@ -565,8 +648,53 @@ def _task_targets(
         # when it actually looks command-like (contains a path or a
         # separator), so 'echo "some words"' is not mistaken for one.
         if re.search(r"\s", token):
-            if _resolve_path(token, cwd).exists():
-                targets.append(_Target(_resolve_path(token, cwd), "exists"))
+            resolved_token = _resolve_path(token, cwd, posix=posix)
+            if resolved_token.exists():
+                targets.append(_Target(resolved_token, "exists"))
+            elif (
+                (
+                    token.startswith(("/", "~"))
+                    or _WINDOWS_ABS.match(token)
+                )
+                and not re.search(r"[|&;<>]", token)
+                and not _first_word_resolves(
+                    token.split(None, 1)[0], cwd, posix
+                )
+            ):
+                # An absolute-path-shaped token with spaces whose first
+                # word is NOT on disk. Two shapes share this form:
+                #   - '"/srv/my dir/run.sh"', '"C:\Program Files\tools\
+                #     job.exe"' — ONE path with spaces inside it; a
+                #     continuation word still carries a separator.
+                #   - '"/missing/exe --flag arg"' — exe + arguments; the
+                #     missing reference is the executable alone.
+                # Trailing flag words peel off ('--daily'), then a
+                # separator in any continuation word marks the first
+                # shape. If the FIRST word resolves the token is a
+                # command line ('/usr/bin/python3 scripts/x.py') and
+                # falls through to the recursion below.
+                words = token.split()
+                while len(words) > 1 and words[-1].startswith("-"):
+                    words.pop()
+                if any(
+                    "/" in w or "\\" in w or w.startswith("~")
+                    for w in words[1:]
+                ):
+                    targets.append(
+                        _Target(
+                            _resolve_path(
+                                " ".join(words), cwd, posix=posix
+                            ),
+                            "exists",
+                        )
+                    )
+                else:
+                    targets.append(
+                        _Target(
+                            _resolve_path(words[0], cwd, posix=posix),
+                            "exists",
+                        )
+                    )
             elif depth < _MAX_DEPTH and re.search(r"[/\\|&;<>]", token):
                 sub_t, sub_c = _task_targets(
                     token, posix=posix, home=cwd, cwd=cwd,
@@ -617,7 +745,14 @@ def _task_targets(
                 redirect_next = None
                 payload_next = False
                 shell_next = False
+                flock_lockfile = False
+                flock_optarg = False
                 last_cmd = None
+                # a wrapper's 'cd' happens in its own process —
+                # 'pas-cron.sh foo && flock rel.lock cmd' runs the
+                # flock in the real cwd, so the unknown-cwd marker is
+                # segment-scoped, not line-scoped.
+                unverifiable_cwd = unverifiable
                 continue
             if _ENV_ASSIGNMENT.match(piece):
                 continue
@@ -639,7 +774,63 @@ def _task_targets(
                     targets += sub_t
                     commands += sub_c
                 continue
+            if flock_lockfile:
+                # flock's own operands — option flags ('-w'/'-E' take
+                # the next token as value) then exactly ONE lockfile/
+                # fd operand; the wrapped command follows them in
+                # command position.
+                if flock_optarg:
+                    flock_optarg = False
+                    continue
+                if piece.startswith("-") and piece != "-":
+                    if (
+                        piece in _FLOCK_OPTARG
+                        or _FLOCK_OPTARG_TAIL.fullmatch(piece)
+                    ):
+                        flock_optarg = True
+                    continue
+                if redirect_next is not None:
+                    # 'flock -n > out.log lock cmd' — the shell claims
+                    # this word as the pending redirect's target BEFORE
+                    # flock sees its arguments; fall through so the
+                    # redirect-dest check records it, and flock's
+                    # operand position stays open for the lockfile.
+                    pass
+                else:
+                    flock_lockfile = False
+                    expanded = os.path.expandvars(piece)
+                    if (
+                        re.fullmatch(r"\d+", expanded)
+                        or _UNRESOLVABLE.search(expanded)
+                    ):
+                        # the fd form ('flock 9') names no path;
+                        # an unresolvable var is not checkable.
+                        continue
+                    if (
+                        unverifiable_cwd
+                        and not _abs_in_mode(expanded, posix)
+                        and not expanded.startswith("~")
+                    ):
+                        # relative under a wrapper-changed cwd
+                        # ('repo-cron.sh'/'pas-cron.sh') — the same
+                        # skip the plain path-arg rule applies.
+                        continue
+                    # path lockfile — flock creates the FILE but
+                    # not its parent dir, so a removed dir breaks
+                    # the task ('parent' kind).
+                    targets.append(
+                        _Target(
+                            _resolve_path(expanded, cwd, posix=posix),
+                            "parent",
+                        )
+                    )
+                    continue
             if piece in _CONTROL_WORDS:
+                # 'flock' only wraps a command in command position —
+                # as another command's argument ('runner flock x') it
+                # must not eat the following operand.
+                if piece == "flock" and expect_cmd:
+                    flock_lockfile = True
                 continue
             if piece == "cd":
                 cd_next = True
@@ -692,7 +883,9 @@ def _task_targets(
                             ) and _FILEISH.search(value):
                                 targets.append(
                                     _Target(
-                                        _resolve_path(value, cwd),
+                                        _resolve_path(
+                                            value, cwd, posix=posix
+                                        ),
                                         "exists",
                                     )
                                 )
@@ -722,7 +915,7 @@ def _task_targets(
                 if mode != "skip":
                     targets.append(
                         _Target(
-                            _resolve_path(piece, cwd),
+                            _resolve_path(piece, cwd, posix=posix),
                             "parent" if mode == "fd" else mode,
                         )
                     )
@@ -731,10 +924,10 @@ def _task_targets(
                 if _WRAPPER_CD.match(
                         PurePath(piece.replace("\\", "/")).name):
                     unverifiable_cwd = True
-                if unverifiable_cwd and not Path(piece).is_absolute() and not piece.startswith("~") and not cd_next:
+                if unverifiable_cwd and not _abs_in_mode(piece, posix) and not piece.startswith("~") and not cd_next:
                     expect_cmd = False
                     continue
-                resolved = _resolve_path(piece, cwd)
+                resolved = _resolve_path(piece, cwd, posix=posix)
                 if cd_next:
                     # 'cd dir &&' moves the cwd for what follows;
                     # the dir itself is also a live reference.
@@ -763,14 +956,18 @@ def _task_targets(
                 and _FILEISH.search(piece)
                 and (
                     not unverifiable_cwd
-                    or Path(piece).is_absolute()
+                    or _abs_in_mode(piece, posix)
                     or piece.startswith("~")
                 )
             ):
                 # 'python3 backup.py' — a bare script arg after an
                 # interpreter is a real file reference; option values
                 # are already consumed via payload_next.
-                targets.append(_Target(_resolve_path(piece, cwd), "exists"))
+                targets.append(
+                    _Target(
+                        _resolve_path(piece, cwd, posix=posix), "exists"
+                    )
+                )
             expect_cmd = False
     return targets, commands
 

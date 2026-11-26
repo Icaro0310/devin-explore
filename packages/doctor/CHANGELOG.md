@@ -87,6 +87,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points inside a checkout. The baseline rebuilds on the next run; a
   stale copy under an old `<data-dir>/doctor/` can be deleted by hand.
 
+- `automation` / `janitor-reap` command-line parsing hardening
+  (#143/#144 review waves):
+  - schtasks `<Command>` with spaces is quoted before joining with
+    `<Arguments>`, and a quoted absolute path that does not exist is
+    reported whole (the missing exe) instead of being split into
+    phantom fragments — unless its first word resolves to a real
+    executable, in which case it is still parsed as a command line.
+  - `flock` lockfile operand is now a `parent` target (flock creates
+    the file but not its dir; the fd form `flock 9` names no path),
+    and a shell redirect pending in front of it (`flock -n > log
+    lock cmd`) is attributed to the redirect, not to flock.
+  - `ExecStart=@/exe argv0 args…` — the argv0 word is dropped, so the
+    following token lands in the real subcommand slot instead of
+    shifting every argument one position; the split is quote-aware
+    (`@/bin/j "cleanup worker" reap`).
+  - `janitor-reap` shell scanning matches bash/dash reality: `-c`
+    inside a flag cluster (`bash -cl`, `sh -xc`) reads the NEXT token
+    while an attached `-c'cmd'` is not a valid invocation; `+`-prefixed
+    options (`bash +x -c …`) no longer close the option list early;
+    cluster letters are limited to real bash invocation flags — an
+    unknown one (`-z`) aborts and `-n` is noexec, so neither surfaces
+    a reaper that never runs; `flock -c` before the lockfile
+    (rejected by util-linux) no longer surfaces its payload.
+  - a missing executable reported from a `-c` payload names the exe
+    alone (`/missing/exe`), not the payload string with its
+    arguments; a relative `flock` lockfile under a wrapper-changed
+    cwd (`repo-cron.sh`/`pas-cron.sh`) is unverifiable — but only
+    within that segment: `pas-cron.sh foo && flock rel.lock cmd`
+    runs the flock in the real cwd, so the unknown-cwd marker resets
+    at every shell boundary.
+  - `find … -exec cmd {} \;` — the literal `{}` argument no longer
+    counts as a command boundary (`_SHELL_BOUNDARY` only binds single
+    group braces/parens, not the pair), so it cannot reopen path
+    checks mid-line inside a wrapper segment.
+
 ### Added
 
 - `toolchain` — missing test/build tools named per-OS with concrete
