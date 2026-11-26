@@ -546,16 +546,50 @@ def _lex(command: str, posix: bool) -> list[str]:
     return list(lexer)
 
 
-def _resolve_path(token: str, cwd: Path) -> Path:
+def _resolve_path(token: str, cwd: Path, *, posix: bool = False) -> Path:
     """``~`` expansion plus cwd-relative resolution (cron's cwd is the
-    user's home; a ``cd dir &&`` prefix moves it)."""
+    user's home; a ``cd dir &&`` prefix moves it). In ``posix`` mode a
+    leading '/' is already absolute — on a Windows host
+    ``Path('/srv/x').is_absolute()`` is False (no drive letter), so a
+    naive cwd-join would re-anchor it as 'C:/srv/x'."""
     if token.startswith("~"):
         path = Path(os.path.expanduser(token))
     else:
         path = Path(token)
-    if not path.is_absolute():
+    if not path.is_absolute() and not (
+        posix and token.startswith("/")
+    ):
         path = cwd / path
     return path
+
+
+def _abs_in_mode(piece: str, posix: bool) -> bool:
+    """``piece`` is an absolute path for the command dialect in use.
+    ``Path('/x').is_absolute()`` is False on Windows hosts, so POSIX-
+    absolute strings need the ``posix`` flag to stay absolute."""
+    return Path(piece).is_absolute() or (
+        posix and piece.startswith(("/", "~"))
+    )
+
+
+def _first_word_resolves(word: str, cwd: Path, posix: bool) -> bool:
+    """Is the first word of a space-bearing token a live executable?
+    Decides 'one path with spaces' vs 'command line' before recursing.
+    A POSIX-absolute argv0 ('/usr/bin/python3') can never be stat'ed on
+    a Windows host, so there the basename's interpreter shape / PATH
+    presence answers instead."""
+    if _resolve_path(word, cwd, posix=posix).exists():
+        return True
+    if (
+        posix
+        and os.name == "nt"
+        and _abs_in_mode(word, posix)
+    ):
+        name = PurePath(word.replace("\\", "/")).name
+        return bool(
+            _INTERPRETER.match(name) or shutil.which(name)
+        )
+    return False
 
 
 def _task_targets(
@@ -614,7 +648,7 @@ def _task_targets(
         # when it actually looks command-like (contains a path or a
         # separator), so 'echo "some words"' is not mistaken for one.
         if re.search(r"\s", token):
-            resolved_token = _resolve_path(token, cwd)
+            resolved_token = _resolve_path(token, cwd, posix=posix)
             if resolved_token.exists():
                 targets.append(_Target(resolved_token, "exists"))
             elif (
@@ -623,9 +657,9 @@ def _task_targets(
                     or _WINDOWS_ABS.match(token)
                 )
                 and not re.search(r"[|&;<>]", token)
-                and not _resolve_path(
-                    token.split(None, 1)[0], cwd
-                ).exists()
+                and not _first_word_resolves(
+                    token.split(None, 1)[0], cwd, posix
+                )
             ):
                 # An absolute-path-shaped token with spaces whose first
                 # word is NOT on disk. Two shapes share this form:
@@ -648,12 +682,18 @@ def _task_targets(
                 ):
                     targets.append(
                         _Target(
-                            _resolve_path(" ".join(words), cwd), "exists"
+                            _resolve_path(
+                                " ".join(words), cwd, posix=posix
+                            ),
+                            "exists",
                         )
                     )
                 else:
                     targets.append(
-                        _Target(_resolve_path(words[0], cwd), "exists")
+                        _Target(
+                            _resolve_path(words[0], cwd, posix=posix),
+                            "exists",
+                        )
                     )
             elif depth < _MAX_DEPTH and re.search(r"[/\\|&;<>]", token):
                 sub_t, sub_c = _task_targets(
@@ -768,7 +808,7 @@ def _task_targets(
                         continue
                     if (
                         unverifiable_cwd
-                        and not Path(expanded).is_absolute()
+                        and not _abs_in_mode(expanded, posix)
                         and not expanded.startswith("~")
                     ):
                         # relative under a wrapper-changed cwd
@@ -779,7 +819,10 @@ def _task_targets(
                     # not its parent dir, so a removed dir breaks
                     # the task ('parent' kind).
                     targets.append(
-                        _Target(_resolve_path(expanded, cwd), "parent")
+                        _Target(
+                            _resolve_path(expanded, cwd, posix=posix),
+                            "parent",
+                        )
                     )
                     continue
             if piece in _CONTROL_WORDS:
@@ -840,7 +883,9 @@ def _task_targets(
                             ) and _FILEISH.search(value):
                                 targets.append(
                                     _Target(
-                                        _resolve_path(value, cwd),
+                                        _resolve_path(
+                                            value, cwd, posix=posix
+                                        ),
                                         "exists",
                                     )
                                 )
@@ -870,7 +915,7 @@ def _task_targets(
                 if mode != "skip":
                     targets.append(
                         _Target(
-                            _resolve_path(piece, cwd),
+                            _resolve_path(piece, cwd, posix=posix),
                             "parent" if mode == "fd" else mode,
                         )
                     )
@@ -879,10 +924,10 @@ def _task_targets(
                 if _WRAPPER_CD.match(
                         PurePath(piece.replace("\\", "/")).name):
                     unverifiable_cwd = True
-                if unverifiable_cwd and not Path(piece).is_absolute() and not piece.startswith("~") and not cd_next:
+                if unverifiable_cwd and not _abs_in_mode(piece, posix) and not piece.startswith("~") and not cd_next:
                     expect_cmd = False
                     continue
-                resolved = _resolve_path(piece, cwd)
+                resolved = _resolve_path(piece, cwd, posix=posix)
                 if cd_next:
                     # 'cd dir &&' moves the cwd for what follows;
                     # the dir itself is also a live reference.
@@ -911,14 +956,18 @@ def _task_targets(
                 and _FILEISH.search(piece)
                 and (
                     not unverifiable_cwd
-                    or Path(piece).is_absolute()
+                    or _abs_in_mode(piece, posix)
                     or piece.startswith("~")
                 )
             ):
                 # 'python3 backup.py' — a bare script arg after an
                 # interpreter is a real file reference; option values
                 # are already consumed via payload_next.
-                targets.append(_Target(_resolve_path(piece, cwd), "exists"))
+                targets.append(
+                    _Target(
+                        _resolve_path(piece, cwd, posix=posix), "exists"
+                    )
+                )
             expect_cmd = False
     return targets, commands
 
