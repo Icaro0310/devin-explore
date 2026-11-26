@@ -1240,3 +1240,23 @@ def test_task_targets_flock_relative_lockfile_unverifiable(tmp_path):
         home=tmp_path,
     )
     assert not [t for t in targets if "backup.lock" in str(t.path)]
+
+
+def test_task_targets_find_exec_braces_not_a_boundary(tmp_path):
+    """'find . -exec cmd {} \\;' — the literal '{}' argument is a word
+    passed to the wrapped command, not a command boundary; a boundary
+    there used to reset the unknown-cwd marker early and let the next
+    relative path FAIL as missing (#144 re-review)."""
+    targets, _ = automation._task_targets(
+        "/root/bin/pas-cron.sh find . -exec cp {} rel/out \\;",
+        posix=True,
+        home=tmp_path,
+    )
+    assert not [t for t in targets if "out" in str(t.path)]
+    # real group braces still bound commands
+    targets, _ = automation._task_targets(
+        "{ rel/one; } ; /usr/bin/true",
+        posix=True,
+        home=tmp_path,
+    )
+    assert tmp_path / "rel" / "one" in {t.path for t in targets}

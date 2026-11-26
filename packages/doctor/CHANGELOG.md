@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     within that segment: `pas-cron.sh foo && flock rel.lock cmd`
     runs the flock in the real cwd, so the unknown-cwd marker resets
     at every shell boundary.
+  - `find … -exec cmd {} \;` — the literal `{}` argument no longer
+    counts as a command boundary (`_SHELL_BOUNDARY` only binds single
+    group braces/parens, not the pair), so it cannot reopen path
+    checks mid-line inside a wrapper segment.
 
 ### Added
 

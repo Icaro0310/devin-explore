@@ -71,7 +71,11 @@ _MAX_DEPTH = 3
 
 _CRON_SPECIALS = re.compile(r"^@\w+$")
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SHELL_BOUNDARY = re.compile(r"[0-9]*[|&;(){}<>]+[0-9]*")
+# Command separators: runs of '|', '&', ';', '<', '>' PLUS single
+# '{', '}', '(', ')' — a PAIR like '{}' or '()' is a literal word
+# ('find … -exec cmd {} \;' passes '{}' to the wrapped command), not
+# a boundary.
+_SHELL_BOUNDARY = re.compile(r"[0-9]*(?:[|&;<>]+|[{}()])[0-9]*")
 _UNRESOLVABLE = re.compile(r"[*?[\]${}%`]")
 _WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 _SYSTEMD_UNIT = re.compile(r"^(\S+\.(?:service|timer))\s")
