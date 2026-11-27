@@ -79,6 +79,14 @@ _SHELL_BOUNDARY = re.compile(r"[0-9]*(?:[|&;<>]+|[{}()])[0-9]*")
 _UNRESOLVABLE = re.compile(r"[*?[\]${}%`]")
 _WINDOWS_ABS = re.compile(r"^[A-Za-z]:[\\/]")
 _SYSTEMD_UNIT = re.compile(r"^(\S+\.(?:service|timer))\s")
+# Launcher name patterns — fallback only, used when the authoritative
+# 'transient' state from list-unit-files is unavailable: KDE generates
+# 'app-<name>@<hash>.service' per launch; systemd-run supervisors are
+# 'run-<id>.service'. Timers never match — transient timers are real
+# schedules (systemd-run --on-calendar), not launchers.
+_TRANSIENT_UNIT_NAME = re.compile(
+    r"^(?:app-.+@.+\.service|run-[^.]+\.service)$"
+)
 _EXEC_LINE = re.compile(r"^ExecStart(?:Pre|Post)?=(.*)$")
 # systemd.exec prefix chars on the executable ('-', '@', ':', '+',
 # '!', '!!' — combinable) tune HOW the unit runs, not WHAT runs —
@@ -393,12 +401,26 @@ def _systemd_user_tasks(
             parts = line.split()
             name = parts[0] if parts else ""
             if len(parts) > 1 and parts[1] == "transient":
-                if name in seen:
+                if name.endswith(".timer"):
+                    # systemd-run --on-calendar timers are transient
+                    # AND real schedules — dropping them would also
+                    # erase their baseline rows and silence removal
+                    # and missing-executable alerts.
+                    if name not in seen:
+                        seen.add(name)
+                        units.append(name)
+                elif name in seen:
                     transient.add(name)
                 continue
             if name.endswith((".service", ".timer")) and name not in seen:
                 seen.add(name)
                 units.append(name)
+    else:
+        # list-unit-files failed — no authoritative transient state.
+        # Fall back to launcher name patterns so a launcher that dies
+        # before the next good probe can't persist into the baseline
+        # and alert as a removal later.
+        transient = {u for u in units if _TRANSIENT_UNIT_NAME.match(u)}
     if predicate is not None:
         # a caller that only inspects some units (e.g. the janitor reap
         # sweep) skips the per-unit 'cat' fan-out for the rest.
