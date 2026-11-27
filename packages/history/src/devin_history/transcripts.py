@@ -143,21 +143,34 @@ def _meta_value(meta: dict[str, str], *needles: str) -> str | None:
     return None
 
 
-def load_transcript(path: str | Path) -> AcpTranscript | None:
+def load_transcript(
+    path: str | Path, *, with_messages: bool = True
+) -> AcpTranscript | None:
     """Decode one ``acp-messages/*.db`` — ``None`` when it is not a
-    conforming transcript store (unreadable, missing tables, empty)."""
+    conforming transcript store (unreadable, missing tables, empty).
+
+    ``with_messages=False`` skips the payload decode — meta,
+    session_id, title, message_count, truncated and marker are still
+    populated, ``messages`` stays ``()``. Use it for dir scans where
+    only matching metadata is needed (the payload decode dominates the
+    memory footprint); hydrate later with :func:`load_messages`.
+    """
     path = Path(path)
     try:
         with AcpMessagesStore(path) as store:
             meta = store.meta()
             typed = store.typed_meta()
-            messages = tuple(
-                m
-                for m in (
-                    _message(msg.kind, msg.payload)
-                    for msg in store.messages()
+            messages = (
+                tuple(
+                    m
+                    for m in (
+                        _message(msg.kind, msg.payload)
+                        for msg in store.messages()
+                    )
+                    if m is not None
                 )
-                if m is not None
+                if with_messages
+                else ()
             )
     except Exception:  # noqa: BLE001 — a stray non-acp db must not abort
         return None
@@ -188,9 +201,18 @@ def _mtime(p: Path) -> float:
         return 0.0
 
 
-def load_dir(acp_dir: str | Path, *, max_files: int = MAX_FILES) -> list[AcpTranscript]:
+def load_dir(
+    acp_dir: str | Path,
+    *,
+    max_files: int = MAX_FILES,
+    with_messages: bool = True,
+) -> list[AcpTranscript]:
     """Every decodable transcript under ``acp_dir`` (bounded), newest
-    file first so the cap keeps the most recent sessions."""
+    file first so the cap keeps the most recent sessions.
+
+    ``with_messages=False`` returns meta-only transcripts — the scan
+    materializes no decoded payloads, so peak memory is bounded by the
+    meta tables instead of the sum of every message blob."""
     acp_dir = Path(acp_dir)
     if not acp_dir.is_dir():
         return []
@@ -199,10 +221,24 @@ def load_dir(acp_dir: str | Path, *, max_files: int = MAX_FILES) -> list[AcpTran
     )[:max_files]
     out = []
     for path in paths:
-        t = load_transcript(path)
+        t = load_transcript(path, with_messages=with_messages)
         if t is not None:
             out.append(t)
     return out
+
+
+def load_messages(
+    transcript: AcpTranscript,
+) -> tuple[TranscriptMessage, ...]:
+    """Re-decode the messages of one transcript on demand.
+
+    Used at render time on meta-only transcripts
+    (``load_transcript``/``load_dir`` with ``with_messages=False``),
+    bounding peak memory to a single transcript instead of the
+    whole acp-messages dir. Returns ``()`` when the db became
+    undecodable since the scan."""
+    full = load_transcript(transcript.path)
+    return full.messages if full else ()
 
 
 def match_transcript(
