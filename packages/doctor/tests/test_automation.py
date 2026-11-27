@@ -1260,3 +1260,85 @@ def test_task_targets_find_exec_braces_not_a_boundary(tmp_path):
         home=tmp_path,
     )
     assert tmp_path / "rel" / "one" in {t.path for t in targets}
+
+
+def test_transient_units_untracked_and_baseline_row_dropped(ctx, tmp_path):
+    """KDE app launchers and systemd-run create units marked
+    'transient' in list-unit-files — runtime artifacts whose names
+    rotate per launch/update ('app-devin\\x2ddesktop@<hash>.service').
+    Tracking them guarantees a false 'removed' the moment the hash
+    rotates, so they are enumerated only to prune same-name baseline
+    rows: never cat'ed, never diffed, never persisted."""
+    real = tmp_path / "real.sh"
+    real.write_text("#!/bin/sh\n")
+    transient_unit = r"app-devin\x2ddesktop@98f7c6d6.service"
+    _seed_snapshot(
+        ctx,
+        [
+            ("systemd-user", transient_unit, "/home/u/launch.sh"),
+            ("systemd-user", "gone.service", "/home/u/gone.sh"),
+        ],
+    )
+    table = {
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (
+            0,
+            f"{transient_unit} loaded active running KDE launcher\n"
+            + "devin-backup.service loaded active running backup\n",
+        ),
+        ("systemctl", "--user", "list-unit-files",
+         "--type=service,timer", "--no-legend", "--no-pager"): (
+            0,
+            f"{transient_unit} transient -\n"
+            + "devin-backup.service enabled enabled\n",
+        ),
+        ("systemctl", "--user", "cat", "devin-backup.service"): (
+            0, f"[Service]\nExecStart={real.as_posix()}\n"
+        ),
+        ("crontab", "-l"): (1, "no crontab for u"),
+    }
+    calls: list[list[str]] = []
+
+    def spy(argv):
+        calls.append(list(argv))
+        return make_runner(table)(argv)
+
+    findings = automation.run(ctx, runner=spy)
+    # the transient unit is never probed
+    assert not any(
+        transient_unit in argv for argv in calls if "cat" in argv
+    )
+    # its seeded baseline row drops silently — only the real removal alerts
+    removed = _find(
+        findings, "removed since last check", surface="systemd-user"
+    )
+    assert len(removed) == 1 and "gone.service" in removed[0].message
+    assert _find(findings, "transient unit(s) dropped")
+    ok = _find(findings, "1 scheduled task(s)", surface="systemd-user")
+    assert ok and "1 transient excluded" in ok[0].message
+    written = json.loads(_snapshot(ctx).read_text())
+    names = sorted(t["name"] for t in written["tasks"])
+    # transient row gone; the real removal stays in the baseline so it
+    # keeps alerting until restored or hand-pruned
+    assert names == ["devin-backup.service", "gone.service"]
+
+
+def test_transient_unit_gone_entirely_still_flags(ctx):
+    """Once a transient unit has vanished it cannot be told apart from
+    a genuine removal — the manual-prune contract is unchanged: the
+    baseline row keeps flagging until the entry is deleted."""
+    gone = r"app-devin\x2ddesktop@a769852c.service"
+    _seed_snapshot(ctx, [("systemd-user", gone, "/home/u/launch.sh")])
+    table = {
+        ("systemctl", "--user", "list-units", "--type=service,timer",
+         "--all", "--no-legend", "--no-pager"): (0, ""),
+        ("systemctl", "--user", "list-unit-files",
+         "--type=service,timer", "--no-legend", "--no-pager"): (0, ""),
+        ("crontab", "-l"): (1, "no crontab for u"),
+    }
+    findings = automation.run(ctx, runner=make_runner(table))
+    removed = _find(
+        findings, "removed since last check", surface="systemd-user"
+    )
+    assert len(removed) == 1 and removed[0].status is Status.FAIL
+    assert gone in removed[0].message

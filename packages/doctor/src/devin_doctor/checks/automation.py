@@ -193,6 +193,12 @@ class _Task:
     # could collide — two cron jobs that differ only in a redacted
     # credential must still be tracked as distinct tasks.
     identity: str | None = None
+    # Runtime artifacts, not scheduled automation — transient systemd
+    # units (KDE 'app-*@<hash>' launchers, systemd-run supervisors)
+    # churn by lifecycle: their names rotate or vanish on exit, so
+    # tracking them guarantees false "removed" findings. Enumerated
+    # for baseline cleanup only — never inspected, never tracked.
+    ephemeral: bool = False
 
 
 def _redact(text: str) -> str:
@@ -377,9 +383,19 @@ def _systemd_user_tasks(
         "systemctl", "--user", "list-unit-files",
         "--type=service,timer", "--no-legend", "--no-pager",
     ])
+    # Units marked 'transient' in list-unit-files are runtime artifacts
+    # (KDE 'app-*@<hash>' launchers, systemd-run units) — not scheduled
+    # automation. They rotate names per launch/update and die with the
+    # supervised process, so the baseline must never diff them.
+    transient: set[str] = set()
     if files is not None and files.returncode == 0:
         for line in (files.stdout or "").splitlines():
-            name = line.split(None, 1)[0].strip() if line.strip() else ""
+            parts = line.split()
+            name = parts[0] if parts else ""
+            if len(parts) > 1 and parts[1] == "transient":
+                if name in seen:
+                    transient.add(name)
+                continue
             if name.endswith((".service", ".timer")) and name not in seen:
                 seen.add(name)
                 units.append(name)
@@ -387,9 +403,13 @@ def _systemd_user_tasks(
         # a caller that only inspects some units (e.g. the janitor reap
         # sweep) skips the per-unit 'cat' fan-out for the rest.
         units = [unit for unit in units if predicate(unit)]
-    tasks: list[_Task] = []
+        transient &= set(units)
+    tasks: list[_Task] = [
+        _Task("systemd-user", unit, "", ephemeral=True)
+        for unit in transient
+    ]
     unreadable = 0
-    for unit in units:
+    for unit in (unit for unit in units if unit not in transient):
         names = [unit]
         commands: list[str] = []
         workdir: str | None = None
@@ -1203,8 +1223,10 @@ def run(
         )
 
     for surface, tasks in enumerated.items():
+        tracked = [t for t in tasks if not t.ephemeral]
+        transient_n = len(tasks) - len(tracked)
         surface_failures = 0
-        for task in tasks:
+        for task in tracked:
             if not task.command:
                 continue
             label = task.name
@@ -1265,16 +1287,21 @@ def run(
                             "command.",
                         )
                     )
-        if tasks and surface_failures == 0:
+        if tracked and surface_failures == 0:
             findings.append(
                 Finding(
                     CHECK_ID,
                     Status.PASS,
-                    f"{surface}: {len(tasks)} scheduled task(s), "
-                    "all referenced targets exist",
+                    f"{surface}: {len(tracked)} scheduled task(s), "
+                    "all referenced targets exist"
+                    + (
+                        f" ({transient_n} transient excluded)"
+                        if transient_n
+                        else ""
+                    ),
                 )
             )
-        elif not tasks:
+        elif not tracked:
             findings.append(
                 Finding(CHECK_ID, Status.PASS, f"{surface}: no scheduled tasks")
             )
@@ -1301,6 +1328,7 @@ def run(
         (task.surface, task.identity or task.name): task
         for tasks in enumerated.values()
         for task in tasks
+        if not task.ephemeral
     }
     enumerated_surfaces = set(enumerated)
     display_names = {
@@ -1308,6 +1336,22 @@ def run(
         for surface, tasks in enumerated.items()
     }
     prev_map = previous or {}
+    # Baseline rows whose name matches a unit that is transient TODAY
+    # were never legitimately tracked — drop them silently (no removal
+    # alert, no re-persist) so hash-rotated launchers self-heal. Rows
+    # for units already gone cannot be told apart from real removals:
+    # those keep flagging until hand-pruned, unchanged contract.
+    transient_names = {
+        (task.surface, task.name)
+        for tasks in enumerated.values()
+        for task in tasks
+        if task.ephemeral
+    }
+    transient_drop = {
+        key
+        for key, (name, _cmd, _had_id) in prev_map.items()
+        if (key[0], name) in transient_names
+    }
     snapshot_exists = snapshot_path.is_file()
     if previous is None:
         if snapshot_exists:
@@ -1349,6 +1393,7 @@ def run(
             if key[0] in enumerated_surfaces
             and key not in current
             and key not in legacy_matched
+            and key not in transient_drop
         )
         for key in removed_keys:
             findings.append(
@@ -1371,6 +1416,16 @@ def run(
                     "no scheduled tasks removed since last check",
                 )
             )
+        if transient_drop:
+            findings.append(
+                Finding(
+                    CHECK_ID,
+                    Status.PASS,
+                    f"{len(transient_drop)} transient unit(s) dropped "
+                    "from the baseline — runtime artifacts are not "
+                    "tracked as scheduled tasks",
+                )
+            )
     # Persisted baseline = this run's tasks + entries of unanswered
     # surfaces + tasks still missing (they keep alerting until they are
     # restored or their entry is deleted by hand). Legacy name-keyed
@@ -1389,7 +1444,7 @@ def run(
     for key, (name, command, _had_id) in prev_map.items():
         if (
             key[0] not in enumerated_surfaces or key in removed_set
-        ) and key not in current:
+        ) and key not in current and key not in transient_drop:
             merged_rows.append(
                 {
                     "surface": key[0],
