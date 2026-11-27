@@ -9,6 +9,7 @@ from devin_history.export import export_gui_sessions
 from devin_history.transcripts import (
     RedactionError,
     load_dir,
+    load_messages,
     load_transcript,
     match_transcript,
     redact,
@@ -106,6 +107,31 @@ def test_load_dir_bounds_and_skips_bad(tmp_path):
     got = load_dir(d)
     assert [t.path.name for t in got] == ["a.db"]
     assert load_dir(tmp_path / "nope") == []
+
+
+def test_load_dir_meta_only_then_load_messages(acp_dir):
+    meta = load_dir(acp_dir, with_messages=False)
+    assert len(meta) == 1
+    t = meta[0]
+    # meta fields populated, payloads deferred
+    assert t.messages == ()
+    assert t.session_id == "canyon-newspaper"
+    assert t.title == "Fix flaky test"
+    assert t.message_count == 4
+    assert t.marker > 0
+    # on-demand hydration equals the eager decode
+    msgs = load_messages(t)
+    assert [m.role for m in msgs] == [
+        "user", "assistant", "thought", "tool"
+    ]
+    assert "flaky login" in msgs[0].text
+    assert msgs == load_transcript(t.path).messages
+
+
+def test_load_messages_vanished_db_returns_empty(acp_dir):
+    t = load_dir(acp_dir, with_messages=False)[0]
+    t.path.unlink()
+    assert load_messages(t) == ()
 
 
 def test_match_transcript_order(acp_dir):
@@ -220,6 +246,26 @@ def test_export_transcripts_idempotent(vstore, acp_dir, tmp_path):
     res2 = export_gui_sessions(vstore, out, acp_dir=acp_dir)
     assert res2.written == []
     assert "canyon-newspaper" in res2.skipped_unchanged
+
+
+def test_export_lazy_decode_after_skip_check(vstore, acp_dir,
+                                             tmp_path, monkeypatch):
+    calls = []
+    orig = load_messages
+    monkeypatch.setattr(
+        "devin_history.transcripts.load_messages",
+        lambda t: calls.append(t.path.name) or orig(t),
+    )
+    out = tmp_path / "o"
+    export_gui_sessions(vstore, out, acp_dir=acp_dir)
+    assert calls == ["canyon-newspaper.db"]
+    note = next(out.glob("*canyon-newspaper*.md")).read_text()
+    assert "flaky login test" in note
+    # unchanged-skip happens before any payload decode
+    calls.clear()
+    res2 = export_gui_sessions(vstore, out, acp_dir=acp_dir)
+    assert res2.written == []
+    assert calls == []
 
 
 def test_export_transcripts_dry_run_writes_nothing(vstore, acp_dir,

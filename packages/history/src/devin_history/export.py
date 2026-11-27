@@ -355,7 +355,11 @@ def export_gui_sessions(
         vscdb.gui_sessions(store) if store is not None else [],
         key=lambda g: (g.last_updated or g.last_accessed or 0, g.slug),
     )
-    loaded = tr.load_dir(acp_dir) if (transcripts and acp_dir) else []
+    loaded = (
+        tr.load_dir(acp_dir, with_messages=False)
+        if (transcripts and acp_dir)
+        else []
+    )
     # Preflight: with transcripts to export the redactor must exist —
     # failing here beats half-exporting unredacted content.
     redact_text = tr.require_redactor() if loaded else None
@@ -395,10 +399,11 @@ def export_gui_sessions(
         else:
             edits: list[dict] = []
             try:
+                msgs = tr.load_messages(t) if t is not None else ()
                 parts = (
                     [
                         (m.role, tr.redact(m.text, redact_text, edits))
-                        for m in t.messages
+                        for m in msgs
                     ]
                     if t is not None and redact_text is not None
                     else None
@@ -459,9 +464,10 @@ def export_gui_sessions(
         else:
             edits = []
             try:
+                msgs = tr.load_messages(t)
                 parts = [
                     (m.role, tr.redact(m.text, redact_text, edits))
-                    for m in t.messages
+                    for m in msgs
                 ]
                 text = render_acp_transcript_md(
                     sid,
