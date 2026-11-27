@@ -1372,8 +1372,7 @@ def test_transient_timer_stays_tracked(ctx, tmp_path):
         ),
         ("systemctl", "--user", "cat", svc): (
             0,
-            "[Service]\nExecStart="
-            f"{interpreter.as_posix()} {missing.as_posix()}\n",
+            f"[Service]\nExecStart={interpreter.as_posix()} {missing.as_posix()}\n",
         ),
         ("crontab", "-l"): (1, "no crontab for u"),
     }
@@ -1432,7 +1431,7 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
         calls.append(list(argv))
         return make_runner(table)(argv)
 
-    findings = automation.run(ctx, runner=spy)
+    automation.run(ctx, runner=spy)
     # launchers not probed, not persisted
     for dropped in (launcher, autorun, autorun_u):
         assert not any(
