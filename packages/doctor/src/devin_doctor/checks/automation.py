@@ -84,8 +84,15 @@ _SYSTEMD_UNIT = re.compile(r"^(\S+\.(?:service|timer))\s")
 # 'app-<name>@<hash>.service' per launch; systemd-run supervisors are
 # 'run-<id>.service'. Timers never match — transient timers are real
 # schedules (systemd-run --on-calendar), not launchers.
+# Name-only fallback for when list-unit-files fails: KDE app-*@hash
+# launchers and systemd-run's auto-generated names (run-r<32-hex> on
+# newer systemd, run-u<N> on older). A user-named unit
+# (--unit=my-backup) is indistinguishable from a permanent service by
+# name alone — guessing wider would drop real services from the
+# baseline and silence their removal alerts.
 _TRANSIENT_UNIT_NAME = re.compile(
-    r"^(?:app-.+@.+\.service|run-[^.]+\.service)$"
+    r"^(?:app-.+@.+\.service|run-r[0-9a-f]{32}\.service"
+    r"|run-u\d+\.service)$"
 )
 _EXEC_LINE = re.compile(r"^ExecStart(?:Pre|Post)?=(.*)$")
 # systemd.exec prefix chars on the executable ('-', '@', ':', '+',

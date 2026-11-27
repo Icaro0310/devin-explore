@@ -1349,8 +1349,9 @@ def test_transient_timer_stays_tracked(ctx, tmp_path):
     schedules — only transient *services* are launchers. The timer
     keeps being inspected and persisted, so missing-executable and
     removal alerts still apply."""
-    real = tmp_path / "real.sh"
-    real.write_text("#!/bin/sh\n")
+    interpreter = tmp_path / "python3"  # exists — only the script is gone
+    interpreter.write_text("# fixture\n")
+    missing = tmp_path / "uninstalled" / "run-u42-task.py"
     timer = "run-u42.timer"
     svc = "run-u42.service"
     table = {
@@ -1370,7 +1371,9 @@ def test_transient_timer_stays_tracked(ctx, tmp_path):
             0, "[Timer]\nOnCalendar=daily\n"
         ),
         ("systemctl", "--user", "cat", svc): (
-            0, f"[Service]\nExecStart={real.as_posix()}\n"
+            0,
+            "[Service]\nExecStart="
+            f"{interpreter.as_posix()} {missing.as_posix()}\n",
         ),
         ("crontab", "-l"): (1, "no crontab for u"),
     }
@@ -1381,12 +1384,12 @@ def test_transient_timer_stays_tracked(ctx, tmp_path):
         return make_runner(table)(argv)
 
     findings = automation.run(ctx, runner=spy)
-    # the transient TIMER is probed and counted — not dropped
+    # the transient TIMER is probed and tracked — not dropped
     assert ["systemctl", "--user", "cat", timer] in calls
     assert ["systemctl", "--user", "cat", svc] in calls
-    ok = _find(findings, "scheduled task(s)", surface="systemd-user")
-    assert ok and "1 scheduled task(s)" in ok[0].message
-    assert "1 transient excluded" in ok[0].message
+    # its ExecStart is really analyzed — a gone script still alerts
+    fails = _find(findings, "missing path", surface="systemd-user")
+    assert len(fails) == 1 and str(missing) in fails[0].message
     written = json.loads(_snapshot(ctx).read_text())
     names = {t["name"] for t in written["tasks"]}
     assert timer in names and svc not in names
@@ -1398,15 +1401,22 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
     launcher cannot persist into a new baseline row and alert as a
     removal later."""
     launcher = r"app-devin\x2ddesktop@98f7c6d6.service"
+    permanent = "run-backup.service"  # user-named — NOT transient
+    real = tmp_path / "real.sh"
+    real.write_text("#!/bin/sh\n")
     table = {
         ("systemctl", "--user", "list-units", "--type=service,timer",
          "--all", "--no-legend", "--no-pager"): (
             0,
-            f"{launcher} loaded active running KDE launcher\n",
+            f"{launcher} loaded active running KDE launcher\n"
+            + f"{permanent} loaded active exited user backup\n",
         ),
         ("systemctl", "--user", "list-unit-files",
          "--type=service,timer", "--no-legend", "--no-pager"): (
             1, "error",
+        ),
+        ("systemctl", "--user", "cat", permanent): (
+            0, f"[Service]\nExecStart={real.as_posix()}\n"
         ),
         ("crontab", "-l"): (1, "no crontab for u"),
     }
@@ -1421,8 +1431,9 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
     assert not any(
         launcher in argv for argv in calls if "cat" in argv
     )
-    assert _find(findings, "transient unit(s) dropped") or _find(
-        findings, "no scheduled tasks", surface="systemd-user"
-    )
     written = json.loads(_snapshot(ctx).read_text())
     assert launcher not in {t["name"] for t in written["tasks"]}
+    # a permanent service that merely STARTS with run- keeps its
+    # baseline row — the name fallback must not guess that wide
+    assert ["systemctl", "--user", "cat", permanent] in calls
+    assert permanent in {t["name"] for t in written["tasks"]}
