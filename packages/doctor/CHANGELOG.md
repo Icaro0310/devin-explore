@@ -67,6 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `automation` — transient systemd `--user` service units (KDE
+  `app-*@<hash>` launchers, `systemd-run` supervisors) are no longer
+  tracked or persisted in the baseline: they are enumerated only to
+  prune same-name baseline rows, so per-launch hash rotation stops
+  reporting false "removed since last check" findings. Transient
+  `.timer` units (`systemd-run --on-calendar` — real schedules) stay
+  tracked, and when the `list-unit-files` probe fails a narrowed
+  launcher name pattern (`app-*@<hash>`, `run-r<32-hex>`,
+  `run-u<N>` — the auto-generated shapes only) acts as a degraded
+  fallback so stale launchers can't persist into a new baseline
+  while user-named `run-*` services keep their rows. Old transient
+  rows already in a
+  baseline are pruned on the next successful probe; rows whose unit
+  vanished entirely still flag as removals until hand-pruned (or via
+  `doctor-automation-reset.py`).
+
 - `publish-readiness` — a `packages/*` member without `pyproject.toml`
   no longer fails when the dir carries no Python-package signals (npm
   bridges, VS Code extensions, docs dirs). Missing pyproject still
