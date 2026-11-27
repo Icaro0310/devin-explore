@@ -1401,6 +1401,10 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
     launcher cannot persist into a new baseline row and alert as a
     removal later."""
     launcher = r"app-devin\x2ddesktop@98f7c6d6.service"
+    # auto-generated systemd-run names are transient even without the
+    # unit-file listing: run-r<32-hex> (newer) and run-u<N> (older)
+    autorun = "run-r" + "0" * 32 + ".service"
+    autorun_u = "run-u77.service"
     permanent = "run-backup.service"  # user-named — NOT transient
     real = tmp_path / "real.sh"
     real.write_text("#!/bin/sh\n")
@@ -1409,6 +1413,8 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
          "--all", "--no-legend", "--no-pager"): (
             0,
             f"{launcher} loaded active running KDE launcher\n"
+            + f"{autorun} loaded active running systemd-run job\n"
+            + f"{autorun_u} loaded active running systemd-run job\n"
             + f"{permanent} loaded active exited user backup\n",
         ),
         ("systemctl", "--user", "list-unit-files",
@@ -1427,12 +1433,14 @@ def test_files_probe_failure_falls_back_to_launcher_names(ctx, tmp_path):
         return make_runner(table)(argv)
 
     findings = automation.run(ctx, runner=spy)
-    # launcher not probed, not persisted
-    assert not any(
-        launcher in argv for argv in calls if "cat" in argv
-    )
+    # launchers not probed, not persisted
+    for dropped in (launcher, autorun, autorun_u):
+        assert not any(
+            dropped in argv for argv in calls if "cat" in argv
+        )
     written = json.loads(_snapshot(ctx).read_text())
-    assert launcher not in {t["name"] for t in written["tasks"]}
+    names = {t["name"] for t in written["tasks"]}
+    assert not {launcher, autorun, autorun_u} & names
     # a permanent service that merely STARTS with run- keeps its
     # baseline row — the name fallback must not guess that wide
     assert ["systemctl", "--user", "cat", permanent] in calls
